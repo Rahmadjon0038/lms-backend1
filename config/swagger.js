@@ -15,6 +15,21 @@ const options = {
         description: 'Local server',
       },
     ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'JWT token kiriting',
+        },
+      },
+    },
+    security: [
+      {
+        bearerAuth: [],
+      },
+    ],
   },
   // API yo'llari qayerda yozilganini ko'rsatamiz
   apis: ['./routers/*.js', './server.js'], 
