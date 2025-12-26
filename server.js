@@ -27,10 +27,17 @@ app.get('/', async (req, res) => {
 });
 
 const userRoute = require('./routes/userRoutes');
+const groupRoute = require('./routes/groupRoutes');
 const { createGroupTables } = require('./models/groupModel');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
+
+
+app.use('/api/groups',groupRoute );
+
+
+
 
 // Serverni portga ulash va jadvalni yaratish
 const PORT = process.env.PORT || 5000;
