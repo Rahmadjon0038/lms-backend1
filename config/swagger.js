@@ -32,7 +32,7 @@ const options = {
     ],
   },
   // API yo'llari qayerda yozilganini ko'rsatamiz
-  apis: ['./routers/*.js', './server.js'], 
+  apis: ['./routes/*.js', './server.js'], 
 };
 
 const specs = swaggerJsdoc(options);
