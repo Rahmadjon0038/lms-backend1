@@ -27,14 +27,6 @@ app.get('/', async (req, res) => {
 });
 
 
-// ---------- auth router --------------
-const { initUserTable } = require('./models/userModel');
-initUserTable()
-const authRouter = require('./routers/authRouter');
-app.use('/api/users', authRouter);
-
-
-
 // Serverni portga ulash
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
