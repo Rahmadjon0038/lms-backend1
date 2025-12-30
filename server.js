@@ -37,8 +37,6 @@ app.use('/api/users', userRoute);
 app.use('/api/groups',groupRoute );
 
 
-
-
 // Serverni portga ulash va jadvalni yaratish
 const PORT = process.env.PORT || 5000;
 
