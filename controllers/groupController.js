@@ -94,14 +94,48 @@ exports.getAllGroups = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
-// 7. Bitta guruh (Batafsil)
+// 7. Bitta guruh (Batafsil ma'lumot va talabalar ro'yxati)
 exports.getGroupById = async (req, res) => {
     const id = parseInt(req.params.id);
-    try {
-        const group = await pool.query(`SELECT g.*, u.name as teacher_name FROM groups g LEFT JOIN users u ON g.teacher_id = u.id WHERE g.id = $1`, [id]);
-        if (group.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
+    
+    // ID raqam ekanligini tekshirish
+    if (isNaN(id)) {
+        return res.status(400).json({ message: "ID raqam bo'lishi shart!" });
+    }
 
-        const students = await pool.query(`SELECT u.id, u.name, u.surname FROM users u JOIN student_groups sg ON u.id = sg.student_id WHERE sg.group_id = $1`, [id]);
-        res.json({ success: true, group: group.rows[0], students: students.rows });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    try {
+        // Guruh ma'lumotlarini olish
+        const group = await pool.query(`
+            SELECT g.*, u.name as teacher_name 
+            FROM groups g 
+            LEFT JOIN users u ON g.teacher_id = u.id 
+            WHERE g.id = $1`, [id]);
+
+        if (group.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        // Guruhdagi studentlarni telefon raqamlari bilan olish
+        // u.phone va u.phone2 - bazangdagi ustun nomlariga moslang
+        const students = await pool.query(`
+            SELECT 
+                u.id, 
+                u.name, 
+                u.surname, 
+                u.phone,      -- 1-telefon raqami
+                u.phone2,     -- 2-telefon raqami (masalan, ota-onasi kabi)
+                sg.status, 
+                sg.joined_at 
+            FROM users u 
+            JOIN student_groups sg ON u.id = sg.student_id 
+            WHERE sg.group_id = $1`, [id]);
+
+        res.json({ 
+            success: true, 
+            group: group.rows[0], 
+            students: students.rows 
+        });
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 };
