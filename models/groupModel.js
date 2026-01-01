@@ -9,7 +9,7 @@ const createGroupTables = async () => {
       subject_id INTEGER, 
       teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       unique_code VARCHAR(20) UNIQUE NOT NULL,
-      start_date DATE DEFAULT CURRENT_DATE,
+      start_date DATE,
       schedule JSONB,
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
