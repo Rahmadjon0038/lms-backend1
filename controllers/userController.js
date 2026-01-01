@@ -1,3 +1,12 @@
+// Barcha userlarni olish (admin uchun)
+const getAllUsers = async (req, res) => {
+    try {
+        const users = await pool.query('SELECT id, name, surname, username, role, status, phone, phone2, created_at FROM users ORDER BY created_at DESC');
+        res.json(users.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -111,4 +120,4 @@ const getProfile = async (req, res) => {
     }
 };
 
-module.exports = { registerStudent, loginStudent, getProfile, refreshAccessToken };
+module.exports = { registerStudent, loginStudent, getProfile, refreshAccessToken, getAllUsers };
