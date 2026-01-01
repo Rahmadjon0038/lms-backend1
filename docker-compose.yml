@@ -6,7 +6,7 @@ services:
     container_name: postgres16
     restart: always
     environment:
-      POSTGRES_USER: user
+      POSTGRES_USER: postgres        # 'user' edi, 'postgres'ga o'zgartirildi
       POSTGRES_PASSWORD: lsm123
       POSTGRES_DB: lms
     ports:

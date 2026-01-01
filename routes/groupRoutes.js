@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+
 const groupCtrl = require('../controllers/groupController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
@@ -27,14 +28,10 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *             type: object
  *             required:
  *               - name
- *               - unique_code
  *             properties:
  *               name:
  *                 type: string
  *                 example: "Node.js Backend"
- *               unique_code:
- *                 type: string
- *                 example: "NODE-101"
  *               teacher_id:
  *                 type: integer
  *                 example: 2
@@ -111,7 +108,12 @@ router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
  *       201:
  *         description: Talaba guruhga qo'shildi
  */
-router.post('/admin/join-student', protect, roleCheck(['admin']), groupCtrl.adminAddStudentToGroup);
+router.post(
+  '/admin/join-student',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.adminAddStudentToGroup
+);
 
 /**
  * @swagger
@@ -136,39 +138,18 @@ router.post('/admin/join-student', protect, roleCheck(['admin']), groupCtrl.admi
  *       200:
  *         description: Talaba muvaffaqiyatli chiqarildi
  */
-router.delete('/:group_id/remove-student/:student_id', protect, roleCheck(['admin']), groupCtrl.removeStudentFromGroup);
-
-/**
- * @swagger
- * /api/groups/student/join:
- *   post:
- *     summary: Talaba o'zi maxsus kod orqali guruhga kirishi
- *     tags: [Groups]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - unique_code
- *             properties:
- *               unique_code:
- *                 type: string
- *                 example: "NODE-101"
- *     responses:
- *       201:
- *         description: Guruhga a'zo bo'lindi
- */
-router.post('/student/join', protect, roleCheck(['student']), groupCtrl.studentJoinByCode);
+router.delete(
+  '/:group_id/remove-student/:student_id',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.removeStudentFromGroup
+);
 
 /**
  * @swagger
  * /api/groups:
  *   get:
- *     summary: Barcha guruhlarni ko'rish va turli filtrlar bo'yicha qidirish
+ *     summary: Barcha guruhlarni ko'rish va filtrlar bo'yicha qidirish
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -210,5 +191,35 @@ router.get('/', protect, groupCtrl.getAllGroups);
  *         description: Batafsil ma'lumot
  */
 router.get('/:id', protect, groupCtrl.getGroupById);
+
+
+
+/**
+ * @swagger
+ * /api/groups/{id}:
+ *   delete:
+ *     summary: Guruhni butunlay o'chirish (Faqat Admin)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Guruh muvaffaqiyatli o'chirildi
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.delete(
+  '/:id',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.deleteGroup
+);
+
 
 module.exports = router;

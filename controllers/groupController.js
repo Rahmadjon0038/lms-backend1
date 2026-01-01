@@ -1,22 +1,58 @@
+// 8. Guruhni o'chirish (faqat admin)
+exports.deleteGroup = async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+        return res.status(400).json({ message: "ID raqam bo'lishi shart!" });
+    }
+    try {
+        // Avval student_groupsdan ham o'chadi (ON DELETE CASCADE)
+        const result = await pool.query("DELETE FROM groups WHERE id = $1 RETURNING *", [id]);
+        if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
+        res.json({ success: true, message: "Guruh o'chirildi" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
 const pool = require('../config/db');
 
-// 1. Guruh yaratish
+const crypto = require('crypto');
+
+// Tasodifiy 6-8 belgili kod yaratish (Masalan: GR-A1B2C3)
+const generateUniqueCode = () => {
+    return 'GR-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+};
+// 1. Guruh yaratish (Tuzatilgan variant)
 exports.createGroup = async (req, res) => {
-    const { name, teacher_id, unique_code, start_date, schedule } = req.body;
+    const { name, teacher_id, start_date, schedule, subject_id } = req.body;
+    
+    const unique_code = generateUniqueCode();
+
     try {
         const result = await pool.query(
-            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule) 
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [name, teacher_id, unique_code, start_date, schedule ? JSON.stringify(schedule) : null]
+            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id) 
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [
+                name, 
+                teacher_id, 
+                unique_code, 
+                start_date ? start_date : null, // SHU YERDA: || operatorini olib tashladik
+                schedule ? JSON.stringify(schedule) : null,
+                subject_id
+            ]
         );
         res.status(201).json({ success: true, group: result.rows[0] });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        if (err.code === '23505') {
+            return exports.createGroup(req, res); 
+        }
+        res.status(500).json({ error: err.message }); 
+    }
 };
-
 // 2. Guruhni tahrirlash (Tuzatilgan mantiq)
 exports.updateGroup = async (req, res) => {
     const id = parseInt(req.params.id); // ID ni raqamga o'tkazamiz
-    const { name, teacher_id, is_active, schedule } = req.body;
+    // Faqat start_date (dars boshlanishi) yangilanadi, created_at yangilanmaydi
+    const { name, teacher_id, is_active, schedule, start_date } = req.body;
     
     try {
         const result = await pool.query(
@@ -24,9 +60,10 @@ exports.updateGroup = async (req, res) => {
                 name = COALESCE($1, name), 
                 teacher_id = COALESCE($2, teacher_id), 
                 is_active = COALESCE($3, is_active), 
-                schedule = COALESCE($4, schedule) 
-             WHERE id = $5 RETURNING *`,
-            [name, teacher_id, is_active, schedule ? JSON.stringify(schedule) : null, id]
+                schedule = COALESCE($4, schedule),
+                start_date = CASE WHEN $5::date IS NULL THEN start_date ELSE $5 END
+             WHERE id = $6 RETURNING *`,
+            [name, teacher_id, is_active, schedule ? JSON.stringify(schedule) : null, start_date, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
         res.json({ success: true, group: result.rows[0] });
@@ -137,5 +174,33 @@ exports.getGroupById = async (req, res) => {
         });
     } catch (err) { 
         res.status(500).json({ error: err.message }); 
+    }
+};
+// 8. Guruhni butunlay o'chirish (Admin)
+exports.deleteGroup = async (req, res) => {
+    const id = parseInt(req.params.id);
+
+    // ID raqam ekanligini tekshirish
+    if (isNaN(id)) {
+        return res.status(400).json({ message: "ID raqam bo'lishi shart!" });
+    }
+
+    try {
+        const result = await pool.query(
+            "DELETE FROM groups WHERE id = $1 RETURNING *",
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Guruh va unga tegishli barcha a'zolik ma'lumotlari muvaffaqiyatli o'chirildi",
+            deletedGroup: result.rows[0] 
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 };
