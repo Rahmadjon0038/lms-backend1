@@ -1,7 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, loginStudent, getProfile, refreshAccessToken } = require('../controllers/userController');
+const { registerStudent, loginStudent, getProfile, refreshAccessToken, getAllUsers } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
+const { roleCheck } = require('../middlewares/roleMiddleware');
+
+/**
+ * @swagger
+ * /api/users/all:
+ *   get:
+ *     summary: Barcha userlarni olish (faqat admin)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Userlar ro'yxati
+ */
+router.get('/all', protect, roleCheck(['admin']), getAllUsers);
 
 /**
  * @swagger

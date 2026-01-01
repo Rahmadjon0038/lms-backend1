@@ -42,6 +42,9 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               schedule:
  *                 type: object
  *                 example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
+ *               price:
+ *                 type: number
+ *                 example: 1000000
  *     responses:
  *       201:
  *         description: Guruh muvaffaqiyatli yaratildi
@@ -76,6 +79,9 @@ router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
  *                 type: string
  *               schedule:
  *                 type: object
+ *               price:
+ *                 type: number
+ *                 example: 1000000
  *     responses:
  *       200:
  *         description: Guruh yangilandi

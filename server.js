@@ -28,13 +28,19 @@ app.get('/', async (req, res) => {
 
 const userRoute = require('./routes/userRoutes');
 const groupRoute = require('./routes/groupRoutes');
+const studentRoutes = require('./routes/studentRoutes');
 const { createGroupTables } = require('./models/groupModel');
+const { createStudentAdditionalTables } = require('./models/studentModel');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
 
 
 app.use('/api/groups',groupRoute );
+// ------ student -------
+app.use('/api/students',studentRoutes );
+
+// 
 
 
 // Serverni portga ulash va jadvalni yaratish
@@ -48,6 +54,7 @@ app.listen(PORT, async () => {
     try {
         await createUserTable();
         await createGroupTables();
+        await createStudentAdditionalTables();
     } catch (error) {
         console.error("Dastlabki sozlashda xatolik:", error);
     }

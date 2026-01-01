@@ -23,21 +23,20 @@ const generateUniqueCode = () => {
 };
 // 1. Guruh yaratish (Tuzatilgan variant)
 exports.createGroup = async (req, res) => {
-    const { name, teacher_id, start_date, schedule, subject_id } = req.body;
-    
+    const { name, teacher_id, start_date, schedule, subject_id, price } = req.body;
     const unique_code = generateUniqueCode();
-
     try {
         const result = await pool.query(
-            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id) 
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
             [
                 name, 
                 teacher_id, 
                 unique_code, 
-                start_date ? start_date : null, // SHU YERDA: || operatorini olib tashladik
+                start_date ? start_date : null,
                 schedule ? JSON.stringify(schedule) : null,
-                subject_id
+                subject_id,
+                price
             ]
         );
         res.status(201).json({ success: true, group: result.rows[0] });
@@ -50,10 +49,8 @@ exports.createGroup = async (req, res) => {
 };
 // 2. Guruhni tahrirlash (Tuzatilgan mantiq)
 exports.updateGroup = async (req, res) => {
-    const id = parseInt(req.params.id); // ID ni raqamga o'tkazamiz
-    // Faqat start_date (dars boshlanishi) yangilanadi, created_at yangilanmaydi
-    const { name, teacher_id, is_active, schedule, start_date } = req.body;
-    
+    const id = parseInt(req.params.id);
+    const { name, teacher_id, is_active, schedule, start_date, price } = req.body;
     try {
         const result = await pool.query(
             `UPDATE groups SET 
@@ -61,9 +58,10 @@ exports.updateGroup = async (req, res) => {
                 teacher_id = COALESCE($2, teacher_id), 
                 is_active = COALESCE($3, is_active), 
                 schedule = COALESCE($4, schedule),
-                start_date = CASE WHEN $5::date IS NULL THEN start_date ELSE $5 END
-             WHERE id = $6 RETURNING *`,
-            [name, teacher_id, is_active, schedule ? JSON.stringify(schedule) : null, start_date, id]
+                start_date = CASE WHEN $5::date IS NULL THEN start_date ELSE $5 END,
+                price = COALESCE($6, price)
+             WHERE id = $7 RETURNING *`,
+            [name, teacher_id, is_active, schedule ? JSON.stringify(schedule) : null, start_date, price, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
         res.json({ success: true, group: result.rows[0] });

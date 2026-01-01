@@ -11,6 +11,7 @@ const createGroupTables = async () => {
       unique_code VARCHAR(20) UNIQUE NOT NULL,
       start_date DATE,
       schedule JSONB,
+      price DECIMAL(10,2),
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
