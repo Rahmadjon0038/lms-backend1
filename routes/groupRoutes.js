@@ -92,7 +92,7 @@ router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
  * @swagger
  * /api/groups/admin/join-student:
  *   post:
- *     summary: Admin tomonidan talabani guruhga qo'shish
+ *     summary: Admin tomonidan talabani guruhga qo'shish (guruh ma'lumotlari avtomatik yoziladi)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -108,11 +108,40 @@ router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
  *             properties:
  *               student_id:
  *                 type: integer
+ *                 example: 5
  *               group_id:
  *                 type: integer
+ *                 example: 1
  *     responses:
  *       201:
- *         description: Talaba guruhga qo'shildi
+ *         description: Student guruhga qo'shildi va guruh ma'lumotlari yozildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Student guruhga qo'shildi"
+ *                 updatedFields:
+ *                   type: object
+ *                   properties:
+ *                     group_name:
+ *                       type: string
+ *                       example: "Inglis tili beginner"
+ *                     teacher_name:
+ *                       type: string
+ *                       example: "Rahmadjon Abdullayev"
+ *                     required_amount:
+ *                       type: number
+ *                       example: 500000
+ *       400:
+ *         description: Bu student allaqachon guruhda
+ *       404:
+ *         description: Guruh topilmadi
  */
 router.post(
   '/admin/join-student',
@@ -120,6 +149,60 @@ router.post(
   roleCheck(['admin']),
   groupCtrl.adminAddStudentToGroup
 );
+
+/**
+ * @swagger
+ * /api/groups/join:
+ *   post:
+ *     summary: Student kod orqali guruhga qo'shilishi
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - unique_code
+ *             properties:
+ *               unique_code:
+ *                 type: string
+ *                 description: Guruhning unikal kodi
+ *                 example: "GR-A1B2C3"
+ *     responses:
+ *       201:
+ *         description: Guruhga muvaffaqiyatli qo'shildingiz
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Guruhga muvaffaqiyatli qo'shildingiz"
+ *                 groupInfo:
+ *                   type: object
+ *                   properties:
+ *                     group_name:
+ *                       type: string
+ *                       example: "Inglis tili beginner"
+ *                     teacher_name:
+ *                       type: string
+ *                       example: "Rahmadjon Abdullayev"
+ *                     price:
+ *                       type: number
+ *                       example: 500000
+ *       400:
+ *         description: Siz allaqachon bu guruhdasiz yoki guruh bloklangan
+ *       404:
+ *         description: Bunday kodli guruh mavjud emas
+ */
+router.post('/join', protect, groupCtrl.studentJoinByCode);
 
 /**
  * @swagger
@@ -202,6 +285,88 @@ router.get('/:id', protect, groupCtrl.getGroupById);
 
 /**
  * @swagger
+ * /api/groups/my-group:
+ *   get:
+ *     summary: Student o'z guruhini va guruh a'zolarini ko'rishi
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Guruh ma'lumotlari va a'zolar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 groupInfo:
+ *                   type: object
+ *                   properties:
+ *                     group_id:
+ *                       type: integer
+ *                       example: 1
+ *                     group_name:
+ *                       type: string
+ *                       example: "Inglis tili beginner"
+ *                     teacher_name:
+ *                       type: string
+ *                       example: "Rahmadjon Abdullayev"
+ *                     required_amount:
+ *                       type: number
+ *                       example: 500000
+ *                     schedule:
+ *                       type: object
+ *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
+ *                     start_date:
+ *                       type: string
+ *                       format: date
+ *                       example: "2025-01-10"
+ *                     is_active:
+ *                       type: boolean
+ *                       example: true
+ *                     unique_code:
+ *                       type: string
+ *                       example: "GR-A1B2C3"
+ *                 members:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                         example: 5
+ *                       name:
+ *                         type: string
+ *                         example: "Ali"
+ *                       surname:
+ *                         type: string
+ *                         example: "Valiyev"
+ *                       username:
+ *                         type: string
+ *                         example: "ali123"
+ *                       phone:
+ *                         type: string
+ *                         example: "+998901234567"
+ *                       joined_at:
+ *                         type: string
+ *                         format: date-time
+ *                         example: "2026-01-03T10:30:00.000Z"
+ *                       status:
+ *                         type: string
+ *                         example: "active"
+ *                 totalMembers:
+ *                   type: integer
+ *                   example: 15
+ *       404:
+ *         description: Siz hali hech qaysi guruhga qo'shilmagansiz
+ */
+router.get('/my-group', protect, groupCtrl.getMyGroup);
+
+/**
+ * @swagger
  * /api/groups/{id}:
  *   delete:
  *     summary: Guruhni butunlay o'chirish (Faqat Admin)
@@ -225,6 +390,77 @@ router.delete(
   protect,
   roleCheck(['admin']),
   groupCtrl.deleteGroup
+);
+
+/**
+ * @swagger
+ * /api/groups/change-student-group:
+ *   post:
+ *     summary: Studentni boshqa guruhga o'tkazish (Faqat Admin)
+ *     description: Student bir guruhdan boshqa guruhga ko'chiriladi. Eski guruhdan o'chirib, yangi guruhga qo'shadi.
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *               - new_group_id
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *                 example: 5
+ *                 description: O'tkaziladigan student ID
+ *               new_group_id:
+ *                 type: integer
+ *                 example: 3
+ *                 description: Yangi guruh ID
+ *     responses:
+ *       200:
+ *         description: Student guruhdan guruhga ko'chirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Ali Valiyev guruhdan guruhga ko'chirildi"
+ *                 previous_group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                 new_group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     teacher_name:
+ *                       type: string
+ *                 updated_student:
+ *                   type: object
+ *       400:
+ *         description: Noto'g'ri ma'lumot yoki guruh faol emas
+ *       404:
+ *         description: Student yoki guruh topilmadi
+ */
+router.post(
+  '/change-student-group',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.changeStudentGroup
 );
 
 

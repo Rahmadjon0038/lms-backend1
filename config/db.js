@@ -1,25 +1,28 @@
-const { Pool } = require('pg');
-require('dotenv').config();
+const { Pool } = require("pg");
+require("dotenv").config();
 
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_NAME,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT || 5432,
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: Number(process.env.DB_PORT) || 5432,
 });
 
-// Ulanishni darhol tekshirish funksiyasi
-const testDbConnection = async () => {
+const connectWithRetry = async () => {
+  while (true) {
     try {
-        const client = await pool.connect();
-        console.log('✅ PostgreSQL bazasiga muvaffaqiyatli ulanildi!');
-        client.release(); // Ulanishni bo'shatish
+      const client = await pool.connect();
+      console.log("✅ PostgreSQL bazasiga ulanildi");
+      client.release();
+      break;
     } catch (err) {
-        console.error('❌ Baza bilan ulanishda xato yuz berdi:', err.message);
+      console.log("⏳ Postgres hali tayyor emas, 3s kutyapman...");
+      await new Promise((r) => setTimeout(r, 3000));
     }
+  }
 };
 
-testDbConnection();
+connectWithRetry();
 
 module.exports = pool;
