@@ -6,76 +6,6 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
 
 /**
  * @swagger
- * /api/students/make-student:
- *   post:
- *     summary: Mavjud userni student qilish va guruhga biriktirish
- *     tags: [Students]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - user_id
- *             properties:
- *               user_id:
- *                 type: integer
- *                 example: 1001
- *               group_id:
- *                 type: integer
- *                 example: 1
- *     responses:
- *       200:
- *         description: User student qilindi va guruhga biriktirildi
- */
-router.post('/make-student', protect, roleCheck(['admin']), studentController.makeUserStudent);
-
-/**
- * @swagger
- * components:
- *   schemas:
- *     StudentCreate:
- *       type: object
- *       required:
- *         - name
- *         - surname
- *         - username
- *         - password
- *       properties:
- *         name:
- *           type: string
- *           description: Studentning ismi
- *           example: Alijon
- *         surname:
- *           type: string
- *           description: Studentning familiyasi
- *           example: Murodov
- *         username:
- *           type: string
- *           description: Tizimga kirish uchun login (unique)
- *           example: alijon123
- *         password:
- *           type: string
- *           description: Maxfiy parol
- *           example: password123
- *         phone:
- *           type: string
- *           description: Telefon raqami
- *           example: "+998901234567"
- *         phone2:
- *           type: string
- *           description: Qo‘shimcha telefon raqami
- *           example: "+998931112233"
- *         group_id:
- *           type: integer
- *           nullable: true
- *           description: Biriktiriladigan guruh IDsi (ixtiyoriy)
- *           example: 1
- */
-
-/**
- * @swagger
  * tags:
  *   name: Students
  *   description: Studentlarni boshqarish APIlari
@@ -85,16 +15,9 @@ router.post('/make-student', protect, roleCheck(['admin']), studentController.ma
  * @swagger
  * /api/students/all:
  *   get:
- *     summary: Studentlarni oy, teacher, group bo'yicha filtrlab olish
+ *     summary: Studentlarni teacher, group, status bo'yicha filtrlab olish
  *     tags: [Students]
  *     parameters:
- *       - in: query
- *         name: month
- *         required: false
- *         schema:
- *           type: string
- *           enum: [all, "01", "02", "03", "11", "12"]
- *         description: Oy raqami yoki 'all' (barcha oylar uchun)
  *       - in: query
  *         name: teacher_id
  *         required: false
@@ -107,6 +30,13 @@ router.post('/make-student', protect, roleCheck(['admin']), studentController.ma
  *         schema:
  *           type: integer
  *         description: Guruh IDsi bo'yicha filter
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive, blocked]
+ *         description: Student holati (active - faol, inactive - to'xtatgan, blocked - bloklangan)
  *     responses:
  *       200:
  *         description: Muvaffaqiyatli ro'yxat qaytdi
@@ -122,19 +52,148 @@ router.post('/make-student', protect, roleCheck(['admin']), studentController.ma
  *                     example: 1
  *                   name:
  *                     type: string
- *                     example: Alijon
+ *                     example: Ali
  *                   surname:
  *                     type: string
- *                     example: Murodov
+ *                     example: Valiyev
+ *                   phone:
+ *                     type: string
+ *                     example: "+998901234567"
+ *                   phone2:
+ *                     type: string
+ *                     example: "+998912345678"
+ *                   status:
+ *                     type: string
+ *                     example: "active"
+ *                   registration_date:
+ *                     type: string
+ *                     format: date-time
  *                   group_name:
  *                     type: string
- *                     example: Frontend-01
+ *                     example: "Inglis tili beginner"
+ *                   subject_name:
+ *                     type: string
+ *                     nullable: true
+ *                   required_amount:
+ *                     type: number
+ *                     example: 500000
+ *                   teacher_name:
+ *                     type: string
+ *                     example: "Rahmadjon Abdullayev"
  *                   paid_amount:
  *                     type: number
- *                     example: 600000
+ *                     example: 0
  *       500:
  *         description: Server xatosi
  */
 router.get("/all", studentController.getAllStudents);
+
+/**
+ * @swagger
+ * /api/students/{student_id}/status:
+ *   patch:
+ *     summary: Student statusini o'zgartirish (FAQAT ADMIN)
+ *     description: Studentni faollashtirish, o'qishni to'xtatish yoki bloklash
+ *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: student_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Student ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [active, inactive, blocked]
+ *                 description: active - faol, inactive - o'qishni to'xtatgan, blocked - bloklangan
+ *                 example: "inactive"
+ *     responses:
+ *       200:
+ *         description: Student statusi o'zgartirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Student o'qishni to'xtatdi (inactive)"
+ *                 student:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     surname:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *       400:
+ *         description: Noto'g'ri status
+ *       404:
+ *         description: Student topilmadi
+ */
+router.patch("/:student_id/status", protect, roleCheck(['admin']), studentController.updateStudentStatus);
+
+/**
+ * @swagger
+ * /api/students/{student_id}:
+ *   delete:
+ *     summary: Studentni butunlay o'chirish (FAQAT ADMIN)
+ *     description: Student va uning barcha ma'lumotlari o'chiriladi
+ *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: student_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Student ID
+ *     responses:
+ *       200:
+ *         description: Student o'chirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Student va uning barcha ma'lumotlari o'chirildi"
+ *                 deletedStudent:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     surname:
+ *                       type: string
+ *                     username:
+ *                       type: string
+ *       404:
+ *         description: Student topilmadi
+ */
+router.delete("/:student_id", protect, roleCheck(['admin']), studentController.deleteStudent);
 
 module.exports = router;

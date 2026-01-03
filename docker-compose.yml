@@ -6,11 +6,11 @@ services:
     container_name: postgres16
     restart: always
     environment:
-      POSTGRES_USER: postgres        # 'user' edi, 'postgres'ga o'zgartirildi
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: lsm123
       POSTGRES_DB: lms
     ports:
-      - "5432:5432"
+      - "4000:5432"   # 👈 HOST:CONTAINER
     volumes:
       - pgdata:/var/lib/postgresql/data
 

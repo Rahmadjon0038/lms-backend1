@@ -6,9 +6,15 @@ const options = {
     openapi: '3.0.0',
     info: {
       title: 'LMS API Documentation',
-      version: '1.0.0',
-      description: 'LMS loyihasi uchun backend API hujjatlari',
+      version: '2.0.0',
+      description: 'LMS loyihasi uchun backend API hujjatlari - To\'lovlar tizimi va student boshqaruv',
     },
+    tags: [
+      { name: 'Users', description: 'Foydalanuvchilar registratsiya va login' },
+      { name: 'Groups', description: 'Guruhlarni boshqarish' },
+      { name: 'Students', description: 'Studentlarni boshqarish' },
+      { name: 'Payments', description: 'To\'lovlar tizimi - oylik to\'lovlar, hisobotlar' }
+    ],
     servers: [
       {
         url: 'http://localhost:5000',

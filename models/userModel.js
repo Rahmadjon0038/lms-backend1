@@ -12,6 +12,10 @@ const createUserTable = async () => {
       status VARCHAR(20) DEFAULT 'active', -- 'active', 'inactive', 'blocked'
       phone VARCHAR(20),
       phone2 VARCHAR(20),
+      group_id INTEGER,
+      group_name VARCHAR(255),
+      teacher_id INTEGER,
+      teacher_name VARCHAR(255),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -19,6 +23,41 @@ const createUserTable = async () => {
   try {
     await pool.query(queryText);
     console.log("✅ 'users' jadvali tekshirildi/yaratildi.");
+    
+    // Eski jadvallarga yangi ustunlarni qo'shish (agar mavjud bo'lmasa)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='group_id') THEN
+            ALTER TABLE users ADD COLUMN group_id INTEGER;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='group_name') THEN
+            ALTER TABLE users ADD COLUMN group_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='teacher_id') THEN
+            ALTER TABLE users ADD COLUMN teacher_id INTEGER;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='teacher_name') THEN
+            ALTER TABLE users ADD COLUMN teacher_name VARCHAR(255);
+          END IF;
+        END $$;
+      `);
+      console.log("✅ 'users' jadvaliga yangi ustunlar qo'shildi.");
+      
+      // Agar required_amount ustuni mavjud bo'lsa, uni o'chiramiz
+      await pool.query(`
+        DO $$ 
+        BEGIN 
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='required_amount') THEN
+            ALTER TABLE users DROP COLUMN required_amount;
+            RAISE NOTICE 'required_amount ustuni o''chirildi';
+          END IF;
+        END $$;
+      `);
+    } catch (alterErr) {
+      console.log("⚠️ Ustunlar allaqachon mavjud yoki qo'shishda xato:", alterErr.message);
+    }
   } catch (err) {
     console.error("❌ Jadval yaratishda xato:", err.message);
   }

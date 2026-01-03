@@ -86,27 +86,109 @@ exports.removeStudentFromGroup = async (req, res) => {
 exports.adminAddStudentToGroup = async (req, res) => {
     const { student_id, group_id } = req.body;
     try {
+        // Guruh ma'lumotlarini olish
+        const groupRes = await pool.query(
+            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name 
+             FROM groups g 
+             LEFT JOIN users u ON g.teacher_id = u.id 
+             WHERE g.id = $1`,
+            [group_id]
+        );
+        if (groupRes.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        const groupData = groupRes.rows[0];
+
+        // Debug: guruh ma'lumotlarini console'ga chiqarish
+        console.log("📊 Guruh ma'lumotlari:", groupData);
+        console.log("💰 Price:", groupData.price, "Type:", typeof groupData.price);
+
+        // Student_groups jadvaliga qo'shish
         const result = await pool.query(
             "INSERT INTO student_groups (student_id, group_id) VALUES ($1, $2) RETURNING *",
             [student_id, group_id]
         );
-        res.status(201).json({ success: true, data: result.rows[0] });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+
+        // Users jadvalida studentning ma'lumotlarini yangilash
+        const updateResult = await pool.query(
+            `UPDATE users SET 
+              group_id = $1, 
+              group_name = $2, 
+              teacher_id = $3, 
+              teacher_name = $4
+             WHERE id = $5
+             RETURNING id, name, surname, group_id, group_name, teacher_id, teacher_name`,
+            [groupData.id, groupData.group_name, groupData.teacher_id, groupData.teacher_name, student_id]
+        );
+
+        console.log("✅ Student yangilandi:", updateResult.rows[0]);
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Student guruhga qo'shildi",
+            data: result.rows[0],
+            updatedStudent: updateResult.rows[0],
+            updatedFields: {
+                group_id: groupData.id,
+                group_name: groupData.group_name,
+                teacher_id: groupData.teacher_id,
+                teacher_name: groupData.teacher_name
+            }
+        });
+    } catch (err) { 
+        console.error("❌ Xatolik:", err);
+        if (err.code === '23505') {
+            return res.status(400).json({ message: "Bu student allaqachon guruhda" });
+        }
+        res.status(500).json({ error: err.message }); 
+    }
 };
 
 // 5. Student kod orqali qo'shilishi
 exports.studentJoinByCode = async (req, res) => {
     const { unique_code } = req.body;
     try {
-        const group = await pool.query("SELECT id, is_active FROM groups WHERE unique_code = $1", [unique_code]);
+        // Guruh ma'lumotlarini olish
+        const group = await pool.query(
+            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active 
+             FROM groups g 
+             LEFT JOIN users u ON g.teacher_id = u.id 
+             WHERE g.unique_code = $1`,
+            [unique_code]
+        );
         if (!group.rows[0]) return res.status(404).json({ message: "Bunday kodli guruh mavjud emas" });
         if (!group.rows[0].is_active) return res.status(400).json({ message: "Guruh hozirda bloklangan" });
 
+        const groupData = group.rows[0];
+
+        // Student_groups jadvaliga qo'shish
         const result = await pool.query(
             "INSERT INTO student_groups (student_id, group_id) VALUES ($1, $2) RETURNING *",
-            [req.user.id, group.rows[0].id]
+            [req.user.id, groupData.id]
         );
-        res.status(201).json({ success: true, data: result.rows[0] });
+
+        // Users jadvalida studentning ma'lumotlarini yangilash
+        await pool.query(
+            `UPDATE users SET 
+              group_id = $1, 
+              group_name = $2, 
+              teacher_id = $3, 
+              teacher_name = $4
+             WHERE id = $5`,
+            [groupData.id, groupData.group_name, groupData.teacher_id, groupData.teacher_name, req.user.id]
+        );
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Guruhga muvaffaqiyatli qo'shildingiz",
+            data: result.rows[0],
+            groupInfo: {
+                group_name: groupData.group_name,
+                teacher_name: groupData.teacher_name,
+                price: groupData.price
+            }
+        });
     } catch (err) { 
         if(err.code === '23505') return res.status(400).json({ message: "Siz allaqachon bu guruhdasiz" });
         res.status(500).json({ error: err.message }); 
@@ -199,6 +281,165 @@ exports.deleteGroup = async (req, res) => {
             deletedGroup: result.rows[0] 
         });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// 9. Student o'z guruhini va guruh a'zolarini ko'rishi
+exports.getMyGroup = async (req, res) => {
+    const studentId = req.user.id; // JWT tokendan olinadi
+
+    try {
+        // Studentning guruh ma'lumotlarini olish
+        const studentGroup = await pool.query(`
+            SELECT 
+                u.group_id,
+                u.group_name,
+                u.teacher_id,
+                u.teacher_name,
+                u.required_amount,
+                g.schedule,
+                g.start_date,
+                g.is_active,
+                g.unique_code
+            FROM users u
+            LEFT JOIN groups g ON u.group_id = g.id
+            WHERE u.id = $1 AND u.role = 'student'
+        `, [studentId]);
+
+        if (studentGroup.rows.length === 0) {
+            return res.status(404).json({ message: "Siz hali hech qaysi guruhga qo'shilmagansiz" });
+        }
+
+        const groupData = studentGroup.rows[0];
+
+        if (!groupData.group_id) {
+            return res.status(404).json({ message: "Siz hali hech qaysi guruhga qo'shilmagansiz" });
+        }
+
+        // Guruh a'zolari (o'quvchilar) ro'yxatini olish
+        const groupMembers = await pool.query(`
+            SELECT 
+                u.id,
+                u.name,
+                u.surname,
+                u.username,
+                u.phone,
+                sg.joined_at,
+                sg.status
+            FROM users u
+            JOIN student_groups sg ON u.id = sg.student_id
+            WHERE sg.group_id = $1 AND sg.status = 'active'
+            ORDER BY u.name
+        `, [groupData.group_id]);
+
+        res.json({
+            success: true,
+            groupInfo: {
+                group_id: groupData.group_id,
+                group_name: groupData.group_name,
+                teacher_name: groupData.teacher_name,
+                required_amount: groupData.required_amount,
+                schedule: groupData.schedule,
+                start_date: groupData.start_date,
+                is_active: groupData.is_active,
+                unique_code: groupData.unique_code
+            },
+            members: groupMembers.rows,
+            totalMembers: groupMembers.rows.length
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// 11. Studentni boshqa guruhga o'tkazish (Admin)
+exports.changeStudentGroup = async (req, res) => {
+    const { student_id, new_group_id } = req.body;
+
+    if (!student_id || !new_group_id) {
+        return res.status(400).json({ 
+            message: "student_id va new_group_id majburiy" 
+        });
+    }
+
+    try {
+        // Studentni tekshirish
+        const studentCheck = await pool.query(
+            'SELECT id, name, surname, group_id, group_name FROM users WHERE id = $1 AND role = $2',
+            [student_id, 'student']
+        );
+
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Student topilmadi" });
+        }
+
+        const student = studentCheck.rows[0];
+        const oldGroupId = student.group_id;
+
+        // Yangi guruhni tekshirish
+        const newGroupCheck = await pool.query(
+            `SELECT g.id, g.name as group_name, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active
+             FROM groups g 
+             LEFT JOIN users u ON g.teacher_id = u.id 
+             WHERE g.id = $1`,
+            [new_group_id]
+        );
+
+        if (newGroupCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Yangi guruh topilmadi" });
+        }
+
+        const newGroup = newGroupCheck.rows[0];
+
+        if (!newGroup.is_active) {
+            return res.status(400).json({ message: "Yangi guruh faol emas (bloklangan)" });
+        }
+
+        // Eski guruhdan o'chirish (agar mavjud bo'lsa)
+        if (oldGroupId) {
+            await pool.query(
+                'DELETE FROM student_groups WHERE student_id = $1 AND group_id = $2',
+                [student_id, oldGroupId]
+            );
+        }
+
+        // Yangi guruhga qo'shish
+        await pool.query(
+            `INSERT INTO student_groups (student_id, group_id) 
+             VALUES ($1, $2)
+             ON CONFLICT (student_id, group_id) DO NOTHING`,
+            [student_id, new_group_id]
+        );
+
+        // Users jadvalidagi ma'lumotlarni yangilash
+        const updateResult = await pool.query(
+            `UPDATE users SET 
+              group_id = $1, 
+              group_name = $2, 
+              teacher_id = $3, 
+              teacher_name = $4
+             WHERE id = $5
+             RETURNING id, name, surname, group_id, group_name, teacher_id, teacher_name`,
+            [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, student_id]
+        );
+
+        res.json({
+            success: true,
+            message: `${student.name} ${student.surname} guruhdan guruhga ko'chirildi`,
+            previous_group: {
+                id: oldGroupId,
+                name: student.group_name
+            },
+            new_group: {
+                id: newGroup.id,
+                name: newGroup.group_name,
+                teacher_name: newGroup.teacher_name
+            },
+            updated_student: updateResult.rows[0]
+        });
+    } catch (err) {
+        console.error("Guruhni o'zgartirishda xato:", err);
         res.status(500).json({ error: err.message });
     }
 };

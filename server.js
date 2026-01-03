@@ -29,20 +29,20 @@ app.get('/', async (req, res) => {
 const userRoute = require('./routes/userRoutes');
 const groupRoute = require('./routes/groupRoutes');
 const studentRoutes = require('./routes/studentRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
-
-
-app.use('/api/groups',groupRoute );
-// ------ student -------
-app.use('/api/students',studentRoutes );
+app.use('/api/groups', groupRoute);
+app.use('/api/students', studentRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // 
+console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
 
-
+// createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
 const PORT = process.env.PORT || 5000;
 

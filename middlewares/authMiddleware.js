@@ -18,11 +18,13 @@ const protect = (req, res, next) => {
 
             next(); // Hamma narsa joyida, keyingi funksiyaga ruxsat
         } catch (error) {
-            // Agar token muddati o'tgan bo'lsa yoki noto'g'ri bo'lsa
-            console.error("Token xatosi:", error.message);
-            return res.status(401).json({ 
-                message: "Access Token yaroqsiz yoki muddati o'tgan!",
-                code: "TOKEN_EXPIRED" // Frontendga signal: "Bor, refresh qil!"
+            console.log("--- TOKEN DEBUG ---");
+            console.log("Xato xabari:", error.message);
+            console.log("Ishlatilgan Secret:", process.env.JWT_SECRET);
+            console.log("-------------------");
+
+            return res.status(401).json({
+                message: "Token xatosi: " + error.message,
             });
         }
     }
