@@ -152,6 +152,64 @@ router.patch("/:student_id/status", protect, roleCheck(['admin']), studentContro
 
 /**
  * @swagger
+ * /api/students/my-groups:
+ *   get:
+ *     summary: Student o'zi qatnashayotgan guruhlarni olish
+ *     description: Faqat o'zi login bo'lgan student o'zi qatnashayotgan guruhlar ro'yxatini ko'ra oladi
+ *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Student guruhlar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Sizning guruhlaringiz ro'yxati"
+ *                 groups:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       group_id:
+ *                         type: integer
+ *                       group_name:
+ *                         type: string
+ *                       unique_code:
+ *                         type: string
+ *                       start_date:
+ *                         type: string
+ *                         format: date
+ *                       schedule:
+ *                         type: object
+ *                       price:
+ *                         type: number
+ *                       is_active:
+ *                         type: boolean
+ *                       joined_at:
+ *                         type: string
+ *                         format: date-time
+ *                       student_status:
+ *                         type: string
+ *                         enum: [active, stopped, finished]
+ *                       teacher_name:
+ *                         type: string
+ *                       subject_name:
+ *                         type: string
+ *       401:
+ *         description: Ruxsat berilmadi (token kerak)
+ */
+router.get("/my-groups", protect, studentController.getMyGroups);
+
+/**
+ * @swagger
  * /api/students/{student_id}:
  *   delete:
  *     summary: Studentni butunlay o'chirish (FAQAT ADMIN)

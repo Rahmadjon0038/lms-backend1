@@ -11,8 +11,8 @@ exports.getStudentsForPayment = async (req, res) => {
                 u.name || ' ' || u.surname as student_name,
                 u.phone,
                 u.group_id,
-                u.group_name,
-                u.teacher_name,
+                g.name as group_name,
+                COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
                 g.price as default_price,
                 mf.required_amount,
                 mf.paid_amount,
@@ -20,6 +20,7 @@ exports.getStudentsForPayment = async (req, res) => {
                 (COALESCE(mf.required_amount, g.price, 0) - COALESCE(mf.paid_amount, 0)) as debt
             FROM users u
             LEFT JOIN groups g ON u.group_id = g.id
+            LEFT JOIN users t ON g.teacher_id = t.id
             LEFT JOIN monthly_fees mf ON u.id = mf.student_id AND mf.month_name = $1
             WHERE u.role = 'student' AND u.status = 'active'
         `;
@@ -207,7 +208,12 @@ exports.getStudentPayments = async (req, res) => {
         
         // Student ma'lumotlari
         const student = await pool.query(
-            'SELECT id, name, surname, group_name, teacher_name FROM users WHERE id = $1',
+            `SELECT u.id, u.name, u.surname, g.name as group_name, 
+                    COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name 
+             FROM users u
+             LEFT JOIN groups g ON u.group_id = g.id
+             LEFT JOIN users t ON g.teacher_id = t.id
+             WHERE u.id = $1`,
             [student_id]
         );
 
@@ -236,16 +242,18 @@ exports.getMonthlyPayments = async (req, res) => {
                 u.id as student_id,
                 u.name || ' ' || u.surname as student_name,
                 u.phone,
-                u.group_name,
-                u.teacher_name,
+                g.name as group_name,
+                COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
                 mf.required_amount,
                 mf.paid_amount,
                 mf.status,
                 (COALESCE(mf.required_amount, 0) - COALESCE(mf.paid_amount, 0)) as debt
              FROM users u
+             LEFT JOIN groups g ON u.group_id = g.id
+             LEFT JOIN users t ON g.teacher_id = t.id
              LEFT JOIN monthly_fees mf ON u.id = mf.student_id AND mf.month_name = $1
              WHERE u.role = 'student' AND u.status = 'active'
-             ORDER BY u.group_name, u.surname`,
+             ORDER BY g.name, u.surname`,
             [month_name]
         );
 

@@ -95,4 +95,4 @@ const createStudentAdditionalTables = async () => {
   }
 };
 
-module.exports = { createStudentAdditionalTables };
+module.exports = { createStudentAdditionalTables }

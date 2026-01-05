@@ -12,6 +12,9 @@ const createUserTable = async () => {
       status VARCHAR(20) DEFAULT 'active', -- 'active', 'inactive', 'blocked'
       phone VARCHAR(20),
       phone2 VARCHAR(20),
+      subject VARCHAR(255), -- Teacher uchun fan nomi
+      start_date DATE, -- Ishni boshlagan sanasi
+      end_date DATE, -- Ishni tugatgan sanasi (agar mavjud bo'lsa)
       group_id INTEGER,
       group_name VARCHAR(255),
       teacher_id INTEGER,
@@ -29,6 +32,15 @@ const createUserTable = async () => {
       await pool.query(`
         DO $$ 
         BEGIN 
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject') THEN
+            ALTER TABLE users ADD COLUMN subject VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='start_date') THEN
+            ALTER TABLE users ADD COLUMN start_date DATE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='end_date') THEN
+            ALTER TABLE users ADD COLUMN end_date DATE;
+          END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='group_id') THEN
             ALTER TABLE users ADD COLUMN group_id INTEGER;
           END IF;

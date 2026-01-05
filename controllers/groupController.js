@@ -115,11 +115,10 @@ exports.adminAddStudentToGroup = async (req, res) => {
             `UPDATE users SET 
               group_id = $1, 
               group_name = $2, 
-              teacher_id = $3, 
-              teacher_name = $4
-             WHERE id = $5
-             RETURNING id, name, surname, group_id, group_name, teacher_id, teacher_name`,
-            [groupData.id, groupData.group_name, groupData.teacher_id, groupData.teacher_name, student_id]
+              teacher_id = $3
+             WHERE id = $4
+             RETURNING id, name, surname, group_id, group_name, teacher_id`,
+            [groupData.id, groupData.group_name, groupData.teacher_id, student_id]
         );
 
         console.log("✅ Student yangilandi:", updateResult.rows[0]);
@@ -173,10 +172,9 @@ exports.studentJoinByCode = async (req, res) => {
             `UPDATE users SET 
               group_id = $1, 
               group_name = $2, 
-              teacher_id = $3, 
-              teacher_name = $4
-             WHERE id = $5`,
-            [groupData.id, groupData.group_name, groupData.teacher_id, groupData.teacher_name, req.user.id]
+              teacher_id = $3
+             WHERE id = $4`,
+            [groupData.id, groupData.group_name, groupData.teacher_id, req.user.id]
         );
 
         res.status(201).json({ 
@@ -198,7 +196,7 @@ exports.studentJoinByCode = async (req, res) => {
 // 6. Filtrlangan ro'yxat
 exports.getAllGroups = async (req, res) => {
     const { teacher_id, subject_id, is_active } = req.query;
-    let query = `SELECT g.*, u.name as teacher_name FROM groups g LEFT JOIN users u ON g.teacher_id = u.id WHERE 1=1`;
+    let query = `SELECT g.*, CONCAT(u.name, ' ', u.surname) as teacher_name FROM groups g LEFT JOIN users u ON g.teacher_id = u.id WHERE 1=1`;
     const params = [];
 
     if (teacher_id) { params.push(parseInt(teacher_id)); query += ` AND g.teacher_id = $${params.length}`; }
@@ -223,7 +221,7 @@ exports.getGroupById = async (req, res) => {
     try {
         // Guruh ma'lumotlarini olish
         const group = await pool.query(`
-            SELECT g.*, u.name as teacher_name 
+            SELECT g.*, CONCAT(u.name, ' ', u.surname) as teacher_name, u.phone as teacher_phone, u.phone2 as teacher_phone2 
             FROM groups g 
             LEFT JOIN users u ON g.teacher_id = u.id 
             WHERE g.id = $1`, [id]);
@@ -285,66 +283,49 @@ exports.deleteGroup = async (req, res) => {
     }
 };
 
-// 9. Student o'z guruhini va guruh a'zolarini ko'rishi
-exports.getMyGroup = async (req, res) => {
-    const studentId = req.user.id; // JWT tokendan olinadi
+// 9. Student guruhni ko'rishi (faqat guruh tavsifotlari va ism-familiyalar)
+exports.getGroupViewForStudent = async (req, res) => {
+    const groupId = parseInt(req.params.id);
+
+    if (isNaN(groupId)) {
+        return res.status(400).json({ message: "ID raqam bo'lishi shart!" });
+    }
 
     try {
-        // Studentning guruh ma'lumotlarini olish
-        const studentGroup = await pool.query(`
+        // Guruh ma'lumotlarini teacher bilan olish
+        const group = await pool.query(`
             SELECT 
-                u.group_id,
-                u.group_name,
-                u.teacher_id,
-                u.teacher_name,
-                u.required_amount,
-                g.schedule,
-                g.start_date,
+                g.id, 
+                g.name, 
+                g.start_date, 
+                g.schedule, 
                 g.is_active,
-                g.unique_code
-            FROM users u
-            LEFT JOIN groups g ON u.group_id = g.id
-            WHERE u.id = $1 AND u.role = 'student'
-        `, [studentId]);
+                CONCAT(u.name, ' ', u.surname) as teacher_name,
+                u.phone as teacher_phone,
+                u.phone2 as teacher_phone2
+            FROM groups g
+            LEFT JOIN users u ON g.teacher_id = u.id
+            WHERE g.id = $1
+        `, [groupId]);
 
-        if (studentGroup.rows.length === 0) {
-            return res.status(404).json({ message: "Siz hali hech qaysi guruhga qo'shilmagansiz" });
+        if (group.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
         }
 
-        const groupData = studentGroup.rows[0];
-
-        if (!groupData.group_id) {
-            return res.status(404).json({ message: "Siz hali hech qaysi guruhga qo'shilmagansiz" });
-        }
-
-        // Guruh a'zolari (o'quvchilar) ro'yxatini olish
+        // Guruh a'zolari (faqat ism-familiya)
         const groupMembers = await pool.query(`
             SELECT 
-                u.id,
                 u.name,
-                u.surname,
-                u.username,
-                u.phone,
-                sg.joined_at,
-                sg.status
+                u.surname
             FROM users u
             JOIN student_groups sg ON u.id = sg.student_id
             WHERE sg.group_id = $1 AND sg.status = 'active'
             ORDER BY u.name
-        `, [groupData.group_id]);
+        `, [groupId]);
 
         res.json({
             success: true,
-            groupInfo: {
-                group_id: groupData.group_id,
-                group_name: groupData.group_name,
-                teacher_name: groupData.teacher_name,
-                required_amount: groupData.required_amount,
-                schedule: groupData.schedule,
-                start_date: groupData.start_date,
-                is_active: groupData.is_active,
-                unique_code: groupData.unique_code
-            },
+            group: group.rows[0],
             members: groupMembers.rows,
             totalMembers: groupMembers.rows.length
         });

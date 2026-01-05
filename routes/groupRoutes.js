@@ -263,6 +263,78 @@ router.get('/', protect, groupCtrl.getAllGroups);
 
 /**
  * @swagger
+ * /api/groups/{id}/view:
+ *   get:
+ *     summary: Student guruhni ko'rishi (guruh tavsifotlari, teacher ma'lumotlari va guruhdashlari ismi)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Guruh tavsifotlari, teacher telefon raqamlari va guruhdashlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                       example: 1
+ *                     name:
+ *                       type: string
+ *                       example: "Node.js Backend"
+ *                     start_date:
+ *                       type: string
+ *                       format: date
+ *                       example: "2025-01-10"
+ *                     schedule:
+ *                       type: object
+ *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
+ *                     is_active:
+ *                       type: boolean
+ *                       example: true
+ *                     teacher_name:
+ *                       type: string
+ *                       example: "Anvar Karimov"
+ *                     teacher_phone:
+ *                       type: string
+ *                       example: "+998901234567"
+ *                     teacher_phone2:
+ *                       type: string
+ *                       example: "+998907654321"
+ *                 members:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       name:
+ *                         type: string
+ *                         example: "Ali"
+ *                       surname:
+ *                         type: string
+ *                         example: "Valiyev"
+ *                 totalMembers:
+ *                   type: integer
+ *                   example: 15
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.get('/:id/view', protect, groupCtrl.getGroupViewForStudent);
+
+/**
+ * @swagger
  * /api/groups/{id}:
  *   get:
  *     summary: Guruh ma'lumotlari va undagi talabalar ro'yxati
@@ -277,7 +349,44 @@ router.get('/', protect, groupCtrl.getAllGroups);
  *           type: integer
  *     responses:
  *       200:
- *         description: Batafsil ma'lumot
+ *         description: Guruh ma'lumotlari, teacher telefon raqamlari va talabalar
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     teacher_name:
+ *                       type: string
+ *                       example: "Anvar Karimov"
+ *                     teacher_phone:
+ *                       type: string
+ *                       example: "+998901234567"
+ *                     teacher_phone2:
+ *                       type: string
+ *                       example: "+998907654321"
+ *                 students:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       name:
+ *                         type: string
+ *                       surname:
+ *                         type: string
+ *                       phone:
+ *                         type: string
  */
 router.get('/:id', protect, groupCtrl.getGroupById);
 
@@ -293,7 +402,7 @@ router.get('/:id', protect, groupCtrl.getGroupById);
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Guruh ma'lumotlari va a'zolar ro'yxati
+ *         description: Guruh ma'lumotlari, teacher telefon raqamlari va a'zolar ro'yxati
  *         content:
  *           application/json:
  *             schema:
@@ -314,10 +423,31 @@ router.get('/:id', protect, groupCtrl.getGroupById);
  *                     teacher_name:
  *                       type: string
  *                       example: "Rahmadjon Abdullayev"
+ *                     teacher_phone:
+ *                       type: string
+ *                       example: "+998901234567"
+ *                     teacher_phone2:
+ *                       type: string
+ *                       example: "+998907654321"
  *                     required_amount:
  *                       type: number
  *                       example: 500000
  *                     schedule:
+ *                       type: object
+ *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
+ *                 members:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       name:
+ *                         type: string
+ *                         example: "Aziz"
+ *                       surname:
+ *                         type: string
+ *                         example: "Karimov"
  *                       type: object
  *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
  *                     start_date:
@@ -327,43 +457,12 @@ router.get('/:id', protect, groupCtrl.getGroupById);
  *                     is_active:
  *                       type: boolean
  *                       example: true
- *                     unique_code:
- *                       type: string
- *                       example: "GR-A1B2C3"
- *                 members:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       id:
- *                         type: integer
- *                         example: 5
- *                       name:
- *                         type: string
- *                         example: "Ali"
- *                       surname:
- *                         type: string
- *                         example: "Valiyev"
- *                       username:
- *                         type: string
- *                         example: "ali123"
- *                       phone:
- *                         type: string
- *                         example: "+998901234567"
- *                       joined_at:
- *                         type: string
- *                         format: date-time
- *                         example: "2026-01-03T10:30:00.000Z"
- *                       status:
- *                         type: string
- *                         example: "active"
  *                 totalMembers:
  *                   type: integer
  *                   example: 15
  *       404:
  *         description: Siz hali hech qaysi guruhga qo'shilmagansiz
  */
-router.get('/my-group', protect, groupCtrl.getMyGroup);
 
 /**
  * @swagger
