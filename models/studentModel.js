@@ -29,10 +29,27 @@ const createStudentAdditionalTables = async () => {
       group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
       month_name VARCHAR(20) NOT NULL, -- Qaysi oy uchun to'lov
       amount DECIMAL(10, 2) NOT NULL, -- To'langan summa
-      payment_method VARCHAR(20) DEFAULT 'cash', -- 'cash', 'card', 'transfer'
-      note TEXT, -- Qo'shimcha izoh
+      note TEXT, -- Qo'shimcha izoh (ixtiyoriy)
       created_by INTEGER REFERENCES users(id), -- Qaysi admin qo'shgan
+      admin_name VARCHAR(100), -- Admin ismi (kim to'lovni tasdiqlagani)
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Davomat jadvali (Oylik davomat)
+    CREATE TABLE IF NOT EXISTS attendance (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+      teacher_id INTEGER REFERENCES users(id), -- O'qituvchi
+      month_name VARCHAR(20) NOT NULL, -- Format: '2026-01'
+      daily_records JSON DEFAULT '[]', -- [1,0,1,1,0,...] 31 tagacha kun
+      total_classes INTEGER DEFAULT 0, -- Jami darslar soni
+      attended_classes INTEGER DEFAULT 0, -- Qatnashgan darslar
+      attendance_percentage DECIMAL(5, 2) DEFAULT 0, -- Foiz
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      created_by INTEGER REFERENCES users(id), -- Kim yaratgan (teacher/admin)
+      UNIQUE(student_id, month_name)
     );
   `;
   try {
@@ -62,14 +79,20 @@ const createStudentAdditionalTables = async () => {
       console.log("⚠️ Subjects jadvalini yangilashda xatolik:", alterErr.message);
     }
     
-    // Payments jadvaliga yangi ustunlarni qo'shish (eski bazalar uchun)
+    // Payments jadvaliga yangi ustunlarni qo'shish/o'zgartirish (eski bazalar uchun)
     try {
       await pool.query(`
         DO $$ 
         BEGIN 
-          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='payment_method') THEN
-            ALTER TABLE payments ADD COLUMN payment_method VARCHAR(20) DEFAULT 'cash';
+          -- payment_method ustunini o'chirish
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='payment_method') THEN
+            ALTER TABLE payments DROP COLUMN payment_method;
           END IF;
+          -- admin_name ustunini qo'shish
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='admin_name') THEN
+            ALTER TABLE payments ADD COLUMN admin_name VARCHAR(100);
+          END IF;
+          -- note ustunini ixtiyoriy qilish
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='note') THEN
             ALTER TABLE payments ADD COLUMN note TEXT;
           END IF;
@@ -109,6 +132,41 @@ const createStudentAdditionalTables = async () => {
         EXECUTE FUNCTION update_monthly_fee_status();
       `);
       console.log("✅ Monthly fees trigger yaratildi.");
+      
+      // Davomat jadvali uchun trigger (attendance percentage avtomatik hisoblanadi)
+      await pool.query(`
+        CREATE OR REPLACE FUNCTION update_attendance_percentage()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          -- Daily records dan attended_classes ni hisoblash
+          IF NEW.daily_records IS NOT NULL THEN
+            SELECT COUNT(*) INTO NEW.attended_classes 
+            FROM json_array_elements_text(NEW.daily_records) AS day
+            WHERE day::INTEGER = 1;
+          ELSE
+            NEW.attended_classes = 0;
+          END IF;
+          
+          -- Total classes dan percentage hisoblash
+          IF NEW.total_classes > 0 THEN
+            NEW.attendance_percentage = (NEW.attended_classes::DECIMAL / NEW.total_classes) * 100;
+          ELSE
+            NEW.attendance_percentage = 0;
+          END IF;
+          
+          NEW.updated_at = CURRENT_TIMESTAMP;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        DROP TRIGGER IF EXISTS attendance_percentage_trigger ON attendance;
+        
+        CREATE TRIGGER attendance_percentage_trigger
+        BEFORE INSERT OR UPDATE ON attendance
+        FOR EACH ROW
+        EXECUTE FUNCTION update_attendance_percentage();
+      `);
+      console.log("✅ Attendance trigger yaratildi.");
     } catch (alterErr) {
       console.log("⚠️ Payments/Monthly fees yangilashda xato:", alterErr.message);
     }

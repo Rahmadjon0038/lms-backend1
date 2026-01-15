@@ -31,6 +31,7 @@ const groupRoute = require('./routes/groupRoutes');
 const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const subjectRoutes = require('./routes/subjectRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 
@@ -40,6 +41,7 @@ app.use('/api/groups', groupRoute);
 app.use('/api/students', studentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/subjects', subjectRoutes);
+app.use('/api/attendance', attendanceRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);

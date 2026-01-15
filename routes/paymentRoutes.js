@@ -53,11 +53,12 @@ const {
  *           example: "2026-01"
  *         amount:
  *           type: number
- *         payment_method:
- *           type: string
- *           enum: [cash, card, transfer]
  *         note:
  *           type: string
+ *           description: Ixtiyoriy izoh
+ *         admin_name:
+ *           type: string
+ *           description: To'lovni tasdiqlagan admin ismi
  *         created_by:
  *           type: integer
  *         created_at:
@@ -70,7 +71,7 @@ const {
  * /api/payments/students-list:
  *   get:
  *     summary: To'lov qilish uchun studentlar ro'yxati (ADMIN)
- *     description: Har bir student uchun oy bo'yicha to'lash kerak/to'langan summalarni ko'rsatadi
+ *     description: Har bir student uchun oy bo'yicha to'lash kerak/to'langan summalarni ko'rsatadi. Teacher_id va subject_id bo'yicha filter qilish mumkin.
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -86,9 +87,19 @@ const {
  *         schema:
  *           type: integer
  *         description: Guruh bo'yicha filter
+ *       - in: query
+ *         name: teacher_id
+ *         schema:
+ *           type: integer
+ *         description: O'qituvchi bo'yicha filter
+ *       - in: query
+ *         name: subject_id
+ *         schema:
+ *           type: integer
+ *         description: Fan bo'yicha filter
  *     responses:
  *       200:
- *         description: Studentlar ro'yxati
+ *         description: Studentlar ro'yxati qo'shimcha ma'lumotlar bilan
  *         content:
  *           application/json:
  *             schema:
@@ -96,6 +107,8 @@ const {
  *               properties:
  *                 success:
  *                   type: boolean
+ *                 message:
+ *                   type: string
  *                 month:
  *                   type: string
  *                 count:
@@ -111,13 +124,37 @@ const {
  *                         type: string
  *                       phone:
  *                         type: string
+ *                       phone2:
+ *                         type: string
+ *                       father_name:
+ *                         type: string
+ *                       father_phone:
+ *                         type: string
+ *                       address:
+ *                         type: string
  *                       group_name:
+ *                         type: string
+ *                       subject_name:
  *                         type: string
  *                       teacher_name:
  *                         type: string
+ *                       teacher_id:
+ *                         type: integer
  *                       default_price:
  *                         type: number
+ *                         description: Guruhning asosiy narxi
  *                       required_amount:
+ *                         type: number
+ *                         description: Shu oy uchun to'lashi kerak bo'lgan summa (custom yoki default)
+ *                       paid_amount:
+ *                         type: number
+ *                         description: Shu oyga to'lagan summa
+ *                       debt:
+ *                         type: number
+ *                         description: Qarzi (required_amount - paid_amount)
+ *                       status:
+ *                         type: string
+ *                         enum: [paid, partial, unpaid]
  *                         type: number
  *                       paid_amount:
  *                         type: number
@@ -133,7 +170,7 @@ router.get('/students-list', protect, roleCheck(['admin']), getStudentsForPaymen
  * /api/payments/set-requirement:
  *   post:
  *     summary: Studentning oylik to'lov summasini belgilash (ADMIN)
- *     description: Har bir student uchun har bir oyda qancha to'lashi kerakligini belgilash
+ *     description: Har bir student uchun har bir oyda qancha to'lashi kerakligini belgilash. Bir necha oyga ham belgilash mumkin.
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -157,9 +194,28 @@ router.get('/students-list', protect, roleCheck(['admin']), getStudentsForPaymen
  *               required_amount:
  *                 type: number
  *                 example: 500000
+ *               duration_months:
+ *                 type: integer
+ *                 example: 3
+ *                 description: Necha oy davomida shu narxni qo'llash (ixtiyoriy, default=1)
  *     responses:
  *       200:
  *         description: To'lov summasi belgilandi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 months:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 data:
+ *                   type: array
  */
 router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequirement);
 
@@ -168,7 +224,7 @@ router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequire
  * /api/payments/add:
  *   post:
  *     summary: Studentning to'lovini qo'shish (ADMIN)
- *     description: Student to'lov qilganda summasini yozib qo'yish. Avtomatik monthly_fees yangilanadi.
+ *     description: Student to'lov qilganda summasini yozib qo'yish. To'lovni tasdiqlagan admin ismi avtomatik yoziladi. Avtomatik monthly_fees yangilanadi.
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -192,13 +248,10 @@ router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequire
  *               amount:
  *                 type: number
  *                 example: 500000
- *               payment_method:
- *                 type: string
- *                 enum: [cash, card, transfer]
- *                 default: cash
  *               note:
  *                 type: string
  *                 example: "Yanvar oyi to'lovi"
+ *                 description: Ixtiyoriy izoh
  *     responses:
  *       201:
  *         description: To'lov qo'shildi va monthly_fees yangilandi
@@ -355,11 +408,6 @@ router.get('/group/:group_id', protect, roleCheck(['admin']), getGroupPayments);
  *         schema:
  *           type: string
  *       - in: query
- *         name: payment_method
- *         schema:
- *           type: string
- *           enum: [cash, card, transfer]
- *       - in: query
  *         name: student_id
  *         schema:
  *           type: integer
@@ -367,6 +415,11 @@ router.get('/group/:group_id', protect, roleCheck(['admin']), getGroupPayments);
  *         name: group_id
  *         schema:
  *           type: integer
+ *       - in: query
+ *         name: teacher_id
+ *         schema:
+ *           type: integer
+ *         description: O'qituvchi bo'yicha filter
  *     responses:
  *       200:
  *         description: Barcha to'lovlar
