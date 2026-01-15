@@ -14,6 +14,16 @@ Professional davomat tizimi - studentlarning oylik davomatini kuzatish uchun API
 
 ## API Endpoints
 
+**7 ta Professional API:**
+
+1. Teacher Guruhlari - `GET /api/attendance/teacher/groups`
+2. Guruh Davomati - `GET /api/attendance/group/{group_id}`
+3. Davomat Yangilash - `PUT /api/attendance/student/{student_id}`
+4. Davomat Statistikasi - `GET /api/attendance/stats`
+5. Yomon Davomat - `GET /api/attendance/poor-attendance`
+6. Guruhlar Davomati - `GET /api/attendance/all-groups`
+7. **🔥 Barcha Studentlar** - `GET /api/attendance/all-students` *(Admin super tool)*
+
 ### 1. Teacher Guruhlari (`GET /api/attendance/teacher/groups`)
 **Kimlar ishlatishi mumkin:** Teacher only
 
@@ -122,13 +132,80 @@ curl -H "Authorization: Bearer ADMIN_TOKEN" \
 
 Bu 60% dan kam davomat qilayotgan studentlarni qaytaradi.
 
-### 6. Barcha Guruhlar Davomati (`GET /api/attendance/all-groups`)
+6. **Barcha Guruhlar Davomati** (`GET /api/attendance/all-groups`)
 **Kimlar ishlatishi mumkin:** Admin only
 
 Barcha guruhlarning davomat statistikasi:
 ```bash
 curl -H "Authorization: Bearer ADMIN_TOKEN" \
   "http://localhost:5000/api/attendance/all-groups?month_name=2026-01"
+```
+
+### 7. Barcha Studentlar Davomati (`GET /api/attendance/all-students`)
+**Kimlar ishlatishi mumkin:** Admin only
+
+**Eng muhim API** - Admin barcha studentlarni ko'radi va filterlar bilan qidirib topadi:
+
+```bash
+# Barcha studentlar
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
+  "http://localhost:5000/api/attendance/all-students?month_name=2026-01"
+
+# Subject bo'yicha filter
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
+  "http://localhost:5000/api/attendance/all-students?month_name=2026-01&subject_id=1"
+
+# Teacher bo'yicha filter  
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
+  "http://localhost:5000/api/attendance/all-students?month_name=2026-01&teacher_id=3"
+
+# Search (ism, telefon)
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
+  "http://localhost:5000/api/attendance/all-students?month_name=2026-01&search=Akmal"
+
+# Kombinatsiya
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
+  "http://localhost:5000/api/attendance/all-students?month_name=2026-01&subject_id=1&teacher_id=3&search=991234567"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Barcha studentlar davomat ma'lumotlari",
+  "month": "2026-01",
+  "summary": {
+    "total_students": 150,
+    "students_with_attendance": 145,
+    "average_percentage": 78.5,
+    "good_attendance": 120,
+    "poor_attendance": 15
+  },
+  "filters": {
+    "subject_id": 1,
+    "teacher_id": null,
+    "search": null
+  },
+  "count": 25,
+  "students": [
+    {
+      "student_id": 5,
+      "student_name": "Akmal Karimov", 
+      "phone": "+998901234567",
+      "phone2": "+998907654321",
+      "father_name": "Karim Akramov",
+      "father_phone": "+998909876543",
+      "address": "Toshkent, Chilonzor",
+      "group_name": "Matematika - Boshlang'ich",
+      "subject_name": "Matematika",
+      "teacher_name": "Alijon Valiyev",
+      "daily_records": "[1,1,0,1,1,1,0,1,1,1,0,0,1,1,1]",
+      "total_classes": 12,
+      "attended_classes": 9,
+      "attendance_percentage": 75.00
+    }
+  ]
+}
 ```
 
 ## Database Schema
@@ -175,9 +252,12 @@ Trigger avtomatik ravishda:
 
 ### Admin Interface:
 1. **Dashboard** - umumiy statistika
-2. **Guruhlar ro'yxati** - har guruh foizi bilan  
-3. **Problem studentlar** - qizil rangli alert bilan
-4. **Hisobotlar** - chart.js bilan
+2. **Barcha Studentlar** - `/all-students` API bilan super search
+3. **Guruhlar ro'yxati** - har guruh foizi bilan  
+4. **Problem studentlar** - qizil rangli alert bilan
+5. **Quick Edit** - inline davomat editing
+6. **Advanced Filters** - subject + teacher + search
+7. **Hisobotlar** - chart.js bilan
 
 ### Calendar Integration:
 ```javascript
