@@ -367,3 +367,133 @@ exports.getAllGroupsAttendance = async (req, res) => {
         });
     }
 };
+
+// 7. Admin uchun barcha studentlarni davomat bilan ko'rish (filterlar bilan)
+exports.getAllStudentsAttendance = async (req, res) => {
+    const { month_name, subject_id, teacher_id, search } = req.query;
+    const currentMonth = month_name || new Date().toISOString().slice(0, 7);
+
+    try {
+        let query = `
+            SELECT 
+                u.id as student_id,
+                u.name || ' ' || u.surname as student_name,
+                u.phone,
+                u.phone2,
+                u.father_name,
+                u.father_phone,
+                u.address,
+                u.group_id,
+                g.name as group_name,
+                s.name as subject_name,
+                s.id as subject_id,
+                COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
+                t.id as teacher_id,
+                COALESCE(a.daily_records, '[]') as daily_records,
+                COALESCE(a.total_classes, 0) as total_classes,
+                COALESCE(a.attended_classes, 0) as attended_classes,
+                COALESCE(a.attendance_percentage, 0) as attendance_percentage,
+                a.updated_at as last_update
+            FROM users u
+            LEFT JOIN groups g ON u.group_id = g.id
+            LEFT JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN users t ON g.teacher_id = t.id
+            LEFT JOIN attendance a ON u.id = a.student_id AND a.month_name = $1
+            WHERE u.role = 'student' AND u.status = 'active'
+        `;
+        
+        const params = [currentMonth];
+        let paramIndex = 2;
+        
+        // Subject filter
+        if (subject_id) {
+            query += ` AND g.subject_id = $${paramIndex}`;
+            params.push(subject_id);
+            paramIndex++;
+        }
+        
+        // Teacher filter
+        if (teacher_id) {
+            query += ` AND g.teacher_id = $${paramIndex}`;
+            params.push(teacher_id);
+            paramIndex++;
+        }
+        
+        // Search filter (ismi yoki telefon raqami bo'yicha)
+        if (search) {
+            query += ` AND (
+                u.name ILIKE $${paramIndex} OR 
+                u.surname ILIKE $${paramIndex} OR 
+                u.phone ILIKE $${paramIndex} OR
+                u.phone2 ILIKE $${paramIndex}
+            )`;
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+        
+        query += ' ORDER BY g.name, u.surname, u.name';
+        
+        const studentsAttendance = await pool.query(query, params);
+
+        // Default davomat yaratish (agar mavjud bo'lmasa)
+        for (let student of studentsAttendance.rows) {
+            if (!student.daily_records || student.daily_records === '[]') {
+                const daysInMonth = new Date(currentMonth.split('-')[0], currentMonth.split('-')[1], 0).getDate();
+                const defaultRecords = Array(daysInMonth).fill(0);
+                
+                await pool.query(
+                    `INSERT INTO attendance (student_id, group_id, teacher_id, month_name, daily_records, total_classes)
+                     VALUES ($1, $2, $3, $4, $5, 0)
+                     ON CONFLICT (student_id, month_name) DO NOTHING`,
+                    [student.student_id, student.group_id, student.teacher_id, currentMonth, JSON.stringify(defaultRecords)]
+                );
+                
+                // Ma'lumotlarni yangilash
+                student.daily_records = JSON.stringify(defaultRecords);
+                student.total_classes = 0;
+                student.attended_classes = 0;
+                student.attendance_percentage = 0;
+            }
+        }
+
+        // Umumiy statistika
+        const summary = await pool.query(
+            `SELECT 
+                COUNT(*) as total_students,
+                COUNT(a.id) as students_with_attendance,
+                AVG(a.attendance_percentage) as average_percentage,
+                COUNT(CASE WHEN a.attendance_percentage >= 80 THEN 1 END) as good_attendance,
+                COUNT(CASE WHEN a.attendance_percentage < 60 THEN 1 END) as poor_attendance
+             FROM users u
+             LEFT JOIN groups g ON u.group_id = g.id
+             LEFT JOIN attendance a ON u.id = a.student_id AND a.month_name = $1
+             WHERE u.role = 'student' AND u.status = 'active'
+             ${subject_id ? 'AND g.subject_id = $2' : ''}
+             ${teacher_id ? `AND g.teacher_id = $${subject_id ? 3 : 2}` : ''}`,
+            subject_id && teacher_id ? [currentMonth, subject_id, teacher_id] :
+            subject_id ? [currentMonth, subject_id] :
+            teacher_id ? [currentMonth, teacher_id] :
+            [currentMonth]
+        );
+
+        res.json({
+            success: true,
+            message: "Barcha studentlar davomat ma'lumotlari",
+            month: currentMonth,
+            summary: summary.rows[0],
+            filters: {
+                subject_id,
+                teacher_id,
+                search
+            },
+            count: studentsAttendance.rows.length,
+            students: studentsAttendance.rows
+        });
+    } catch (err) {
+        res.status(500).json({ 
+            success: false,
+            message: "Ma'lumotlarni olishda xatolik",
+            error: err.message 
+        });
+    }
+};

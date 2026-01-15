@@ -8,7 +8,8 @@ const {
     updateStudentAttendance,
     getAttendanceStats,
     getPoorAttendanceStudents,
-    getAllGroupsAttendance
+    getAllGroupsAttendance,
+    getAllStudentsAttendance
 } = require('../controllers/attendanceController');
 
 /**
@@ -325,5 +326,114 @@ router.get('/poor-attendance', protect, roleCheck(['admin']), getPoorAttendanceS
  *         description: Barcha guruhlar davomati
  */
 router.get('/all-groups', protect, roleCheck(['admin']), getAllGroupsAttendance);
+
+/**
+ * @swagger
+ * /api/attendance/all-students:
+ *   get:
+ *     summary: Barcha studentlar davomati (filter bilan) (ADMIN)
+ *     description: Admin uchun barcha studentlarni ko'rish va ularning davomatini boshqarish. Subject, teacher va search filterlari bilan.
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month_name
+ *         schema:
+ *           type: string
+ *         example: "2026-01"
+ *         description: Oy (default - joriy oy)
+ *       - in: query
+ *         name: subject_id
+ *         schema:
+ *           type: integer
+ *         example: 1
+ *         description: Fan bo'yicha filter
+ *       - in: query
+ *         name: teacher_id
+ *         schema:
+ *           type: integer
+ *         example: 3
+ *         description: O'qituvchi bo'yicha filter
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         example: "Akmal"
+ *         description: Ism, familiya yoki telefon raqami bo'yicha qidiruv
+ *     responses:
+ *       200:
+ *         description: Barcha studentlar davomat ma'lumotlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 month:
+ *                   type: string
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total_students:
+ *                       type: integer
+ *                     students_with_attendance:
+ *                       type: integer
+ *                     average_percentage:
+ *                       type: number
+ *                     good_attendance:
+ *                       type: integer
+ *                     poor_attendance:
+ *                       type: integer
+ *                 filters:
+ *                   type: object
+ *                   properties:
+ *                     subject_id:
+ *                       type: integer
+ *                     teacher_id:
+ *                       type: integer
+ *                     search:
+ *                       type: string
+ *                 count:
+ *                   type: integer
+ *                 students:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       student_id:
+ *                         type: integer
+ *                       student_name:
+ *                         type: string
+ *                       phone:
+ *                         type: string
+ *                       phone2:
+ *                         type: string
+ *                       father_name:
+ *                         type: string
+ *                       father_phone:
+ *                         type: string
+ *                       address:
+ *                         type: string
+ *                       group_name:
+ *                         type: string
+ *                       subject_name:
+ *                         type: string
+ *                       teacher_name:
+ *                         type: string
+ *                       daily_records:
+ *                         type: string
+ *                         description: JSON array string
+ *                       total_classes:
+ *                         type: integer
+ *                       attended_classes:
+ *                         type: integer
+ *                       attendance_percentage:
+ *                         type: number
+ */
+router.get('/all-students', protect, roleCheck(['admin']), getAllStudentsAttendance);
 
 module.exports = router;
