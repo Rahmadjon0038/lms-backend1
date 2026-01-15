@@ -23,12 +23,12 @@ const generateUniqueCode = () => {
 };
 // 1. Guruh yaratish (Tuzatilgan variant)
 exports.createGroup = async (req, res) => {
-    const { name, teacher_id, start_date, schedule, subject_id, price } = req.body;
+    const { name, teacher_id, start_date, schedule, subject_id, price, status } = req.body;
     const unique_code = generateUniqueCode();
     try {
         const result = await pool.query(
-            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price, status) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
             [
                 name, 
                 teacher_id, 
@@ -36,7 +36,8 @@ exports.createGroup = async (req, res) => {
                 start_date ? start_date : null,
                 schedule ? JSON.stringify(schedule) : null,
                 subject_id,
-                price
+                price,
+                status || 'draft' // Default status
             ]
         );
         res.status(201).json({ success: true, group: result.rows[0] });
@@ -68,6 +69,67 @@ exports.updateGroup = async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
+// 2.1. Guruh statusini o'zgartirish (draft -> active -> blocked)
+exports.updateGroupStatus = async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body; // 'draft', 'active', 'blocked'
+    
+    // Status validatsiya
+    const validStatuses = ['draft', 'active', 'blocked'];
+    if (!validStatuses.includes(status)) {
+        return res.status(400).json({ 
+            message: "Status faqat 'draft', 'active' yoki 'blocked' bo'lishi mumkin" 
+        });
+    }
+
+    try {
+        let updateFields = {};
+        let updateValues = [];
+        let paramCount = 1;
+        let updateQuery = 'UPDATE groups SET ';
+        
+        // Status active bo'lsa, class_start_date va class_status ni ham yangilash
+        if (status === 'active') {
+            updateFields.status = status;
+            updateFields.class_start_date = new Date();
+            updateFields.class_status = 'started';
+            
+            updateQuery += 'status = $1, class_start_date = $2, class_status = $3 WHERE id = $4';
+            updateValues = [status, new Date(), 'started', id];
+        } else {
+            updateFields.status = status;
+            updateQuery += 'status = $1 WHERE id = $2';
+            updateValues = [status, id];
+        }
+        
+        const result = await pool.query(
+            updateQuery + ' RETURNING id, name, status, teacher_id, start_date, class_start_date, class_status',
+            updateValues
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        let message = '';
+        if (status === 'draft') {
+            message = "Guruh tayyorgarlik holatiga o'tkazildi (studentlar yig'ilmoqda)";
+        } else if (status === 'active') {
+            message = "Guruh faollashtirildi (darslar boshlandi)";
+        } else {
+            message = "Guruh bloklandi";
+        }
+
+        res.json({
+            success: true,
+            message: message,
+            group: result.rows[0]
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 // 3. Studentni chiqarish
 exports.removeStudentFromGroup = async (req, res) => {
     const group_id = parseInt(req.params.group_id);
@@ -88,7 +150,7 @@ exports.adminAddStudentToGroup = async (req, res) => {
     try {
         // Guruh ma'lumotlarini olish
         const groupRes = await pool.query(
-            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name 
+            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, g.status, u.name || ' ' || u.surname as teacher_name 
              FROM groups g 
              LEFT JOIN users u ON g.teacher_id = u.id 
              WHERE g.id = $1`,
@@ -96,6 +158,9 @@ exports.adminAddStudentToGroup = async (req, res) => {
         );
         if (groupRes.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        if (groupRes.rows[0].status === 'blocked') {
+            return res.status(400).json({ message: "Bloklangan guruhga student qo'shib bo'lmaydi" });
         }
 
         const groupData = groupRes.rows[0];
@@ -150,7 +215,7 @@ exports.studentJoinByCode = async (req, res) => {
     try {
         // Guruh ma'lumotlarini olish
         const group = await pool.query(
-            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active 
+            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active, g.status 
              FROM groups g 
              LEFT JOIN users u ON g.teacher_id = u.id 
              WHERE g.unique_code = $1`,
@@ -158,6 +223,7 @@ exports.studentJoinByCode = async (req, res) => {
         );
         if (!group.rows[0]) return res.status(404).json({ message: "Bunday kodli guruh mavjud emas" });
         if (!group.rows[0].is_active) return res.status(400).json({ message: "Guruh hozirda bloklangan" });
+        if (group.rows[0].status === 'blocked') return res.status(400).json({ message: "Guruh bloklangan holatda" });
 
         const groupData = group.rows[0];
 
@@ -193,15 +259,24 @@ exports.studentJoinByCode = async (req, res) => {
     }
 };
 
-// 6. Filtrlangan ro'yxat
+// 6. Filtrlangan ro'yxat (Fan ma'lumoti bilan)
 exports.getAllGroups = async (req, res) => {
-    const { teacher_id, subject_id, is_active } = req.query;
-    let query = `SELECT g.*, CONCAT(u.name, ' ', u.surname) as teacher_name FROM groups g LEFT JOIN users u ON g.teacher_id = u.id WHERE 1=1`;
+    const { teacher_id, subject_id, is_active, status } = req.query;
+    let query = `SELECT g.*, 
+                        CONCAT(u.name, ' ', u.surname) as teacher_name,
+                        s.name as subject_name
+                 FROM groups g 
+                 LEFT JOIN users u ON g.teacher_id = u.id 
+                 LEFT JOIN subjects s ON g.subject_id = s.id
+                 WHERE 1=1`;
     const params = [];
 
     if (teacher_id) { params.push(parseInt(teacher_id)); query += ` AND g.teacher_id = $${params.length}`; }
     if (subject_id) { params.push(parseInt(subject_id)); query += ` AND g.subject_id = $${params.length}`; }
     if (is_active !== undefined) { params.push(is_active === 'true'); query += ` AND g.is_active = $${params.length}`; }
+    if (status) { params.push(status); query += ` AND g.status = $${params.length}`; }
+
+    query += ` ORDER BY g.created_at DESC`;
 
     try {
         const result = await pool.query(query, params);
@@ -221,7 +296,10 @@ exports.getGroupById = async (req, res) => {
     try {
         // Guruh ma'lumotlarini olish
         const group = await pool.query(`
-            SELECT g.*, CONCAT(u.name, ' ', u.surname) as teacher_name, u.phone as teacher_phone, u.phone2 as teacher_phone2 
+            SELECT g.*, CONCAT(u.name, ' ', u.surname) as teacher_name, u.phone as teacher_phone, u.phone2 as teacher_phone2,
+                   u.certificate as teacher_certificate, u.age as teacher_age, u.has_experience as teacher_has_experience,
+                   u.experience_years as teacher_experience_years, u.experience_place as teacher_experience_place,
+                   u.available_times as teacher_available_times, u.work_days_hours as teacher_work_days_hours
             FROM groups g 
             LEFT JOIN users u ON g.teacher_id = u.id 
             WHERE g.id = $1`, [id]);
@@ -421,6 +499,73 @@ exports.changeStudentGroup = async (req, res) => {
         });
     } catch (err) {
         console.error("Guruhni o'zgartirishda xato:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Student uchun guruh ma'lumotlarini olish (class start date bilan)
+exports.getStudentGroupInfo = async (req, res) => {
+    const { studentId } = req.params;
+    
+    try {
+        const studentGroup = await pool.query(`
+            SELECT 
+                u.id as student_id,
+                u.name || ' ' || u.surname as student_name,
+                u.group_id,
+                u.group_name,
+                g.status as group_status,
+                g.class_status,
+                g.class_start_date,
+                g.start_date as planned_start_date,
+                g.teacher_id,
+                t.name || ' ' || t.surname as teacher_name
+            FROM users u
+            LEFT JOIN groups g ON u.group_id = g.id
+            LEFT JOIN users t ON g.teacher_id = t.id
+            WHERE u.id = $1 AND u.role = 'student'
+        `, [studentId]);
+
+        if (studentGroup.rows.length === 0) {
+            return res.status(404).json({ message: "Student topilmadi yoki guruhga a'zo emas" });
+        }
+
+        const studentData = studentGroup.rows[0];
+        let classStatus = "Guruhga tegishli emas";
+        
+        if (studentData.group_id) {
+            if (studentData.class_status === 'not_started') {
+                classStatus = "Darslar boshlanishi kutilmoqda";
+            } else if (studentData.class_status === 'started') {
+                const startDate = new Date(studentData.class_start_date).toLocaleDateString('uz-UZ');
+                classStatus = `Darslar ${startDate} da boshlandi`;
+            } else if (studentData.class_status === 'finished') {
+                classStatus = "Darslar yakunlandi";
+            }
+        }
+
+        res.json({
+            success: true,
+            student: {
+                id: studentData.student_id,
+                name: studentData.student_name,
+                group: {
+                    id: studentData.group_id,
+                    name: studentData.group_name,
+                    status: studentData.group_status,
+                    classStatus: studentData.class_status,
+                    classStartDate: studentData.class_start_date ? studentData.class_start_date.toISOString().split('T')[0] : null,
+                    plannedStartDate: studentData.planned_start_date ? studentData.planned_start_date.toISOString().split('T')[0] : null,
+                    teacher: {
+                        id: studentData.teacher_id,
+                        name: studentData.teacher_name
+                    }
+                },
+                displayStatus: classStatus
+            }
+        });
+    } catch (err) {
+        console.error("Student guruh ma'lumotlarini olishda xato:", err);
         res.status(500).json({ error: err.message });
     }
 };

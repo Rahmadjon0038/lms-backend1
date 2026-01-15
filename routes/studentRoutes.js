@@ -15,7 +15,7 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  * @swagger
  * /api/students/all:
  *   get:
- *     summary: Studentlarni teacher, group, status bo'yicha filtrlab olish
+ *     summary: Studentlarni teacher, group, subject, status bo'yicha filtrlab olish
  *     tags: [Students]
  *     parameters:
  *       - in: query
@@ -30,6 +30,12 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *         schema:
  *           type: integer
  *         description: Guruh IDsi bo'yicha filter
+ *       - in: query
+ *         name: subject_id
+ *         required: false
+ *         schema:
+ *           type: integer
+ *         description: Fan IDsi bo'yicha filter
  *       - in: query
  *         name: status
  *         required: false
@@ -253,5 +259,95 @@ router.get("/my-groups", protect, studentController.getMyGroups);
  *         description: Student topilmadi
  */
 router.delete("/:student_id", protect, roleCheck(['admin']), studentController.deleteStudent);
+
+/**
+ * @swagger
+ * /api/students/my-group-info/{group_id}:
+ *   get:
+ *     summary: Student aniq bir guruh haqida batafsil ma'lumot olish (o'z guruhdashlari bilan)
+ *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: group_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *     responses:
+ *       200:
+ *         description: Student guruh ma'lumotlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 student:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     group:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                         name:
+ *                           type: string
+ *                         status:
+ *                           type: string
+ *                         classStatus:
+ *                           type: string
+ *                           enum: [not_started, started, finished]
+ *                         classStartDate:
+ *                           type: string
+ *                           format: date
+ *                         plannedStartDate:
+ *                           type: string
+ *                           format: date
+ *                         price:
+ *                           type: number
+ *                           description: Guruh narxi
+ *                         teacher:
+ *                           type: object
+ *                           properties:
+ *                             id:
+ *                               type: integer
+ *                             name:
+ *                               type: string
+ *                             phone:
+ *                               type: string
+ *                               description: Teacher telefon raqami
+ *                             phone2:
+ *                               type: string
+ *                               description: Teacher 2-telefon raqami
+ *                         classmates:
+ *                           type: array
+ *                           items:
+ *                             type: object
+ *                             properties:
+ *                               id:
+ *                                 type: integer
+ *                               name:
+ *                                 type: string
+ *                                 description: Guruhdasining ismi va familiyasi
+ *                         totalClassmates:
+ *                           type: integer
+ *                           description: Guruhdashlari soni
+ *                     displayStatus:
+ *                       type: string
+ *                       example: "Darslar 2025-01-15 da boshlandi"
+ *       403:
+ *         description: Siz bu guruhga a'zo emassiz
+ *       404:
+ *         description: Student yoki guruh topilmadi
+ */
+router.get("/my-group-info/:group_id", protect, studentController.getMyGroupInfo);
 
 module.exports = router;

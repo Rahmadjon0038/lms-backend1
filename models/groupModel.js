@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-
+// 14 15 12 10 7
 const createGroupTables = async () => {
   const queryText = `
     -- Guruhlar jadvali
@@ -12,6 +12,9 @@ const createGroupTables = async () => {
       start_date DATE,
       schedule JSONB,
       price DECIMAL(10,2),
+      status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'blocked')),
+      class_start_date DATE, -- Darslar boshlangan sana
+      class_status VARCHAR(20) DEFAULT 'not_started' CHECK (class_status IN ('not_started', 'started', 'finished')),
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -30,6 +33,28 @@ const createGroupTables = async () => {
 
   try {
     await pool.query(queryText);
+    
+    // Eski jadvallarga status ustuni qo'shish (agar mavjud bo'lmasa)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN 
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='status') THEN
+            ALTER TABLE groups ADD COLUMN status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'blocked'));
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='class_start_date') THEN
+            ALTER TABLE groups ADD COLUMN class_start_date DATE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='class_status') THEN
+            ALTER TABLE groups ADD COLUMN class_status VARCHAR(20) DEFAULT 'not_started' CHECK (class_status IN ('not_started', 'started', 'finished'));
+          END IF;
+        END $$;
+      `);
+      console.log("✅ 'groups' jadvaliga status ustuni qo'shildi.");
+    } catch (alterErr) {
+      console.log("⚠️ Status ustuni qo'shishda xatolik (balki mavjud):", alterErr.message);
+    }
+    
     console.log("✅ 'groups' va 'student_groups' SERIAL ID bilan tayyor.");
   } catch (err) {
     console.error("❌ Xatolik:", err.message);
