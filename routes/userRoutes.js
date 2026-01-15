@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -15,8 +15,10 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * @swagger
  * /api/users/register:
  *   post:
- *     summary: Yangi studentni ro'yxatdan o'tkazish
+ *     summary: Yangi studentni ro'yxatdan o'tkazish (Faqat adminlar uchun)
  *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -47,13 +49,25 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               phone2:
  *                 type: string
  *                 example: "+998912345678"
+ *               father_name:
+ *                 type: string
+ *                 example: Abdulla
+ *               father_phone:
+ *                 type: string
+ *                 example: "+998901111111"
+ *               address:
+ *                 type: string
+ *                 example: "Tashkent shahar, Chilonzor tumani"
+ *               age:
+ *                 type: integer
+ *                 example: 20
  *     responses:
  *       201:
  *         description: Student muvaffaqiyatli yaratildi
  *       400:
  *         description: Username band yoki ma'lumotlar xato
  */
-router.post('/register', registerStudent);
+router.post('/register', protect, roleCheck(['admin']), registerStudent);
 
 /**
  * @swagger
@@ -101,6 +115,34 @@ router.post('/register', registerStudent);
  *                 format: date
  *                 example: "2025-01-05"
  *                 description: "Teacher ishni boshlagan sanasi"
+ *               certificate:
+ *                 type: string
+ *                 example: "Web Development Certificate"
+ *                 description: "Teacher sertifikati"
+ *               age:
+ *                 type: integer
+ *                 example: 28
+ *                 description: "Teacher yoshi"
+ *               has_experience:
+ *                 type: boolean
+ *                 example: true
+ *                 description: "Tajribasi bormi yo'qmi"
+ *               experience_years:
+ *                 type: integer
+ *                 example: 3
+ *                 description: "Necha yillik tajriba (has_experience=true bo'lsa)"
+ *               experience_place:
+ *                 type: string
+ *                 example: "IT Academy, Google"
+ *                 description: "Qayerda tajriba to'plagan"
+ *               available_times:
+ *                 type: string
+ *                 example: "09:00-18:00"
+ *                 description: "Qaysi vaqtlarda ishlay oladi"
+ *               work_days_hours:
+ *                 type: string
+ *                 example: "Dushanba-Juma: 09:00-18:00, Shanba: 09:00-13:00"
+ *                 description: "Ish kunlari va soatlari"
  *     responses:
  *       201:
  *         description: Teacher muvaffaqiyatli yaratildi
@@ -178,6 +220,89 @@ router.post('/refresh', refreshAccessToken);
  *     responses:
  *       200:
  *         description: Foydalanuvchi ma'lumotlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: integer
+ *                   example: 1
+ *                 name:
+ *                   type: string
+ *                   example: Ali
+ *                 surname:
+ *                   type: string
+ *                   example: Valiyev
+ *                 username:
+ *                   type: string
+ *                   example: ali777
+ *                 role:
+ *                   type: string
+ *                   example: student
+ *                 status:
+ *                   type: string
+ *                   example: active
+ *                 phone:
+ *                   type: string
+ *                   example: "+998901234567"
+ *                 phone2:
+ *                   type: string
+ *                   example: "+998912345678"
+ *                 father_name:
+ *                   type: string
+ *                   example: Abdulla
+ *                 father_phone:
+ *                   type: string
+ *                   example: "+998901111111"
+ *                 address:
+ *                   type: string
+ *                   example: "Tashkent shahar, Chilonzor tumani"
+ *                 age:
+ *                   type: integer
+ *                   example: 20
+ *                 subject:
+ *                   type: string
+ *                   example: "Web Dasturlash"
+ *                   description: "Teacher uchun fan nomi"
+ *                 start_date:
+ *                   type: string
+ *                   format: date
+ *                   example: "2025-01-05"
+ *                   description: "Teacher ishni boshlagan sanasi"
+ *                 end_date:
+ *                   type: string
+ *                   format: date
+ *                   nullable: true
+ *                   example: null
+ *                   description: "Teacher ishni tugatgan sanasi"
+ *                 certificate:
+ *                   type: string
+ *                   example: "Web Development Certificate"
+ *                   description: "Teacher sertifikati"
+ *                 has_experience:
+ *                   type: boolean
+ *                   example: true
+ *                   description: "Tajribasi bormi yo'qmi"
+ *                 experience_years:
+ *                   type: integer
+ *                   example: 3
+ *                   description: "Necha yillik tajriba"
+ *                 experience_place:
+ *                   type: string
+ *                   example: "IT Academy, Google"
+ *                   description: "Qayerda tajriba to'plagan"
+ *                 available_times:
+ *                   type: string
+ *                   example: "09:00-18:00"
+ *                   description: "Qaysi vaqtlarda ishlay oladi"
+ *                 work_days_hours:
+ *                   type: string
+ *                   example: "Dushanba-Juma: 09:00-18:00, Shanba: 09:00-13:00"
+ *                   description: "Ish kunlari va soatlari"
+ *                 created_at:
+ *                   type: string
+ *                   format: date-time
  *       401:
  *         description: Avtorizatsiya xatosi (Access Token yo'q, xato yoki muddati o'tgan)
  */
@@ -187,10 +312,24 @@ router.get('/profile', protect, getProfile);
  * @swagger
  * /api/users/teachers:
  *   get:
- *     summary: Barcha teacherlarni olish
+ *     summary: Barcha teacherlarni olish (fan bo'yicha filter bilan)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: subject_id
+ *         required: false
+ *         schema:
+ *           type: integer
+ *         description: Fan IDsi bo'yicha filter
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive, blocked]
+ *         description: Teacher holati bo'yicha filter
  *     responses:
  *       200:
  *         description: Teacherlar ro'yxati muvaffaqiyatli olindi
@@ -243,6 +382,27 @@ router.get('/profile', protect, getProfile);
  *                       phone2:
  *                         type: string
  *                         example: "+998 93 111 22 33"
+ *                       certificate:
+ *                         type: string
+ *                         example: "Web Development Certificate"
+ *                       age:
+ *                         type: integer
+ *                         example: 28
+ *                       hasExperience:
+ *                         type: boolean
+ *                         example: true
+ *                       experienceYears:
+ *                         type: integer
+ *                         example: 3
+ *                       experiencePlace:
+ *                         type: string
+ *                         example: "IT Academy, Google"
+ *                       availableTimes:
+ *                         type: string
+ *                         example: "09:00-18:00"
+ *                       workDaysHours:
+ *                         type: string
+ *                         example: "Dushanba-Juma: 09:00-18:00, Shanba: 09:00-13:00"
  *                       groupCount:
  *                         type: integer
  *                         example: 2
@@ -257,5 +417,91 @@ router.get('/profile', protect, getProfile);
  *         description: Server xatosi
  */
 router.get('/teachers', protect, roleCheck(['admin', 'super_admin']), getAllTeachers);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}/leave:
+ *   patch:
+ *     summary: Teacher'ni dam olishga chiqarish
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     responses:
+ *       200:
+ *         description: Teacher dam olishga chiqarildi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Teacher allaqachon dam olish holatida
+ */
+router.patch('/teachers/:teacherId/leave', protect, roleCheck(['admin']), setTeacherOnLeave);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}/terminate:
+ *   patch:
+ *     summary: Teacher'ni ishdan boshatish
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               terminationDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "2025-01-15"
+ *                 description: Ishdan boshatish sanasi (ko'rsatilmasa, bugungi sana)
+ *     responses:
+ *       200:
+ *         description: Teacher ishdan boshatildi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Teacher allaqachon ishdan boshatilgan
+ */
+router.patch('/teachers/:teacherId/terminate', protect, roleCheck(['admin']), terminateTeacher);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}/reactivate:
+ *   patch:
+ *     summary: Teacher'ni qayta faollashtirish (dam olish/ishdan boshatishdan)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     responses:
+ *       200:
+ *         description: Teacher qayta faollashtirildi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Teacher allaqachon faol holatda
+ */
+router.patch('/teachers/:teacherId/reactivate', protect, roleCheck(['admin']), reactivateTeacher);
 
 module.exports = router;

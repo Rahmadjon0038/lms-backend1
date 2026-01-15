@@ -28,10 +28,15 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *             type: object
  *             required:
  *               - name
+ *               - subject_id
  *             properties:
  *               name:
  *                 type: string
  *                 example: "Node.js Backend"
+ *               subject_id:
+ *                 type: integer
+ *                 example: 1
+ *                 description: "Fan (Subject) ID - majburiy"
  *               teacher_id:
  *                 type: integer
  *                 example: 2
@@ -45,6 +50,12 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               price:
  *                 type: number
  *                 example: 1000000
+ *               status:
+ *                 type: string
+ *                 enum: [draft, active]
+ *                 default: draft
+ *                 example: "draft"
+ *                 description: "Guruh holati - draft (tayyorgarlik) yoki active (faol)"
  *     responses:
  *       201:
  *         description: Guruh muvaffaqiyatli yaratildi
@@ -87,6 +98,73 @@ router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
  *         description: Guruh yangilandi
  */
 router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
+
+/**
+ * @swagger
+ * /api/groups/{id}/status:
+ *   patch:
+ *     summary: Guruh statusini o'zgartirish (draft -> active -> blocked)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [draft, active, blocked]
+ *                 description: |
+ *                   - draft: Yangi guruh, studentlar yig'ilmoqda
+ *                   - active: Darslar boshlangan, faol guruh  
+ *                   - blocked: Bloklangan guruh
+ *                 example: "active"
+ *     responses:
+ *       200:
+ *         description: Guruh statusi o'zgartirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Guruh faollashtirildi (darslar boshlandi)"
+ *                 group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                     teacher_id:
+ *                       type: integer
+ *                     start_date:
+ *                       type: string
+ *                       format: date
+ *       400:
+ *         description: Noto'g'ri status
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroupStatus);
 
 /**
  * @swagger
@@ -150,59 +228,8 @@ router.post(
   groupCtrl.adminAddStudentToGroup
 );
 
-/**
- * @swagger
- * /api/groups/join:
- *   post:
- *     summary: Student kod orqali guruhga qo'shilishi
- *     tags: [Groups]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - unique_code
- *             properties:
- *               unique_code:
- *                 type: string
- *                 description: Guruhning unikal kodi
- *                 example: "GR-A1B2C3"
- *     responses:
- *       201:
- *         description: Guruhga muvaffaqiyatli qo'shildingiz
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: "Guruhga muvaffaqiyatli qo'shildingiz"
- *                 groupInfo:
- *                   type: object
- *                   properties:
- *                     group_name:
- *                       type: string
- *                       example: "Inglis tili beginner"
- *                     teacher_name:
- *                       type: string
- *                       example: "Rahmadjon Abdullayev"
- *                     price:
- *                       type: number
- *                       example: 500000
- *       400:
- *         description: Siz allaqachon bu guruhdasiz yoki guruh bloklangan
- *       404:
- *         description: Bunday kodli guruh mavjud emas
- */
-router.post('/join', protect, groupCtrl.studentJoinByCode);
+// NOTE: Student kod orqali qo'shilish API'si olib tashlandi
+// Admin tomonidan boshqariladi
 
 /**
  * @swagger
@@ -247,14 +274,27 @@ router.delete(
  *         name: teacher_id
  *         schema:
  *           type: integer
+ *         description: O'qituvchi bo'yicha filter
  *       - in: query
  *         name: subject_id
  *         schema:
  *           type: integer
+ *         description: Fan (Subject) bo'yicha filter
  *       - in: query
  *         name: is_active
  *         schema:
  *           type: boolean
+ *         description: Faol/nofaol guruhlar bo'yicha filter
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [draft, active, blocked]
+ *         description: |
+ *           Guruh statusiga ko'ra filter:
+ *           - draft: Yangi guruhlar (studentlar yig'ilmoqda)
+ *           - active: Faol guruhlar (darslar boshlangan)
+ *           - blocked: Bloklangan guruhlar
  *     responses:
  *       200:
  *         description: Guruhlar ro'yxati qaytdi
@@ -263,75 +303,6 @@ router.get('/', protect, groupCtrl.getAllGroups);
 
 /**
  * @swagger
- * /api/groups/{id}/view:
- *   get:
- *     summary: Student guruhni ko'rishi (guruh tavsifotlari, teacher ma'lumotlari va guruhdashlari ismi)
- *     tags: [Groups]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Guruh tavsifotlari, teacher telefon raqamlari va guruhdashlari
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 group:
- *                   type: object
- *                   properties:
- *                     id:
- *                       type: integer
- *                       example: 1
- *                     name:
- *                       type: string
- *                       example: "Node.js Backend"
- *                     start_date:
- *                       type: string
- *                       format: date
- *                       example: "2025-01-10"
- *                     schedule:
- *                       type: object
- *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
- *                     is_active:
- *                       type: boolean
- *                       example: true
- *                     teacher_name:
- *                       type: string
- *                       example: "Anvar Karimov"
- *                     teacher_phone:
- *                       type: string
- *                       example: "+998901234567"
- *                     teacher_phone2:
- *                       type: string
- *                       example: "+998907654321"
- *                 members:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       name:
- *                         type: string
- *                         example: "Ali"
- *                       surname:
- *                         type: string
- *                         example: "Valiyev"
- *                 totalMembers:
- *                   type: integer
- *                   example: 15
- *       404:
- *         description: Guruh topilmadi
- */
-router.get('/:id/view', protect, groupCtrl.getGroupViewForStudent);
 
 /**
  * @swagger
@@ -391,78 +362,6 @@ router.get('/:id/view', protect, groupCtrl.getGroupViewForStudent);
 router.get('/:id', protect, groupCtrl.getGroupById);
 
 
-
-/**
- * @swagger
- * /api/groups/my-group:
- *   get:
- *     summary: Student o'z guruhini va guruh a'zolarini ko'rishi
- *     tags: [Groups]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Guruh ma'lumotlari, teacher telefon raqamlari va a'zolar ro'yxati
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 groupInfo:
- *                   type: object
- *                   properties:
- *                     group_id:
- *                       type: integer
- *                       example: 1
- *                     group_name:
- *                       type: string
- *                       example: "Inglis tili beginner"
- *                     teacher_name:
- *                       type: string
- *                       example: "Rahmadjon Abdullayev"
- *                     teacher_phone:
- *                       type: string
- *                       example: "+998901234567"
- *                     teacher_phone2:
- *                       type: string
- *                       example: "+998907654321"
- *                     required_amount:
- *                       type: number
- *                       example: 500000
- *                     schedule:
- *                       type: object
- *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
- *                 members:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       id:
- *                         type: integer
- *                       name:
- *                         type: string
- *                         example: "Aziz"
- *                       surname:
- *                         type: string
- *                         example: "Karimov"
- *                       type: object
- *                       example: {"days": ["Mon", "Wed"], "time": "18:00-20:00"}
- *                     start_date:
- *                       type: string
- *                       format: date
- *                       example: "2025-01-10"
- *                     is_active:
- *                       type: boolean
- *                       example: true
- *                 totalMembers:
- *                   type: integer
- *                   example: 15
- *       404:
- *         description: Siz hali hech qaysi guruhga qo'shilmagansiz
- */
 
 /**
  * @swagger
@@ -561,6 +460,5 @@ router.post(
   roleCheck(['admin']),
   groupCtrl.changeStudentGroup
 );
-
 
 module.exports = router;

@@ -5,8 +5,7 @@ const createStudentAdditionalTables = async () => {
     -- Fanlar/Kurslar jadvali
     CREATE TABLE IF NOT EXISTS subjects (
       id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
-      price DECIMAL(10, 2) NOT NULL
+      name VARCHAR(100) NOT NULL UNIQUE
     );
 
     -- Oylik to'lov talablari (Har oy uchun student qancha to'lashi kerak)
@@ -39,6 +38,29 @@ const createStudentAdditionalTables = async () => {
   try {
     await pool.query(queryText);
     console.log("✅ Studentlar uchun qo'shimcha jadvallar tayyor.");
+    
+    // Price ustunini olib tashlash (agar mavjud bo'lsa)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN 
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='subjects' AND column_name='price') THEN
+            ALTER TABLE subjects DROP COLUMN price;
+            RAISE NOTICE 'subjects jadvalidan price ustuni o''chirildi';
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='subjects' AND column_name='name') THEN
+            ALTER TABLE subjects ADD COLUMN name VARCHAR(100) NOT NULL;
+          END IF;
+          -- Name ustuniga UNIQUE constraint qo'shish
+          IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_name='subjects' AND constraint_name='subjects_name_key') THEN
+            ALTER TABLE subjects ADD CONSTRAINT subjects_name_key UNIQUE (name);
+          END IF;
+        END $$;
+      `);
+      console.log("✅ Subjects jadvali price'siz yangilandi.");
+    } catch (alterErr) {
+      console.log("⚠️ Subjects jadvalini yangilashda xatolik:", alterErr.message);
+    }
     
     // Payments jadvaliga yangi ustunlarni qo'shish (eski bazalar uchun)
     try {

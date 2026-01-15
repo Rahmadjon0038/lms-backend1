@@ -9,12 +9,23 @@ const createUserTable = async () => {
       username VARCHAR(50) UNIQUE NOT NULL,
       password TEXT NOT NULL,
       role VARCHAR(20) DEFAULT 'student', -- 'admin', 'teacher', 'student', 'super_admin'
-      status VARCHAR(20) DEFAULT 'active', -- 'active', 'inactive', 'blocked'
+      status VARCHAR(20) DEFAULT 'active', -- 'active', 'inactive', 'blocked', 'on_leave', 'terminated'
       phone VARCHAR(20),
       phone2 VARCHAR(20),
+      father_name VARCHAR(100), -- Otasining ismi
+      father_phone VARCHAR(20), -- Otasining telefon raqami
+      address TEXT, -- Yashash manzili
+      age INTEGER, -- Student yoshi
       subject VARCHAR(255), -- Teacher uchun fan nomi
       start_date DATE, -- Ishni boshlagan sanasi
       end_date DATE, -- Ishni tugatgan sanasi (agar mavjud bo'lsa)
+      termination_date DATE, -- Ishdan boshatilgan sana
+      certificate VARCHAR(255), -- Teacher sertifikati
+      has_experience BOOLEAN DEFAULT FALSE, -- Tajribasi bormi
+      experience_years INTEGER, -- Tajriba yillari
+      experience_place TEXT, -- Qayerda tajriba to'plagan
+      available_times VARCHAR(100), -- Qaysi vaqtlarda ishlay oladi
+      work_days_hours TEXT, -- Ish kunlari va soatlari
       group_id INTEGER,
       group_name VARCHAR(255),
       teacher_id INTEGER,
@@ -52,6 +63,39 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='teacher_name') THEN
             ALTER TABLE users ADD COLUMN teacher_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='father_name') THEN
+            ALTER TABLE users ADD COLUMN father_name VARCHAR(100);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='father_phone') THEN
+            ALTER TABLE users ADD COLUMN father_phone VARCHAR(20);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='address') THEN
+            ALTER TABLE users ADD COLUMN address TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='age') THEN
+            ALTER TABLE users ADD COLUMN age INTEGER;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='certificate') THEN
+            ALTER TABLE users ADD COLUMN certificate VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='has_experience') THEN
+            ALTER TABLE users ADD COLUMN has_experience BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='experience_years') THEN
+            ALTER TABLE users ADD COLUMN experience_years INTEGER;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='experience_place') THEN
+            ALTER TABLE users ADD COLUMN experience_place TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='available_times') THEN
+            ALTER TABLE users ADD COLUMN available_times VARCHAR(100);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='work_days_hours') THEN
+            ALTER TABLE users ADD COLUMN work_days_hours TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='termination_date') THEN
+            ALTER TABLE users ADD COLUMN termination_date DATE;
           END IF;
         END $$;
       `);
