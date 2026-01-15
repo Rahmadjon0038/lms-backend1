@@ -111,11 +111,26 @@ exports.updateGroupStatus = async (req, res) => {
             return res.status(404).json({ message: "Guruh topilmadi" });
         }
 
+        // Agar guruh active holatiga o'tkazilsa, barcha studentlarning course statusini yangilash
+        if (status === 'active') {
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'in_progress', 
+                     course_start_date = $1 
+                 WHERE id IN (
+                     SELECT sg.student_id 
+                     FROM student_groups sg 
+                     WHERE sg.group_id = $2 AND sg.status = 'active'
+                 ) AND course_status = 'not_started'`,
+                [new Date(), id]
+            );
+        }
+
         let message = '';
         if (status === 'draft') {
             message = "Guruh tayyorgarlik holatiga o'tkazildi (studentlar yig'ilmoqda)";
         } else if (status === 'active') {
-            message = "Guruh faollashtirildi (darslar boshlandi)";
+            message = "Guruh faollashtirildi (darslar boshlandi). Barcha studentlarning kursi avtomatik boshlandi.";
         } else {
             message = "Guruh bloklandi";
         }
@@ -186,6 +201,17 @@ exports.adminAddStudentToGroup = async (req, res) => {
             [groupData.id, groupData.group_name, groupData.teacher_id, student_id]
         );
 
+        // Agar guruh allaqachon active bo'lsa, studentning course statusini avtomatik boshlash
+        if (groupData.status === 'active') {
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'in_progress', 
+                     course_start_date = CURRENT_TIMESTAMP 
+                 WHERE id = $1 AND course_status = 'not_started'`,
+                [student_id]
+            );
+        }
+
         console.log("✅ Student yangilandi:", updateResult.rows[0]);
 
         res.status(201).json({ 
@@ -242,6 +268,17 @@ exports.studentJoinByCode = async (req, res) => {
              WHERE id = $4`,
             [groupData.id, groupData.group_name, groupData.teacher_id, req.user.id]
         );
+
+        // Agar guruh allaqachon active bo'lsa, studentning course statusini avtomatik boshlash
+        if (groupData.status === 'active') {
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'in_progress', 
+                     course_start_date = CURRENT_TIMESTAMP 
+                 WHERE id = $1 AND course_status = 'not_started'`,
+                [req.user.id]
+            );
+        }
 
         res.status(201).json({ 
             success: true, 
