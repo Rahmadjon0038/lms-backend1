@@ -1,8 +1,8 @@
 const pool = require('../config/db');
 
-// 1. Studentlar ro'yxati to'lov uchun (guruh, teacher bilan)
+// 1. Studentlar ro'yxati to'lov uchun (guruh, teacher, subject bilan)
 exports.getStudentsForPayment = async (req, res) => {
-    const { group_id, month_name } = req.query;
+    const { group_id, month_name, teacher_id, subject_id } = req.query;
     
     try {
         let query = `
@@ -10,49 +10,77 @@ exports.getStudentsForPayment = async (req, res) => {
                 u.id as student_id,
                 u.name || ' ' || u.surname as student_name,
                 u.phone,
+                u.phone2,
+                u.father_name,
+                u.father_phone,
+                u.address,
                 u.group_id,
                 g.name as group_name,
+                g.subject_id,
+                s.name as subject_name,
                 COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
+                t.id as teacher_id,
                 g.price as default_price,
-                mf.required_amount,
-                mf.paid_amount,
-                mf.status,
+                COALESCE(mf.required_amount, g.price) as required_amount,
+                COALESCE(mf.paid_amount, 0) as paid_amount,
+                COALESCE(mf.status, 'unpaid') as status,
                 (COALESCE(mf.required_amount, g.price, 0) - COALESCE(mf.paid_amount, 0)) as debt
             FROM users u
             LEFT JOIN groups g ON u.group_id = g.id
             LEFT JOIN users t ON g.teacher_id = t.id
+            LEFT JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN monthly_fees mf ON u.id = mf.student_id AND mf.month_name = $1
             WHERE u.role = 'student' AND u.status = 'active'
         `;
         
         const params = [month_name || new Date().toISOString().slice(0, 7)]; // Default: joriy oy
+        let paramIndex = 2;
         
         if (group_id) {
-            query += ' AND u.group_id = $2';
+            query += ` AND u.group_id = $${paramIndex}`;
             params.push(group_id);
+            paramIndex++;
         }
         
-        query += ' ORDER BY u.group_name, u.surname, u.name';
+        if (teacher_id) {
+            query += ` AND g.teacher_id = $${paramIndex}`;
+            params.push(teacher_id);
+            paramIndex++;
+        }
+        
+        if (subject_id) {
+            query += ` AND g.subject_id = $${paramIndex}`;
+            params.push(subject_id);
+            paramIndex++;
+        }
+        
+        query += ' ORDER BY g.name, u.surname, u.name';
         
         const result = await pool.query(query, params);
         
         res.json({
             success: true,
+            message: "Student ro'yxati olindi",
             month: params[0],
             count: result.rows.length,
             students: result.rows
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ 
+            success: false,
+            message: "Ma'lumotlarni olishda xatolik",
+            error: err.message 
+        });
     }
 };
 
-// 2. Studentning oylik to'lov talabini belgilash/o'zgartirish
+// 2. Studentning oylik to'lov talabini belgilash/o'zgartirish (custom narx)
 exports.setMonthlyRequirement = async (req, res) => {
-    const { student_id, month_name, required_amount } = req.body;
+    const { student_id, month_name, required_amount, duration_months } = req.body;
     
     if (!student_id || !month_name || !required_amount) {
         return res.status(400).json({ 
+            success: false,
             message: "student_id, month_name va required_amount majburiy" 
         });
     }
@@ -65,38 +93,65 @@ exports.setMonthlyRequirement = async (req, res) => {
         );
         
         if (student.rows.length === 0) {
-            return res.status(404).json({ message: "Student topilmadi" });
+            return res.status(404).json({ 
+                success: false,
+                message: "Student topilmadi" 
+            });
         }
         
         const studentData = student.rows[0];
         
-        // Monthly_fees jadvalini yangilash yoki yaratish
-        const result = await pool.query(
-            `INSERT INTO monthly_fees (student_id, group_id, month_name, required_amount, paid_amount)
-             VALUES ($1, $2, $3, $4, 0)
-             ON CONFLICT (student_id, month_name) 
-             DO UPDATE SET required_amount = $4
-             RETURNING *`,
-            [student_id, studentData.group_id, month_name, required_amount]
-        );
+        // Bir necha oy uchun custom narx belgilash
+        const months = [];
+        const results = [];
+        
+        if (duration_months && duration_months > 1) {
+            // Bir nechta oy uchun
+            for (let i = 0; i < duration_months; i++) {
+                const date = new Date(month_name + '-01');
+                date.setMonth(date.getMonth() + i);
+                const monthStr = date.toISOString().slice(0, 7);
+                months.push(monthStr);
+            }
+        } else {
+            months.push(month_name);
+        }
+        
+        for (const monthStr of months) {
+            const result = await pool.query(
+                `INSERT INTO monthly_fees (student_id, group_id, month_name, required_amount, paid_amount)
+                 VALUES ($1, $2, $3, $4, 0)
+                 ON CONFLICT (student_id, month_name) 
+                 DO UPDATE SET required_amount = $4
+                 RETURNING *`,
+                [student_id, studentData.group_id, monthStr, required_amount]
+            );
+            results.push(result.rows[0]);
+        }
         
         res.json({
             success: true,
-            message: `${studentData.name} ${studentData.surname} uchun ${month_name} oyiga to'lov summasi belgilandi`,
-            data: result.rows[0]
+            message: `${studentData.name} ${studentData.surname} uchun ${months.length} oyga custom narx belgilandi`,
+            months: months,
+            data: results
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ 
+            success: false,
+            message: "Custom narx belgilashda xatolik",
+            error: err.message 
+        });
     }
 };
 
-// 3. To'lov qo'shish (yangilangan versiya)
+// 3. To'lov qo'shish (payment_method o'chirildi, admin_name qo'shildi)
 exports.addPayment = async (req, res) => {
-    const { student_id, month_name, amount, payment_method, note } = req.body;
+    const { student_id, month_name, amount, note } = req.body;
     const admin_id = req.user.id;
 
     if (!student_id || !amount || !month_name) {
         return res.status(400).json({ 
+            success: false,
             message: "student_id, amount va month_name majburiy" 
         });
     }
@@ -109,17 +164,29 @@ exports.addPayment = async (req, res) => {
         );
 
         if (studentCheck.rows.length === 0) {
-            return res.status(404).json({ message: "Student topilmadi" });
+            return res.status(404).json({ 
+                success: false,
+                message: "Student topilmadi" 
+            });
         }
 
         const student = studentCheck.rows[0];
+        
+        // Admin ma'lumotlarini olish
+        const adminInfo = await pool.query(
+            'SELECT name, surname FROM users WHERE id = $1',
+            [admin_id]
+        );
+        
+        const adminName = adminInfo.rows.length > 0 ? 
+            `${adminInfo.rows[0].name} ${adminInfo.rows[0].surname}` : 'Admin';
 
         // To'lovni qo'shish
         const paymentResult = await pool.query(
-            `INSERT INTO payments (student_id, group_id, month_name, amount, payment_method, note, created_by)
+            `INSERT INTO payments (student_id, group_id, month_name, amount, note, created_by, admin_name)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING *`,
-            [student_id, student.group_id, month_name, amount, payment_method || 'cash', note, admin_id]
+            [student_id, student.group_id, month_name, amount, note || null, admin_id, adminName]
         );
         
         // Monthly_fees jadvalini yangilash
@@ -156,7 +223,11 @@ exports.addPayment = async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ 
+            success: false,
+            message: "To'lov qo'shishda xatolik",
+            error: err.message 
+        });
     }
 };
 
@@ -189,10 +260,8 @@ exports.getStudentPayments = async (req, res) => {
         // To'lovlar tarixi
         let paymentsQuery = `
             SELECT 
-                p.*,
-                admin.name || ' ' || admin.surname as admin_name
+                p.*
             FROM payments p
-            LEFT JOIN users admin ON p.created_by = admin.id
             WHERE p.student_id = $1
         `;
         const paymentsParams = [student_id];
@@ -334,7 +403,7 @@ exports.getGroupPayments = async (req, res) => {
 
 // 5. Barcha to'lovlar (admin filter bilan)
 exports.getAllPayments = async (req, res) => {
-    const { month_name, payment_method, student_id, group_id } = req.query;
+    const { month_name, payment_method, student_id, group_id, teacher_id } = req.query;
     
     let filters = [];
     let params = [];
@@ -356,6 +425,10 @@ exports.getAllPayments = async (req, res) => {
         filters.push(`p.group_id = $${paramIdx++}`);
         params.push(group_id);
     }
+    if (teacher_id) {
+        filters.push(`g.teacher_id = $${paramIdx++}`);
+        params.push(teacher_id);
+    }
 
     const whereClause = filters.length > 0 ? 'WHERE ' + filters.join(' AND ') : '';
 
@@ -366,10 +439,12 @@ exports.getAllPayments = async (req, res) => {
                 u.name || ' ' || u.surname as student_name,
                 g.name as group_name,
                 u.phone,
+                COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
                 admin.name || ' ' || admin.surname as admin_name
              FROM payments p
              LEFT JOIN users u ON p.student_id = u.id
              LEFT JOIN groups g ON p.group_id = g.id
+             LEFT JOIN users t ON g.teacher_id = t.id
              LEFT JOIN users admin ON p.created_by = admin.id
              ${whereClause}
              ORDER BY p.created_at DESC
