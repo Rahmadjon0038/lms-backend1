@@ -30,6 +30,9 @@ const createUserTable = async () => {
       group_name VARCHAR(255),
       teacher_id INTEGER,
       teacher_name VARCHAR(255),
+      course_status VARCHAR(20) DEFAULT 'not_started', -- 'not_started', 'in_progress', 'completed', 'dropped'
+      course_start_date TIMESTAMP, -- Kurs boshlangan sana
+      course_end_date TIMESTAMP, -- Kurs tugatgan sana
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -96,6 +99,16 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='termination_date') THEN
             ALTER TABLE users ADD COLUMN termination_date DATE;
+          END IF;
+          -- Kurs bilan bog'liq ustunlar qo'shish
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='course_status') THEN
+            ALTER TABLE users ADD COLUMN course_status VARCHAR(20) DEFAULT 'not_started';
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='course_start_date') THEN
+            ALTER TABLE users ADD COLUMN course_start_date TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='course_end_date') THEN
+            ALTER TABLE users ADD COLUMN course_end_date TIMESTAMP;
           END IF;
         END $$;
       `);

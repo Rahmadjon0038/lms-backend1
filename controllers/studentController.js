@@ -114,6 +114,9 @@ exports.getAllStudents = async (req, res) => {
       u.age,
       u.status,
       u.created_at as registration_date,
+      u.course_status,
+      u.course_start_date,
+      u.course_end_date,
       -- Har bir guruh uchun alohida ma'lumot
       COALESCE(g.name, 'Guruh biriktirilmagan') as group_name,
       COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
