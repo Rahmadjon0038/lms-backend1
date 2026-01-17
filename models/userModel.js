@@ -49,6 +49,9 @@ const createUserTable = async () => {
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject') THEN
             ALTER TABLE users ADD COLUMN subject VARCHAR(255);
           END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject_id') THEN
+            ALTER TABLE users ADD COLUMN subject_id INTEGER REFERENCES subjects(id);
+          END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='start_date') THEN
             ALTER TABLE users ADD COLUMN start_date DATE;
           END IF;

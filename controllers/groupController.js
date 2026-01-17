@@ -540,6 +540,206 @@ exports.changeStudentGroup = async (req, res) => {
     }
 };
 
+// Barcha studentlarda nomuvofiqliklarni aniqlash va tuzatish 
+exports.fixAllStudentCourseStatuses = async (req, res) => {
+    try {
+        // Nomuvofiq studentlarni topish
+        const inconsistentStudents = await pool.query(`
+            SELECT 
+                u.id, u.name, u.surname, 
+                u.course_status, u.course_start_date, u.course_end_date,
+                u.group_id, u.group_name,
+                g.status as group_status, g.class_status, g.class_start_date,
+                CASE 
+                    WHEN u.group_id IS NOT NULL AND g.status = 'active' AND u.course_status = 'not_started' THEN 'need_start'
+                    WHEN u.group_id IS NULL AND u.course_status = 'in_progress' THEN 'need_reset'
+                    ELSE 'ok'
+                END as issue_type
+            FROM users u
+            LEFT JOIN groups g ON u.group_id = g.id
+            WHERE u.role = 'student' 
+            AND (
+                (u.group_id IS NOT NULL AND g.status = 'active' AND u.course_status = 'not_started') OR
+                (u.group_id IS NULL AND u.course_status = 'in_progress')
+            )
+        `);
+
+        if (inconsistentStudents.rows.length === 0) {
+            return res.json({
+                success: true,
+                message: "Barcha studentlarda course status to'g'ri",
+                fixed_count: 0
+            });
+        }
+
+        let fixedStudents = [];
+
+        for (const student of inconsistentStudents.rows) {
+            let updateFields = [];
+            let updateValues = [];
+            let paramIndex = 1;
+            let fixes = [];
+
+            if (student.issue_type === 'need_start') {
+                // Active guruhda, lekin kurs hali boshlanmagan
+                updateFields.push(`course_status = $${paramIndex++}`);
+                updateValues.push('in_progress');
+                
+                if (!student.course_start_date) {
+                    updateFields.push(`course_start_date = $${paramIndex++}`);
+                    updateValues.push(new Date());
+                }
+                
+                fixes.push("Course status 'in_progress' ga o'zgartirildi");
+                if (!student.course_start_date) {
+                    fixes.push("Course start date belgilandi");
+                }
+
+            } else if (student.issue_type === 'need_reset') {
+                // Guruhda emas, lekin kurs progress da
+                updateFields.push(`course_status = $${paramIndex++}`);
+                updateValues.push('not_started');
+                
+                updateFields.push(`course_start_date = $${paramIndex++}`);
+                updateValues.push(null);
+                
+                fixes.push("Course status 'not_started' ga qaytarildi");
+                fixes.push("Course start date tozalandi");
+            }
+
+            if (updateFields.length > 0) {
+                updateValues.push(student.id);
+                
+                const updateQuery = `
+                    UPDATE users 
+                    SET ${updateFields.join(', ')} 
+                    WHERE id = $${paramIndex}
+                `;
+                
+                await pool.query(updateQuery, updateValues);
+                
+                fixedStudents.push({
+                    id: student.id,
+                    name: `${student.name} ${student.surname}`,
+                    fixes: fixes,
+                    issue_type: student.issue_type
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `${fixedStudents.length} ta studentning course statusi tuzatildi`,
+            fixed_count: fixedStudents.length,
+            total_issues_found: inconsistentStudents.rows.length,
+            fixed_students: fixedStudents
+        });
+
+    } catch (err) {
+        console.error("Barcha studentlarni tuzatishda xato:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Student course statusini tuzatish (nomuvofiqliklarni hal qilish)
+exports.fixStudentCourseStatus = async (req, res) => {
+    const { student_id } = req.body;
+
+    if (!student_id) {
+        return res.status(400).json({ 
+            message: "student_id majburiy" 
+        });
+    }
+
+    try {
+        // Student ma'lumotlarini va guruh holatini olish
+        const studentData = await pool.query(`
+            SELECT 
+                u.id, u.name, u.surname, 
+                u.course_status, u.course_start_date, u.course_end_date,
+                u.group_id, u.group_name,
+                g.status as group_status, g.class_status, g.class_start_date
+            FROM users u
+            LEFT JOIN groups g ON u.group_id = g.id
+            WHERE u.id = $1 AND u.role = 'student'
+        `, [student_id]);
+
+        if (studentData.rows.length === 0) {
+            return res.status(404).json({ message: "Student topilmadi" });
+        }
+
+        const student = studentData.rows[0];
+        let fixes = [];
+        let updateFields = [];
+        let updateValues = [];
+        let paramIndex = 1;
+
+        // 1. Agar student active guruhda va course_status hali "not_started" bo'lsa
+        if (student.group_id && student.group_status === 'active' && 
+            student.course_status === 'not_started') {
+            
+            updateFields.push(`course_status = $${paramIndex++}`);
+            updateValues.push('in_progress');
+            
+            if (!student.course_start_date) {
+                updateFields.push(`course_start_date = $${paramIndex++}`);
+                updateValues.push(new Date());
+            }
+            
+            fixes.push("Course status 'in_progress' ga o'zgartirildi");
+            fixes.push("Course start date belgilandi");
+        }
+
+        // 2. Agar student guruhda emas, lekin course statusi aktiv bo'lsa
+        if (!student.group_id && student.course_status === 'in_progress') {
+            updateFields.push(`course_status = $${paramIndex++}`);
+            updateValues.push('not_started');
+            
+            updateFields.push(`course_start_date = $${paramIndex++}`);
+            updateValues.push(null);
+            
+            fixes.push("Course status 'not_started' ga qaytarildi");
+            fixes.push("Course start date tozalandi");
+        }
+
+        // 3. Agar tuzatish kerak bo'lsa
+        if (updateFields.length > 0) {
+            updateValues.push(student_id);
+            
+            const updateQuery = `
+                UPDATE users 
+                SET ${updateFields.join(', ')} 
+                WHERE id = $${paramIndex} 
+                RETURNING id, name, surname, course_status, course_start_date, group_id, group_name
+            `;
+            
+            const result = await pool.query(updateQuery, updateValues);
+            
+            return res.json({
+                success: true,
+                message: "Student ma'lumotlari tuzatildi",
+                fixes: fixes,
+                before: {
+                    course_status: student.course_status,
+                    course_start_date: student.course_start_date,
+                    group_id: student.group_id
+                },
+                after: result.rows[0]
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Hech qanday tuzatish talab qilinmadi",
+            student: student
+        });
+
+    } catch (err) {
+        console.error("Student course statusini tuzatishda xato:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
 // Student uchun guruh ma'lumotlarini olish (class start date bilan)
 exports.getStudentGroupInfo = async (req, res) => {
     const { studentId } = req.params;

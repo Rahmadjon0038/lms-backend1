@@ -107,9 +107,10 @@ router.post('/register', protect, roleCheck(['admin']), registerStudent);
  *               phone2:
  *                 type: string
  *                 example: "+998912345678"
- *               subject:
- *                 type: string
- *                 example: "Web Dasturlash"
+ *               subject_id:
+ *                 type: integer
+ *                 example: 1
+ *                 description: "Fan ID (majburiy) - subjects jadvalidagi fan ID si"
  *               startDate:
  *                 type: string
  *                 format: date
