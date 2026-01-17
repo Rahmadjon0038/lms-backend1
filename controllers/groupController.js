@@ -51,18 +51,25 @@ exports.createGroup = async (req, res) => {
 // 2. Guruhni tahrirlash (Tuzatilgan mantiq)
 exports.updateGroup = async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, teacher_id, is_active, schedule, start_date, price } = req.body;
+    const { name, teacher_id, is_active, schedule, start_date, price, subject_id } = req.body;
+    
     try {
+        // Bo'sh string va 0 qiymatlarni null ga o'zgartirish
+        const processedTeacherId = (teacher_id === 0 || teacher_id === "" || teacher_id === null) ? null : teacher_id;
+        const processedSubjectId = (subject_id === 0 || subject_id === "" || subject_id === null) ? null : subject_id;
+        const processedStartDate = (start_date === "" || start_date === null) ? null : start_date;
+        
         const result = await pool.query(
             `UPDATE groups SET 
                 name = COALESCE($1, name), 
-                teacher_id = COALESCE($2, teacher_id), 
+                teacher_id = $2, 
                 is_active = COALESCE($3, is_active), 
                 schedule = COALESCE($4, schedule),
-                start_date = CASE WHEN $5::date IS NULL THEN start_date ELSE $5 END,
-                price = COALESCE($6, price)
-             WHERE id = $7 RETURNING *`,
-            [name, teacher_id, is_active, schedule ? JSON.stringify(schedule) : null, start_date, price, id]
+                start_date = COALESCE($5, start_date),
+                price = COALESCE($6, price),
+                subject_id = $7
+             WHERE id = $8 RETURNING *`,
+            [name, processedTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, processedSubjectId, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
         res.json({ success: true, group: result.rows[0] });
@@ -804,5 +811,126 @@ exports.getStudentGroupInfo = async (req, res) => {
     } catch (err) {
         console.error("Student guruh ma'lumotlarini olishda xato:", err);
         res.status(500).json({ error: err.message });
+    }
+};
+
+// 17. Yangi ochilgan guruhlar ro'yxati (draft status da bo'lgan guruhlar)
+exports.getNewlyCreatedGroups = async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                g.id, g.name, g.unique_code, g.status, 
+                g.created_at, g.price, g.start_date,
+                s.name as subject_name,
+                COALESCE(t.name || ' ' || t.surname, 'Teacher biriktirilmagan') as teacher_name,
+                COUNT(sg.student_id) as student_count
+            FROM groups g
+            LEFT JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN users t ON g.teacher_id = t.id AND t.role = 'teacher'
+            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+            WHERE g.status = 'draft'
+            GROUP BY g.id, g.name, g.unique_code, g.status, g.created_at, 
+                     g.price, g.start_date, s.name, t.name, t.surname
+            ORDER BY g.created_at DESC
+        `);
+
+        res.json({
+            success: true,
+            message: "Yangi ochilgan guruhlar ro'yxati",
+            groups: result.rows.map(group => ({
+                id: group.id,
+                name: group.name,
+                unique_code: group.unique_code,
+                status: group.status,
+                subject_name: group.subject_name,
+                teacher_name: group.teacher_name,
+                student_count: parseInt(group.student_count),
+                price: parseFloat(group.price || 0),
+                start_date: group.start_date,
+                created_at: group.created_at,
+                can_start_class: parseInt(group.student_count) > 0 // Dars boshlash mumkinligi
+            }))
+        });
+    } catch (err) {
+        console.error("Yangi ochilgan guruhlarni olishda xato:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// 18. Darsni boshlash (draft -> active + avtomatik start_date)
+exports.startGroupClass = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Guruh mavjudligini va statusini tekshirish
+        const groupCheck = await pool.query(`
+            SELECT g.*, COUNT(sg.student_id) as student_count
+            FROM groups g
+            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+            WHERE g.id = $1
+            GROUP BY g.id
+        `, [id]);
+
+        if (groupCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        const group = groupCheck.rows[0];
+
+        if (group.status !== 'draft') {
+            return res.status(400).json({ 
+                message: `Guruh allaqachon ${group.status} holatida. Faqat 'draft' holatidagi guruhlarni boshlash mumkin.` 
+            });
+        }
+
+        if (parseInt(group.student_count) === 0) {
+            return res.status(400).json({ 
+                message: "Guruhda studentlar yo'q. Avval studentlarni qo'shing!" 
+            });
+        }
+
+        // Guruhni active holatiga o'tkazish va dars boshlash sanasini belgilash
+        const now = new Date();
+        const result = await pool.query(`
+            UPDATE groups SET 
+                status = 'active',
+                class_start_date = $1,
+                class_status = 'started',
+                start_date = COALESCE(start_date, $1)
+            WHERE id = $2
+            RETURNING *
+        `, [now, id]);
+
+        // Barcha studentlarning course statusini yangilash
+        await pool.query(`
+            UPDATE users 
+            SET course_status = 'in_progress', 
+                course_start_date = $1 
+            WHERE id IN (
+                SELECT sg.student_id 
+                FROM student_groups sg 
+                WHERE sg.group_id = $2 AND sg.status = 'active'
+            ) AND course_status = 'not_started'
+        `, [now, id]);
+
+        res.json({
+            success: true,
+            message: "Darslar muvaffaqiyatli boshlandi! Barcha studentlarning kursi faollashdi.",
+            group: {
+                id: result.rows[0].id,
+                name: result.rows[0].name,
+                status: result.rows[0].status,
+                class_start_date: result.rows[0].class_start_date,
+                class_status: result.rows[0].class_status,
+                student_count: parseInt(group.student_count)
+            }
+        });
+
+    } catch (err) {
+        console.error("Darsni boshlashda xato:", err);
+        res.status(500).json({ 
+            error: "Darsni boshlashda xatolik yuz berdi",
+            details: err.message 
+        });
     }
 };

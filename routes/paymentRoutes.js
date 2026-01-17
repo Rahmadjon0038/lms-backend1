@@ -155,13 +155,7 @@ const {
  *                       status:
  *                         type: string
  *                         enum: [paid, partial, unpaid]
- *                         type: number
- *                       paid_amount:
- *                         type: number
- *                       status:
- *                         type: string
- *                       debt:
- *                         type: number
+
  */
 router.get('/students-list', protect, roleCheck(['admin']), getStudentsForPayment);
 

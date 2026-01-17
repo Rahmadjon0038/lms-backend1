@@ -93,6 +93,10 @@ router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
  *               price:
  *                 type: number
  *                 example: 1000000
+ *               subject_id:
+ *                 type: integer
+ *                 example: 2
+ *                 description: "Fan (Subject) ID"
  *     responses:
  *       200:
  *         description: Guruh yangilandi
@@ -546,5 +550,107 @@ router.post(
   roleCheck(['admin']),
   groupCtrl.changeStudentGroup
 );
+
+/**
+ * @swagger
+ * /api/groups/newly-created:
+ *   get:
+ *     summary: Yangi ochilgan guruhlar ro'yxati (draft holatida)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Yangi ochilgan guruhlar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 groups:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       name:
+ *                         type: string
+ *                       unique_code:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         example: "draft"
+ *                       subject_name:
+ *                         type: string
+ *                       teacher_name:
+ *                         type: string
+ *                       student_count:
+ *                         type: integer
+ *                       can_start_class:
+ *                         type: boolean
+ *                         description: "Dars boshlash mumkinligi"
+ *                       created_at:
+ *                         type: string
+ *                         format: date-time
+ */
+router.get('/newly-created', protect, roleCheck(['admin']), groupCtrl.getNewlyCreatedGroups);
+
+/**
+ * @swagger
+ * /api/groups/{id}/start-class:
+ *   patch:
+ *     summary: Darsni boshlash (draft -> active + avtomatik start_date)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *     responses:
+ *       200:
+ *         description: Dars muvaffaqiyatli boshlandi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                   example: "Darslar muvaffaqiyatli boshlandi!"
+ *                 group:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     name:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       example: "active"
+ *                     class_start_date:
+ *                       type: string
+ *                       format: date-time
+ *                     class_status:
+ *                       type: string
+ *                       example: "started"
+ *                     student_count:
+ *                       type: integer
+ *       400:
+ *         description: Guruh draft holatida emas yoki studentlar yo'q
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.patch('/:id/start-class', protect, roleCheck(['admin']), groupCtrl.startGroupClass);
 
 module.exports = router;
