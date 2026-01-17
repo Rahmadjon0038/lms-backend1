@@ -34,4 +34,19 @@ const protect = (req, res, next) => {
     }
 };
 
-module.exports = { protect };
+// Admin uchun middleware - faqat admin va super_admin ruxsat beradi
+const protectAdmin = (req, res, next) => {
+    protect(req, res, () => {
+        // protect middleware orqali o'tganidan keyin role tekshiriladi
+        if (req.user && (req.user.role === 'admin' || req.user.role === 'super_admin')) {
+            next(); // Admin yoki super admin - ruxsat beriladi
+        } else {
+            return res.status(403).json({ 
+                success: false,
+                message: "Ruxsat berilmadi! Faqat adminlar uchun." 
+            });
+        }
+    });
+};
+
+module.exports = { protect, protectAdmin };

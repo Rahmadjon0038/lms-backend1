@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, updateTeacher, patchTeacher } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -504,5 +504,133 @@ router.patch('/teachers/:teacherId/terminate', protect, roleCheck(['admin']), te
  *         description: Teacher allaqachon faol holatda
  */
 router.patch('/teachers/:teacherId/reactivate', protect, roleCheck(['admin']), reactivateTeacher);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}:
+ *   delete:
+ *     summary: Teacher'ni butunlay o'chirish
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     responses:
+ *       200:
+ *         description: Teacher butunlay o'chirildi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Teacher'ga bog'langan guruhlar mavjud
+ */
+router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeacher);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}:
+ *   put:
+ *     summary: Teacher ma'lumotlarini to'liq yangilash
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               surname:
+ *                 type: string
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               phone2:
+ *                 type: string
+ *               subject_id:
+ *                 type: integer
+ *               certificate:
+ *                 type: string
+ *               age:
+ *                 type: integer
+ *               has_experience:
+ *                 type: boolean
+ *               experience_years:
+ *                 type: integer
+ *               experience_place:
+ *                 type: string
+ *               available_times:
+ *                 type: string
+ *               work_days_hours:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Teacher ma'lumotlari yangilandi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Username band yoki subject mavjud emas
+ */
+router.put('/teachers/:teacherId', protect, roleCheck(['admin']), updateTeacher);
+
+/**
+ * @swagger
+ * /api/users/teachers/{teacherId}:
+ *   patch:
+ *     summary: Teacher ma'lumotlarini qisman yangilash
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacherId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               surname:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               available_times:
+ *                 type: string
+ *               work_days_hours:
+ *                 type: string
+ *             description: Faqat yangilanishi kerak bo'lgan maydonlarni yuboring
+ *     responses:
+ *       200:
+ *         description: Teacher ma'lumotlari qisman yangilandi
+ *       404:
+ *         description: Teacher topilmadi
+ *       400:
+ *         description: Yangilanishi kerak bo'lgan maydonlar ko'rsatilmagan
+ */
+router.patch('/teachers/:teacherId', protect, roleCheck(['admin']), patchTeacher);
 
 module.exports = router;
