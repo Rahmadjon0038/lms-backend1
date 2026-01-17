@@ -18,6 +18,35 @@ exports.createSubject = async (req, res) => {
     }
 };
 
+// 2.1. Fanlar ro'yxatini olish (Teacher registratsiyasi uchun) 
+exports.getSubjectsForTeacher = async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                id, 
+                name,
+                COUNT(u.id) as teachers_count
+            FROM subjects s
+            LEFT JOIN users u ON s.id = u.subject_id AND u.role = 'teacher'
+            GROUP BY s.id, s.name
+            ORDER BY s.name
+        `);
+        
+        res.json({ 
+            success: true, 
+            message: "Teacher registratsiyasi uchun mavjud fanlar",
+            subjects: result.rows.map(subject => ({
+                id: subject.id,
+                name: subject.name,
+                teachers_count: parseInt(subject.teachers_count) || 0,
+                description: `${subject.name} fani (${subject.teachers_count} ta teacher)`
+            }))
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
 // 2. Barcha fanlarni olish
 exports.getAllSubjects = async (req, res) => {
     try {

@@ -454,6 +454,92 @@ router.delete(
  *       404:
  *         description: Student yoki guruh topilmadi
  */
+/**
+ * @swagger
+ * /api/groups/fix-all-students:
+ *   post:
+ *     summary: Barcha studentlarda course status nomuvofiqliklarini tuzatish
+ *     description: Tizimda barcha studentlarni tekshirib, course_status va guruh holati orasidagi nomuvofiqliklarni avtomatik tuzatadi
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Tuzatish jarayoni yakunlandi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "5 ta studentning course statusi tuzatildi"
+ *                 fixed_count:
+ *                   type: integer
+ *                   example: 5
+ *                 total_issues_found:
+ *                   type: integer
+ *                   example: 5
+ *                 fixed_students:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ */
+router.post('/fix-all-students', protect, roleCheck(['admin']), groupCtrl.fixAllStudentCourseStatuses);
+
+/**
+ * @swagger
+ * /api/groups/fix-student-status:
+ *   post:
+ *     summary: Student course statusini tuzatish (nomuvofiqliklarni hal qilish)
+ *     description: Student ma'lumotlarida course_status, guruh holati va sanalar orasidagi nomuvofiqliklarni avtomatik tuzatadi
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *                 example: 17
+ *                 description: Tuzatiladigan student ID
+ *     responses:
+ *       200:
+ *         description: Student ma'lumotlari tuzatildi yoki tuzatish kerak bo'lmadi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Student ma'lumotlari tuzatildi"
+ *                 fixes:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["Course status 'in_progress' ga o'zgartirildi", "Course start date belgilandi"]
+ *                 before:
+ *                   type: object
+ *                 after:
+ *                   type: object
+ *       404:
+ *         description: Student topilmadi
+ */
+router.post('/fix-student-status', protect, roleCheck(['admin']), groupCtrl.fixStudentCourseStatus);
+
 router.post(
   '/change-student-group',
   protect,

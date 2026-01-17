@@ -29,6 +29,45 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
 
 /**
  * @swagger
+ * /api/subjects/for-teacher:
+ *   get:
+ *     summary: Teacher registratsiyasi uchun fanlar ro'yxati
+ *     description: Teacher ro'yxatdan o'tishdan oldin qaysi fanlar mavjudligini ko'rish uchun
+ *     tags: [Subjects]
+ *     responses:
+ *       200:
+ *         description: Mavjud fanlar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 subjects:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                         example: 1
+ *                       name:
+ *                         type: string
+ *                         example: "Ingliz tili"
+ *                       teachers_count:
+ *                         type: integer
+ *                         example: 3
+ *                       description:
+ *                         type: string
+ *                         example: "Ingliz tili fani (3 ta teacher)"
+ */
+router.get('/for-teacher', subjectCtrl.getSubjectsForTeacher);
+
+/**
+ * @swagger
  * /api/subjects:
  *   get:
  *     summary: Barcha fanlarni olish

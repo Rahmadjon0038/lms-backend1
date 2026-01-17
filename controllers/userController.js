@@ -45,37 +45,58 @@ const registerStudent = async (req, res) => {
     }
 };
 
-// 1.1. Teacher yaratish (Faqat adminlar uchun)
+// 1.1. Teacher yaratish (Faqat adminlar uchun) - subject_id bilan
 const registerTeacher = async (req, res) => {
     const { 
-        name, surname, username, password, phone, phone2, subject, startDate,
+        name, surname, username, password, phone, phone2, subject_id, startDate,
         certificate, age, has_experience, experience_years, experience_place, 
         available_times, work_days_hours 
     } = req.body;
+    
     try {
+        // Username mavjudligini tekshirish
         const userExists = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
 
+        // Subject mavjudligini tekshirish
+        if (subject_id) {
+            const subjectExists = await pool.query('SELECT id, name FROM subjects WHERE id = $1', [subject_id]);
+            if (subjectExists.rows.length === 0) {
+                return res.status(400).json({ message: "Bunday subject mavjud emas" });
+            }
+        }
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // Subject nomini olish (agar subject_id berilgan bo'lsa)
+        let subjectName = null;
+        if (subject_id) {
+            const subjectResult = await pool.query('SELECT name FROM subjects WHERE id = $1', [subject_id]);
+            subjectName = subjectResult.rows[0]?.name;
+        }
+
         const newTeacher = await pool.query(
-            `INSERT INTO users (name, surname, username, password, phone, phone2, role, subject, start_date, 
+            `INSERT INTO users (name, surname, username, password, phone, phone2, role, subject_id, subject, start_date, 
                                certificate, age, has_experience, experience_years, experience_place, 
                                available_times, work_days_hours) 
-             VALUES ($1, $2, $3, $4, $5, $6, 'teacher', $7, $8, $9, $10, $11, $12, $13, $14, $15) 
-             RETURNING id, name, surname, username, role, subject, start_date, certificate, age, 
+             VALUES ($1, $2, $3, $4, $5, $6, 'teacher', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+             RETURNING id, name, surname, username, role, subject_id, subject, start_date, certificate, age, 
                        has_experience, experience_years, experience_place, available_times, work_days_hours`,
-            [name, surname, username, hashedPassword, phone, phone2, subject, startDate || new Date(),
+            [name, surname, username, hashedPassword, phone, phone2, subject_id, subjectName, startDate || new Date(),
              certificate, age, has_experience || false, experience_years, experience_place, 
              available_times, work_days_hours]
         );
 
         res.status(201).json({ 
             message: "Teacher muvaffaqiyatli yaratildi", 
-            teacher: newTeacher.rows[0] 
+            teacher: newTeacher.rows[0],
+            subject: {
+                id: subject_id,
+                name: subjectName
+            }
         });
     } catch (err) {
         res.status(500).json({ 
