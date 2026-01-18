@@ -653,4 +653,126 @@ router.get('/newly-created', protect, roleCheck(['admin']), groupCtrl.getNewlyCr
  */
 router.patch('/:id/start-class', protect, roleCheck(['admin']), groupCtrl.startGroupClass);
 
+/**
+ * @swagger
+ * /api/groups/swap-schedules:
+ *   post:
+ *     summary: Teacher guruhlarining jadvallarini almashtirish
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - group1_id
+ *               - group2_id
+ *             properties:
+ *               group1_id:
+ *                 type: integer
+ *                 example: 28
+ *                 description: "Birinchi guruh ID"
+ *               group2_id:
+ *                 type: integer
+ *                 example: 29
+ *                 description: "Ikkinchi guruh ID"
+ *     responses:
+ *       200:
+ *         description: Jadvallar muvaffaqiyatli almashtirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Guruhlar jadvallari muvaffaqiyatli almashtirildi"
+ *                 changes:
+ *                   type: object
+ *                   properties:
+ *                     group1:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                         name:
+ *                           type: string
+ *                         old_schedule:
+ *                           type: object
+ *                         new_schedule:
+ *                           type: object
+ *                     group2:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                         name:
+ *                           type: string
+ *                         old_schedule:
+ *                           type: object
+ *                         new_schedule:
+ *                           type: object
+ *       400:
+ *         description: Xatolik (bir xil teacher bo'lishi shart)
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.post('/swap-schedules', protect, roleCheck(['admin']), groupCtrl.swapGroupSchedules);
+
+/**
+ * @swagger
+ * /api/groups/teacher-schedule/{teacher_id}:
+ *   get:
+ *     summary: Teacher guruhlarining barcha jadvallarini ko'rish
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: teacher_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Teacher ID
+ *     responses:
+ *       200:
+ *         description: Teacher jadvali
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 teacher_id:
+ *                   type: integer
+ *                   example: 31
+ *                 teacher_name:
+ *                   type: string
+ *                   example: "Rahmadjon Abdullayev"
+ *                 total_groups:
+ *                   type: integer
+ *                   example: 2
+ *                 groups:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 schedule_by_day:
+ *                   type: object
+ *                   example:
+ *                     "Seshanba": [{"id": 28, "name": "Frontend 1", "schedule": {"days": ["Seshanba"], "time": "14:00-16:00"}}]
+ *       400:
+ *         description: Teacher ID noto'g'ri
+ *       404:
+ *         description: Teacher topilmadi
+ */
+router.get('/teacher-schedule/:teacher_id', protect, roleCheck(['admin']), groupCtrl.getTeacherScheduleOverview);
+
 module.exports = router;

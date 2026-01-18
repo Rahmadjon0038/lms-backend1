@@ -18,16 +18,16 @@ exports.createSubject = async (req, res) => {
     }
 };
 
-// 2.1. Fanlar ro'yxatini olish (Teacher registratsiyasi uchun) 
+// 2.1. Fanlar ro'yxatini olish (Teacher registratsiyasi uchun) - Yangi teacher_subjects bilan
 exports.getSubjectsForTeacher = async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT 
-                id, 
-                name,
-                COUNT(u.id) as teachers_count
+                s.id, 
+                s.name,
+                COUNT(ts.teacher_id) as teachers_count
             FROM subjects s
-            LEFT JOIN users u ON s.id = u.subject_id AND u.role = 'teacher'
+            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id
             GROUP BY s.id, s.name
             ORDER BY s.name
         `);
@@ -47,16 +47,18 @@ exports.getSubjectsForTeacher = async (req, res) => {
     }
 };
 
-// 2. Barcha fanlarni olish
+// 2. Barcha fanlarni olish - Yangi teacher_subjects bilan
 exports.getAllSubjects = async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT s.*, 
-                   COUNT(g.id) as groups_count,
-                   COUNT(DISTINCT sg.student_id) as students_count
+                   COUNT(DISTINCT g.id) as groups_count,
+                   COUNT(DISTINCT sg.student_id) as students_count,
+                   COUNT(DISTINCT ts.teacher_id) as teachers_count
             FROM subjects s
             LEFT JOIN groups g ON s.id = g.subject_id 
             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id
             GROUP BY s.id, s.name
             ORDER BY s.name
         `);
@@ -159,3 +161,4 @@ exports.getSubjectStats = async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 };
+

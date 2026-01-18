@@ -1,6 +1,12 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { 
+    addSubjectToTeacher, 
+    getTeacherSubjects, 
+    removeSubjectFromTeacher,
+    getTeachersBySubject
+} = require('../models/teacherSubjectModel');
 
 // Yordamchi funksiya: Access Token yaratish (15 minutlik)
 const generateAccessToken = (user) => {
@@ -45,12 +51,12 @@ const registerStudent = async (req, res) => {
     }
 };
 
-// 1.1. Teacher yaratish (Faqat adminlar uchun) - subject_id bilan
+// 1.1. Teacher yaratish (Faqat adminlar uchun) - Ko'p fanlar bilan (primary fan yo'q)
 const registerTeacher = async (req, res) => {
     const { 
-        name, surname, username, password, phone, phone2, subject_id, startDate,
+        name, surname, username, password, phone, phone2, subject_ids, startDate,
         certificate, age, has_experience, experience_years, experience_place, 
-        available_times, work_days_hours 
+        available_times, work_days_hours
     } = req.body;
     
     try {
@@ -60,43 +66,66 @@ const registerTeacher = async (req, res) => {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
 
-        // Subject mavjudligini tekshirish
-        if (subject_id) {
-            const subjectExists = await pool.query('SELECT id, name FROM subjects WHERE id = $1', [subject_id]);
-            if (subjectExists.rows.length === 0) {
-                return res.status(400).json({ message: "Bunday subject mavjud emas" });
-            }
+        // Subject IDs tekshirish (array bo'lishi kerak)
+        if (!subject_ids || !Array.isArray(subject_ids) || subject_ids.length === 0) {
+            return res.status(400).json({ message: "Kamida bitta fan tanlang (subject_ids array ko'rinishida)" });
+        }
+
+        // Barcha subject_ids mavjudligini tekshirish
+        const subjectsCheck = await pool.query(
+            'SELECT id, name FROM subjects WHERE id = ANY($1)',
+            [subject_ids]
+        );
+        
+        if (subjectsCheck.rows.length !== subject_ids.length) {
+            return res.status(400).json({ message: "Ba'zi fanlar mavjud emas" });
+        }
+
+        // Primary subject tekshirish olib tashlandi
+        if (subject_ids.length === 0) {
+            return res.status(400).json({ message: "Kamida bitta fan tanlang" });
         }
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Subject nomini olish (agar subject_id berilgan bo'lsa)
-        let subjectName = null;
-        if (subject_id) {
-            const subjectResult = await pool.query('SELECT name FROM subjects WHERE id = $1', [subject_id]);
-            subjectName = subjectResult.rows[0]?.name;
-        }
-
+        // Teacher yaratish (eski subject ustunlarini null qilamiz)
         const newTeacher = await pool.query(
-            `INSERT INTO users (name, surname, username, password, phone, phone2, role, subject_id, subject, start_date, 
+            `INSERT INTO users (name, surname, username, password, phone, phone2, role, start_date, 
                                certificate, age, has_experience, experience_years, experience_place, 
                                available_times, work_days_hours) 
-             VALUES ($1, $2, $3, $4, $5, $6, 'teacher', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
-             RETURNING id, name, surname, username, role, subject_id, subject, start_date, certificate, age, 
+             VALUES ($1, $2, $3, $4, $5, $6, 'teacher', $7, $8, $9, $10, $11, $12, $13, $14) 
+             RETURNING id, name, surname, username, role, start_date, certificate, age, 
                        has_experience, experience_years, experience_place, available_times, work_days_hours`,
-            [name, surname, username, hashedPassword, phone, phone2, subject_id, subjectName, startDate || new Date(),
+            [name, surname, username, hashedPassword, phone, phone2, startDate || new Date(),
              certificate, age, has_experience || false, experience_years, experience_place, 
              available_times, work_days_hours]
         );
 
+        const teacherId = newTeacher.rows[0].id;
+
+        // Har bir fanni teacher_subjects jadvaliga qo'shish
+        const assignedSubjects = [];
+        for (let i = 0; i < subject_ids.length; i++) {
+            const subjectId = subject_ids[i];
+            
+            try {
+                await addSubjectToTeacher(teacherId, subjectId);
+                const subjectInfo = subjectsCheck.rows.find(s => s.id === subjectId);
+                assignedSubjects.push({
+                    id: subjectId,
+                    name: subjectInfo.name
+                });
+            } catch (err) {
+                console.error(`Fan ${subjectId} qo'shishda xato:`, err.message);
+            }
+        }
+
         res.status(201).json({ 
             message: "Teacher muvaffaqiyatli yaratildi", 
             teacher: newTeacher.rows[0],
-            subject: {
-                id: subject_id,
-                name: subjectName
-            }
+            subjects: assignedSubjects,
+            total_subjects: assignedSubjects.length
         });
     } catch (err) {
         res.status(500).json({ 
@@ -183,15 +212,21 @@ const getAllTeachers = async (req, res) => {
     let params = [];
     let paramIdx = 1;
 
-    // Status filter
+    // Status filter (faqat 3ta holat: active, terminated, on_leave)
     if (status) {
-        filters.push(`u.status = $${paramIdx++}`);
-        params.push(status);
+        const validStatuses = ['active', 'terminated', 'on_leave'];
+        if (validStatuses.includes(status)) {
+            filters.push(`u.status = $${paramIdx++}`);
+            params.push(status);
+        }
     }
 
-    // Subject filter - teacher'ning o'z subject_id si bo'yicha
+    // Subject filter - yangi teacher_subjects jadvali bilan
     if (subject_id) {
-        filters.push(`u.subject_id = $${paramIdx++}`);
+        filters.push(`EXISTS (
+            SELECT 1 FROM teacher_subjects ts 
+            WHERE ts.teacher_id = u.id AND ts.subject_id = $${paramIdx++}
+        )`);
         params.push(subject_id);
     }
     
@@ -206,8 +241,6 @@ const getAllTeachers = async (req, res) => {
                 u.phone, 
                 u.phone2,
                 u.status,
-                u.subject,
-                u.subject_id,
                 u.start_date,
                 u.end_date,
                 u.termination_date,
@@ -220,41 +253,43 @@ const getAllTeachers = async (req, res) => {
                 u.work_days_hours,
                 u.created_at as registration_date,
                 COUNT(DISTINCT g.id) as group_count,
-                sub.name as subject_name
+                -- Teacher-ning barcha fanlarini JSON shaklida olish
+                COALESCE(
+                    (SELECT json_agg(
+                        json_build_object(
+                            'id', s.id,
+                            'name', s.name,
+                            'assigned_at', ts.assigned_at
+                        ) ORDER BY s.name ASC
+                    )
+                    FROM teacher_subjects ts
+                    JOIN subjects s ON ts.subject_id = s.id
+                    WHERE ts.teacher_id = u.id),
+                    '[]'::json
+                ) as subjects
             FROM users u
             LEFT JOIN groups g ON u.id = g.teacher_id
-            LEFT JOIN subjects sub ON u.subject_id = sub.id
             WHERE u.role = 'teacher' ${whereClause}
-            GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.subject, u.subject_id, u.start_date, u.end_date, 
+            GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date, 
                      u.certificate, u.age, u.has_experience, u.experience_years, u.experience_place, 
-                     u.available_times, u.work_days_hours, u.created_at, sub.name
+                     u.available_times, u.work_days_hours, u.created_at
             ORDER BY u.created_at DESC
         `, params);
 
         const formattedTeachers = teachers.rows.map(teacher => {
-            // Status belgilash
-            let teacherStatus = 'Faol';
-            if (teacher.status === 'inactive') {
-                teacherStatus = 'Nofaol';
-            } else if (teacher.status === 'blocked') {
-                teacherStatus = 'Bloklangan';
-            } else if (teacher.status === 'on_leave') {
-                teacherStatus = 'Dam olish';
-            } else if (teacher.status === 'terminated') {
-                teacherStatus = 'Ishdan boshatilgan';
-            } else if (teacher.end_date && new Date(teacher.end_date) < new Date()) {
-                teacherStatus = 'Ishdan ketgan';
-            }
+            // Fanlar ro'yxatini formatlash
+            const subjects = teacher.subjects || [];
+            const subjectNames = subjects.map(s => s.name).join(', ');
 
             return {
                 id: teacher.id,
                 name: teacher.name,
                 surname: teacher.surname,
-                subject: teacher.subject || teacher.subject_name || 'Belgilanmagan',
-                subject_id: teacher.subject_id,
-                subject_name: teacher.subject_name,
-                status: teacherStatus,
-                isActive: teacher.status === 'active' && (!teacher.end_date || new Date(teacher.end_date) >= new Date()),
+                subjects: subjects,
+                subjects_list: subjectNames || 'Belgilanmagan',
+                subjects_count: subjects.length,
+                status: teacher.status, // raw status: active, terminated, on_leave
+                isActive: teacher.status === 'active',
                 startDate: teacher.start_date ? teacher.start_date.toISOString().split('T')[0] : null,
                 endDate: teacher.end_date ? teacher.end_date.toISOString().split('T')[0] : null,
                 terminationDate: teacher.termination_date ? teacher.termination_date.toISOString().split('T')[0] : null,
@@ -275,7 +310,11 @@ const getAllTeachers = async (req, res) => {
         res.json({
             message: "Teacherlar muvaffaqiyatli olindi",
             teachers: formattedTeachers,
-            total: formattedTeachers.length
+            total: formattedTeachers.length,
+            filters_applied: {
+                subject_id: subject_id || null,
+                status: status || null
+            }
         });
     } catch (err) {
         console.error('Teacherlarni olishda xatolik:', err);
@@ -299,23 +338,64 @@ const setTeacherOnLeave = async (req, res) => {
             return res.status(400).json({ message: "Teacher allaqachon dam olish holatida!" });
         }
 
+        // Teacher-ning faol guruhlarini tekshirish
+        const activeGroups = await pool.query(
+            `SELECT g.id, g.name, g.unique_code, 
+                    COUNT(sg.student_id) as student_count
+             FROM groups g
+             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+             WHERE g.teacher_id = $1 AND g.status = 'active'
+             GROUP BY g.id, g.name, g.unique_code
+             ORDER BY g.name`,
+            [teacherId]
+        );
+
+        if (activeGroups.rows.length > 0) {
+            const groupsList = activeGroups.rows.map(group => 
+                `- ${group.name} (${group.unique_code}) - ${parseInt(group.student_count) || 0} ta student`
+            ).join('\n');
+            
+            return res.status(400).json({ 
+                success: false,
+                message: `Teacher dam olishga chiqarib bo'lmaydi! Avval ${activeGroups.rows.length} ta faol guruhni boshqa teacherga o'tkazing:`,
+                active_groups: activeGroups.rows.map(group => ({
+                    id: group.id,
+                    name: group.name,
+                    code: group.unique_code,
+                    student_count: parseInt(group.student_count) || 0
+                })),
+                groups_count: activeGroups.rows.length,
+                groups_list: groupsList,
+                instruction: "Har bir guruhni boshqa teacherga o'tkazish uchun:",
+                api_example: `PATCH /api/groups/{group_id} -> {"teacher_id": yangi_teacher_id}`,
+                note: "Barcha guruhlar o'tkazilgandan keyin qayta urinib ko'ring"
+            });
+        }
+
         await pool.query(
             'UPDATE users SET status = $1 WHERE id = $2',
             ['on_leave', teacherId]
         );
 
         res.json({ 
-            message: "Teacher dam olishga chiqarildi",
+            success: true,
+            message: `${teacher.rows[0].name} ${teacher.rows[0].surname} dam olishga chiqarildi`,
             teacher: { 
                 id: teacherId, 
                 status: 'on_leave',
-                name: teacher.rows[0].name + ' ' + teacher.rows[0].surname
-            }
+                name: teacher.rows[0].name,
+                surname: teacher.rows[0].surname,
+                full_name: teacher.rows[0].name + ' ' + teacher.rows[0].surname
+            },
+            note: "Teacher dam olishdan qaytganda 'reactivate' API ni ishlating"
         });
     } catch (err) {
+        console.error('Teacher dam olishga chiqarishda xato:', err);
         res.status(500).json({ 
-            error: "Teacher'ni dam olishga chiqarishda xatolik yuz berdi",
-            details: err.message 
+            success: false,
+            error: "Teacher dam olishga chiqarishda texnik xatolik yuz berdi",
+            message: "Iltimos, keyinroq qayta urinib ko'ring",
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
     }
 };
@@ -335,6 +415,42 @@ const terminateTeacher = async (req, res) => {
             return res.status(400).json({ message: "Teacher allaqachon ishdan boshatilgan!" });
         }
 
+        // Teacher-ning faol guruhlarini tekshirish
+        const activeGroups = await pool.query(
+            `SELECT g.id, g.name, g.unique_code, g.status,
+                    COUNT(sg.student_id) as student_count
+             FROM groups g
+             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+             WHERE g.teacher_id = $1 AND g.status IN ('active', 'draft')
+             GROUP BY g.id, g.name, g.unique_code, g.status
+             ORDER BY g.name`,
+            [teacherId]
+        );
+
+        if (activeGroups.rows.length > 0) {
+            const groupsList = activeGroups.rows.map(group => 
+                `- ${group.name} (${group.unique_code}) [${group.status}] - ${parseInt(group.student_count) || 0} ta student`
+            ).join('\n');
+            
+            return res.status(400).json({ 
+                success: false,
+                message: `Teacher ishdan boshatib bo'lmaydi! Avval ${activeGroups.rows.length} ta guruhni boshqa teacherga o'tkazing:`,
+                active_groups: activeGroups.rows.map(group => ({
+                    id: group.id,
+                    name: group.name,
+                    code: group.unique_code,
+                    status: group.status,
+                    student_count: parseInt(group.student_count) || 0
+                })),
+                groups_count: activeGroups.rows.length,
+                groups_list: groupsList,
+                instruction: "Har bir guruhni boshqa teacherga o'tkazish uchun:",
+                api_example: `PATCH /api/groups/{group_id} -> {"teacher_id": yangi_teacher_id}`,
+                warning: "Ishdan boshatish qaytarib bo'lmaydigan harakat!",
+                note: "Barcha guruhlar o'tkazilgandan keyin qayta urinib ko'ring"
+            });
+        }
+
         const termDate = terminationDate || new Date().toISOString().split('T')[0];
         
         await pool.query(
@@ -343,18 +459,26 @@ const terminateTeacher = async (req, res) => {
         );
 
         res.json({ 
-            message: "Teacher ishdan boshatildi",
+            success: true,
+            message: `${teacher.rows[0].name} ${teacher.rows[0].surname} ishdan boshatildi`,
             teacher: { 
                 id: teacherId, 
                 status: 'terminated',
                 terminationDate: termDate,
-                name: teacher.rows[0].name + ' ' + teacher.rows[0].surname
-            }
+                name: teacher.rows[0].name,
+                surname: teacher.rows[0].surname,
+                full_name: teacher.rows[0].name + ' ' + teacher.rows[0].surname
+            },
+            warning: "Bu harakat qaytarib bo'lmaydi!",
+            note: "Agar kerak bo'lsa, yangi teacher sifatida qayta ro'yxatdan o'tkazishingiz mumkin"
         });
     } catch (err) {
+        console.error('Teacher ishdan boshatishda xato:', err);
         res.status(500).json({ 
-            error: "Teacher'ni ishdan boshatishda xatolik yuz berdi",
-            details: err.message 
+            success: false,
+            error: "Teacher ishdan boshatishda texnik xatolik yuz berdi",
+            message: "Iltimos, keyinroq qayta urinib ko'ring",
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
     }
 };
@@ -438,101 +562,11 @@ const deleteTeacher = async (req, res) => {
 };
 
 // 10. Teacher ma'lumotlarini to'liq yangilash (PUT)
-const updateTeacher = async (req, res) => {
-    const { teacherId } = req.params;
-    const { 
-        name, surname, username, password, phone, phone2, subject_id,
-        certificate, age, has_experience, experience_years, experience_place,
-        available_times, work_days_hours 
-    } = req.body;
-
-    try {
-        // Teacher mavjudligini tekshirish
-        const teacherExists = await pool.query(
-            'SELECT id FROM users WHERE id = $1 AND role = $2',
-            [teacherId, 'teacher']
-        );
-
-        if (teacherExists.rows.length === 0) {
-            return res.status(404).json({ message: "Teacher topilmadi" });
-        }
-
-        // Username unique ekanini tekshirish (o'zidan tashqari)
-        if (username) {
-            const usernameTaken = await pool.query(
-                'SELECT id FROM users WHERE username = $1 AND id != $2',
-                [username, teacherId]
-            );
-
-            if (usernameTaken.rows.length > 0) {
-                return res.status(400).json({ message: "Bu username allaqachon band" });
-            }
-        }
-
-        // Subject mavjudligini tekshirish
-        let subjectName = null;
-        if (subject_id) {
-            const subjectExists = await pool.query('SELECT id, name FROM subjects WHERE id = $1', [subject_id]);
-            if (subjectExists.rows.length === 0) {
-                return res.status(400).json({ message: "Bunday subject mavjud emas" });
-            }
-            subjectName = subjectExists.rows[0].name;
-        }
-
-        // Parol hash qilish (agar yangi parol berilgan bo'lsa)
-        let hashedPassword = null;
-        if (password) {
-            const salt = await bcrypt.genSalt(10);
-            hashedPassword = await bcrypt.hash(password, salt);
-        }
-
-        // Teacher ma'lumotlarini yangilash
-        const updateQuery = `
-            UPDATE users SET 
-                name = COALESCE($1, name),
-                surname = COALESCE($2, surname),
-                username = COALESCE($3, username),
-                password = COALESCE($4, password),
-                phone = COALESCE($5, phone),
-                phone2 = COALESCE($6, phone2),
-                subject_id = COALESCE($7, subject_id),
-                subject = COALESCE($8, subject),
-                certificate = COALESCE($9, certificate),
-                age = COALESCE($10, age),
-                has_experience = COALESCE($11, has_experience),
-                experience_years = COALESCE($12, experience_years),
-                experience_place = COALESCE($13, experience_place),
-                available_times = COALESCE($14, available_times),
-                work_days_hours = COALESCE($15, work_days_hours)
-            WHERE id = $16 AND role = 'teacher'
-            RETURNING id, name, surname, username, phone, phone2, subject_id, subject, 
-                     certificate, age, has_experience, experience_years, experience_place,
-                     available_times, work_days_hours, status, start_date
-        `;
-
-        const updatedTeacher = await pool.query(updateQuery, [
-            name, surname, username, hashedPassword, phone, phone2, subject_id, subjectName,
-            certificate, age, has_experience, experience_years, experience_place,
-            available_times, work_days_hours, teacherId
-        ]);
-
-        res.json({
-            message: "Teacher ma'lumotlari muvaffaqiyatli yangilandi",
-            teacher: updatedTeacher.rows[0]
-        });
-
-    } catch (err) {
-        res.status(500).json({ 
-            error: "Teacher'ni yangilashda xatolik yuz berdi",
-            details: err.message 
-        });
-    }
-};
-
-// 11. Teacher ma'lumotlarini qisman yangilash (PATCH)
+// 11. Teacher ma'lumotlarini qisman yangilash (PATCH) - username va parolsiz
 const patchTeacher = async (req, res) => {
     const { teacherId } = req.params;
-    const updateFields = req.body;
+    const updateFields = { ...req.body }; // Copy qilib olamiz
+    const { subject_ids } = req.body; // Fanlar alohida
 
     try {
         // Teacher mavjudligini tekshirish
@@ -545,58 +579,91 @@ const patchTeacher = async (req, res) => {
             return res.status(404).json({ message: "Teacher topilmadi" });
         }
 
-        // Bo'sh obyekt tekshiruvi
-        if (Object.keys(updateFields).length === 0) {
-            return res.status(400).json({ message: "Yangilanishi kerak bo'lgan maydonlar ko'rsatilmagan" });
-        }
-
-        // Username unique ekanini tekshirish
-        if (updateFields.username) {
-            const usernameTaken = await pool.query(
-                'SELECT id FROM users WHERE username = $1 AND id != $2',
-                [updateFields.username, teacherId]
-            );
-
-            if (usernameTaken.rows.length > 0) {
-                return res.status(400).json({ message: "Bu username allaqachon band" });
-            }
-        }
-
-        // Subject tekshiruvi va nom olish
-        if (updateFields.subject_id) {
-            const subjectExists = await pool.query('SELECT id, name FROM subjects WHERE id = $1', [updateFields.subject_id]);
-            if (subjectExists.rows.length === 0) {
-                return res.status(400).json({ message: "Bunday subject mavjud emas" });
-            }
-            updateFields.subject = subjectExists.rows[0].name;
-        }
-
-        // Parol hash qilish
-        if (updateFields.password) {
-            const salt = await bcrypt.genSalt(10);
-            updateFields.password = await bcrypt.hash(updateFields.password, salt);
-        }
-
-        // Dinamik query yaratish
-        const keys = Object.keys(updateFields);
-        const values = Object.values(updateFields);
-        const setClause = keys.map((key, index) => `${key} = $${index + 1}`).join(', ');
+        // Username va password fieldlarini olib tashlaymiz (admin faqat boshqa ma'lumotlarni o'zgartira oladi)
+        delete updateFields.username;
+        delete updateFields.password;
+        delete updateFields.subject_ids; // subject_ids ni alohida ishlov beramiz
         
-        const updateQuery = `
-            UPDATE users SET ${setClause}
-            WHERE id = $${keys.length + 1} AND role = 'teacher'
-            RETURNING id, name, surname, username, phone, phone2, subject_id, subject, 
-                     certificate, age, has_experience, experience_years, experience_place,
-                     available_times, work_days_hours, status, start_date
-        `;
+        // Bo'sh obyekt tekshiruvi
+        if (Object.keys(updateFields).length === 0 && (!subject_ids || !Array.isArray(subject_ids))) {
+            return res.status(400).json({ message: "Yangilanishi kerak bo'lgan maydonlar ko'rsatilmagan. Username va parolni yangilab bo'lmaydi." });
+        }
 
-        const updatedTeacher = await pool.query(updateQuery, [...values, teacherId]);
+        // Subject IDs tekshirish
+        if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
+            const subjectsCheck = await pool.query(
+                'SELECT id, name FROM subjects WHERE id = ANY($1)',
+                [subject_ids]
+            );
+            
+            if (subjectsCheck.rows.length !== subject_ids.length) {
+                return res.status(400).json({ message: "Ba'zi fanlar mavjud emas" });
+            }
+        }
 
-        res.json({
+        let updatedTeacher = null;
+        
+        // Agar user ma'lumotlari yangilanishi kerak bo'lsa
+        if (Object.keys(updateFields).length > 0) {
+            // Dinamik query yaratish
+            const keys = Object.keys(updateFields);
+            const values = Object.values(updateFields);
+            const setClause = keys.map((key, index) => `${key} = $${index + 1}`).join(', ');
+            
+            const updateQuery = `
+                UPDATE users SET ${setClause}
+                WHERE id = $${keys.length + 1} AND role = 'teacher'
+                RETURNING id, name, surname, username, phone, phone2,
+                         certificate, age, has_experience, experience_years, experience_place,
+                         available_times, work_days_hours, status, start_date
+            `;
+
+            updatedTeacher = await pool.query(updateQuery, [...values, teacherId]);
+        } else {
+            // Faqat teacher ma'lumotlarini olish
+            updatedTeacher = await pool.query(
+                `SELECT id, name, surname, username, phone, phone2,
+                        certificate, age, has_experience, experience_years, experience_place,
+                        available_times, work_days_hours, status, start_date
+                 FROM users WHERE id = $1 AND role = 'teacher'`,
+                [teacherId]
+            );
+        }
+
+        // Fanlarni yangilash (agar subject_ids berilgan bo'lsa)
+        if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
+            // Avvalgi fanlarni o'chirish
+            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1', [teacherId]);
+            
+            // Yangi fanlarni qo'shish
+            for (const subjectId of subject_ids) {
+                await pool.query(
+                    'INSERT INTO teacher_subjects (teacher_id, subject_id) VALUES ($1, $2)',
+                    [teacherId, subjectId]
+                );
+            }
+        }
+
+        // Teacher fanlarini olish
+        const teacherSubjects = await getTeacherSubjects(teacherId);
+        
+        const response = {
             message: "Teacher ma'lumotlari qisman yangilandi",
-            updated_fields: keys,
-            teacher: updatedTeacher.rows[0]
-        });
+            teacher: updatedTeacher.rows[0],
+            subjects: teacherSubjects,
+            subjects_count: teacherSubjects.length,
+            note: "Username va parolni yangilash taqiqlangan"
+        };
+        
+        // Qaysi maydonlar yangilanganini ko'rsatish
+        if (Object.keys(updateFields).length > 0) {
+            response.updated_fields = Object.keys(updateFields);
+        }
+        if (subject_ids && Array.isArray(subject_ids)) {
+            response.subjects_updated = true;
+        }
+
+        res.json(response);
 
     } catch (err) {
         res.status(500).json({ 
@@ -617,6 +684,5 @@ module.exports = {
     terminateTeacher,
     reactivateTeacher,
     deleteTeacher,
-    updateTeacher,
     patchTeacher
 };

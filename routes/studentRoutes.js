@@ -43,6 +43,13 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *           type: string
  *           enum: [active, inactive, blocked]
  *         description: Student holati (active - faol, inactive - to'xtatgan, blocked - bloklangan)
+ *       - in: query
+ *         name: unassigned
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [true]
+ *         description: Hali guruhga biriktirilmagan studentlarni ko'rsatish uchun 'true' qiymat berish kerak
  *     responses:
  *       200:
  *         description: Muvaffaqiyatli ro'yxat qaytdi
