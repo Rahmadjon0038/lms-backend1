@@ -34,6 +34,7 @@ const subjectRoutes = require('./routes/subjectRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
+const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -59,6 +60,7 @@ app.listen(PORT, async () => {
         await createUserTable();
         await createGroupTables();
         await createStudentAdditionalTables();
+        await createTeacherSubjectTables(); // Teacher-Subject many-to-many jadvallari
     } catch (error) {
         console.error("Dastlabki sozlashda xatolik:", error);
     }

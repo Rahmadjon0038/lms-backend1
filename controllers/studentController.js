@@ -70,7 +70,7 @@ exports.deleteStudent = async (req, res) => {
 
 // 3. Studentlarni oy, teacher, group, subject bo'yicha filter qilish
 exports.getAllStudents = async (req, res) => {
-  const { teacher_id, group_id, subject_id, status } = req.query;
+  const { teacher_id, group_id, subject_id, status, unassigned } = req.query;
   let filters = [];
   let params = [];
   let paramIdx = 1;
@@ -97,6 +97,11 @@ exports.getAllStudents = async (req, res) => {
   if (status) {
     filters.push(`u.status = $${paramIdx++}`);
     params.push(status);
+  }
+
+  // Unassigned filter - hali guruhga qo'shilmagan studentlar
+  if (unassigned === 'true') {
+    filters.push('sg.student_id IS NULL');
   }
 
   const whereClause = filters.length > 0 ? 'AND ' + filters.join(' AND ') : '';

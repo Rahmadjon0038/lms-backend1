@@ -9,7 +9,7 @@ const createUserTable = async () => {
       username VARCHAR(50) UNIQUE NOT NULL,
       password TEXT NOT NULL,
       role VARCHAR(20) DEFAULT 'student', -- 'admin', 'teacher', 'student', 'super_admin'
-      status VARCHAR(20) DEFAULT 'active', -- 'active', 'inactive', 'blocked', 'on_leave', 'terminated'
+      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'terminated', 'on_leave')), -- faqat 3ta holat
       phone VARCHAR(20),
       phone2 VARCHAR(20),
       father_name VARCHAR(100), -- Otasining ismi

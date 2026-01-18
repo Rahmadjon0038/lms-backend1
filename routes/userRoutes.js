@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, updateTeacher, patchTeacher } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -107,10 +107,12 @@ router.post('/register', protect, roleCheck(['admin']), registerStudent);
  *               phone2:
  *                 type: string
  *                 example: "+998912345678"
- *               subject_id:
- *                 type: integer
- *                 example: 1
- *                 description: "Fan ID (majburiy) - subjects jadvalidagi fan ID si"
+ *               subject_ids:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 example: [1, 2, 3]
+ *                 description: "Fan ID lari (kamida bitta kerak) - subjects jadvalidagi fan ID lari"
  *               startDate:
  *                 type: string
  *                 format: date
@@ -564,8 +566,12 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *                 type: string
  *               phone2:
  *                 type: string
- *               subject_id:
- *                 type: integer
+ *               subject_ids:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 example: [1, 2, 3]
+ *                 description: "Teacher fanlarining ID lari (array ko'rinishida)"
  *               certificate:
  *                 type: string
  *               age:
@@ -588,8 +594,6 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *       400:
  *         description: Username band yoki subject mavjud emas
  */
-router.put('/teachers/:teacherId', protect, roleCheck(['admin']), updateTeacher);
-
 /**
  * @swagger
  * /api/users/teachers/{teacherId}:
@@ -622,7 +626,7 @@ router.put('/teachers/:teacherId', protect, roleCheck(['admin']), updateTeacher)
  *                 type: string
  *               work_days_hours:
  *                 type: string
- *             description: Faqat yangilanishi kerak bo'lgan maydonlarni yuboring
+             description: 'Faqat yangilanishi kerak bo\'lgan maydonlarni yuboring. subject_ids array ko\'rinishida yuboriladi. ESLATMA: username va parolni yangilab bo\'lmaydi!'
  *     responses:
  *       200:
  *         description: Teacher ma'lumotlari qisman yangilandi
