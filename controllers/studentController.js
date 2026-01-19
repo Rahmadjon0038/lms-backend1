@@ -153,20 +153,26 @@ exports.getAllStudents = async (req, res) => {
       u.father_phone,
       u.address,
       u.age,
-      u.status,
+      u.status as student_status,
       u.created_at as registration_date,
       u.course_status,
       u.course_start_date,
       u.course_end_date,
-      -- Har bir guruh uchun alohida ma'lumot
+      u.role,
+      -- Guruh ma'lumotlari
       COALESCE(g.name, 'Guruh biriktirilmagan') as group_name,
       COALESCE(CONCAT(t.name, ' ', t.surname), 'Oqituvchi biriktirilmagan') as teacher_name,
       COALESCE(s.name, 'Fan belgilanmagan') as subject_name,
-      sg.joined_at,
-      sg.status as group_status,
-      g.id as group_id
+      g.id as group_id,
+      g.status as group_status,
+      g.class_status as group_class_status,
+      g.class_start_date,
+      t.id as teacher_id,
+      -- Student-guruh bog'lanishi
+      sg.joined_at as group_joined_at,
+      sg.status as student_group_status
     FROM users u
-    LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
+    LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status IN ('active', 'stopped')
     LEFT JOIN groups g ON sg.group_id = g.id
     LEFT JOIN users t ON g.teacher_id = t.id
     LEFT JOIN subjects s ON g.subject_id = s.id
@@ -175,7 +181,24 @@ exports.getAllStudents = async (req, res) => {
   `;
   try {
     const result = await pool.query(queryText, params);
-    res.json(result.rows);
+    
+    // Response ni process qilish - faqat dars boshlangan bo'lsa "started_at" qo'shish
+    const processedRows = result.rows.map(row => {
+      let started_at = null;
+      
+      // Faqat guruh active va darslar boshlangan bo'lsagina "started_at" ni ko'rsatamiz
+      if (row.group_status === 'active' && row.group_class_status === 'started' && row.class_start_date) {
+        started_at = row.class_start_date;
+      }
+      
+      return {
+        ...row,
+        joined_at: row.group_joined_at, // Guruhga qo'shilgan sana
+        started_at: started_at // Darslar boshlangan sana (faqat dars boshlangan bo'lsa)
+      };
+    });
+    
+    res.json(processedRows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -195,8 +218,11 @@ exports.getMyGroups = async (req, res) => {
                 g.schedule,
                 g.price,
                 g.is_active,
+                g.status as group_status,
+                g.class_status,
+                g.class_start_date,
                 sg.joined_at,
-                sg.status as student_status,
+                sg.status as student_group_status,
                 CONCAT(t.name, ' ', t.surname) as teacher_name,
                 s.name as subject_name
              FROM student_groups sg
@@ -216,11 +242,47 @@ exports.getMyGroups = async (req, res) => {
             });
         }
 
-        // JSON formatda schedule ma'lumotlarini parse qilish
-        const groups = result.rows.map(group => ({
-            ...group,
-            schedule: group.schedule ? (typeof group.schedule === 'string' ? JSON.parse(group.schedule) : group.schedule) : null
-        }));
+        // JSON formatda schedule ma'lumotlarini parse qilish va holat tekstini aniqlash
+        const groups = result.rows.map(group => {
+            let displayStatus = "Guruh tashkil topilmoqda";
+            let startedAt = null; // Darslar boshlangan sana
+            
+            // Guruh bloklangan bo'lsa
+            if (group.group_status === 'blocked' || group.student_group_status === 'stopped') {
+                displayStatus = "Bloklangan";
+            }
+            // Guruh active va darslar boshlangan
+            else if (group.group_status === 'active' && group.class_status === 'started') {
+                displayStatus = "O'qimoqda";
+                startedAt = group.class_start_date; // Faqat dars boshlangan bo'lsagina sana ko'rsatiladi
+            }
+            // Guruh active lekin darslar boshlanmagan
+            else if (group.group_status === 'active' && group.class_status === 'not_started') {
+                displayStatus = "Guruh faol, darslar boshlanishi kutilmoqda";
+            }
+            // Guruh draft holatida
+            else if (group.group_status === 'draft') {
+                displayStatus = "Guruh tashkil topilmoqda";
+            }
+            // Darslar tugagan
+            else if (group.class_status === 'finished') {
+                displayStatus = "Darslar tugagan";
+                startedAt = group.class_start_date;
+            }
+            
+            return {
+                ...group,
+                joined_at: group.joined_at, // Guruhga qo'shilgan sana
+                started_at: startedAt, // Darslar boshlangan sana (faqat dars boshlangan bo'lsa)
+                schedule: group.schedule ? (typeof group.schedule === 'string' ? JSON.parse(group.schedule) : group.schedule) : null,
+                display_status: displayStatus,
+                status_details: {
+                    group_status: group.group_status,
+                    class_status: group.class_status,
+                    student_group_status: group.student_group_status
+                }
+            };
+        });
 
         res.json({
             success: true,

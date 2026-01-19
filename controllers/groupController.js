@@ -372,7 +372,7 @@ exports.updateGroupStatus = async (req, res) => {
         let paramCount = 1;
         let updateQuery = 'UPDATE groups SET ';
         
-        // Status active bo'lsa, class_start_date va class_status ni ham yangilash
+        // Status active bo'lsa - darslar boshlangan deb belgilaymiz
         if (status === 'active') {
             updateFields.status = status;
             updateFields.class_start_date = new Date();
@@ -393,6 +393,25 @@ exports.updateGroupStatus = async (req, res) => {
 
         if (result.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        // Guruh statusiga qarab student_groups statusini yangilash
+        if (status === 'blocked') {
+            // Guruh bloklanganda barcha talabalar statusini 'stopped' ga o'zgartirish
+            await pool.query(
+                `UPDATE student_groups 
+                 SET status = 'stopped' 
+                 WHERE group_id = $1 AND status = 'active'`,
+                [id]
+            );
+        } else if (status === 'active') {
+            // Guruh aktiv bo'lganda talabalar statusini 'active' ga qaytarish
+            await pool.query(
+                `UPDATE student_groups 
+                 SET status = 'active' 
+                 WHERE group_id = $1 AND status = 'stopped'`,
+                [id]
+            );
         }
 
         // Agar guruh active holatiga o'tkazilsa, barcha studentlarning course statusini yangilash
@@ -499,10 +518,17 @@ exports.adminAddStudentToGroup = async (req, res) => {
         console.log("📊 Guruh ma'lumotlari:", groupData);
         console.log("💰 Price:", groupData.price, "Type:", typeof groupData.price);
 
-        // Student_groups jadvaliga qo'shish
+        // Student_groups jadvaliga qo'shish - guruh holatiga qarab status belgilash
+        let studentGroupStatus = 'active';
+        
+        // Agar guruh bloklangan bo'lsa, talabani ham bloklangan holatda qo'shamiz
+        if (groupData.status === 'blocked') {
+            studentGroupStatus = 'stopped';
+        }
+        
         const result = await pool.query(
-            "INSERT INTO student_groups (student_id, group_id) VALUES ($1, $2) RETURNING *",
-            [student_id, group_id]
+            "INSERT INTO student_groups (student_id, group_id, status) VALUES ($1, $2, $3) RETURNING *",
+            [student_id, group_id, studentGroupStatus]
         );
 
         // Users jadvalida studentning ma'lumotlarini yangilash
@@ -568,10 +594,16 @@ exports.studentJoinByCode = async (req, res) => {
 
         const groupData = group.rows[0];
 
+        // Student guruhga qo'shiladi - guruh holatiga qarab status belgilash
+        let studentGroupStatus = 'active';
+        if (groupData.status === 'blocked') {
+            studentGroupStatus = 'stopped';
+        }
+        
         // Student_groups jadvaliga qo'shish
         const result = await pool.query(
-            "INSERT INTO student_groups (student_id, group_id) VALUES ($1, $2) RETURNING *",
-            [req.user.id, groupData.id]
+            "INSERT INTO student_groups (student_id, group_id, status) VALUES ($1, $2, $3) RETURNING *",
+            [req.user.id, groupData.id, studentGroupStatus]
         );
 
         // Users jadvalida studentning ma'lumotlarini yangilash
@@ -715,6 +747,7 @@ exports.getGroupById = async (req, res) => {
                 u.father_phone,
                 u.age,
                 u.address,
+                u.status as student_status,
                 u.course_status,
                 u.course_start_date,
                 u.course_end_date,
@@ -724,7 +757,7 @@ exports.getGroupById = async (req, res) => {
                 u.teacher_id,
                 u.teacher_name,
                 u.group_name,
-                sg.status as group_status, 
+                sg.status as student_group_status, 
                 sg.joined_at 
             FROM users u 
             JOIN student_groups sg ON u.id = sg.student_id 
@@ -893,12 +926,21 @@ exports.changeStudentGroup = async (req, res) => {
             );
         }
 
-        // Yangi guruhga qo'shish
+        // Yangi guruhga qo'shish - yangi guruh holatiga qarab status belgilash
+        const newGroupStatusCheck = await pool.query(
+            'SELECT status FROM groups WHERE id = $1',
+            [new_group_id]
+        );
+        
+        let studentGroupStatus = 'active';
+        if (newGroupStatusCheck.rows.length > 0 && newGroupStatusCheck.rows[0].status === 'blocked') {
+            studentGroupStatus = 'stopped';
+        }
+        
         await pool.query(
-            `INSERT INTO student_groups (student_id, group_id) 
-             VALUES ($1, $2)
+            `INSERT INTO student_groups (student_id, group_id, status) \n             VALUES ($1, $2, $3)
              ON CONFLICT (student_id, group_id) DO NOTHING`,
-            [student_id, new_group_id]
+            [student_id, new_group_id, studentGroupStatus]
         );
 
         // Users jadvalidagi ma'lumotlarni yangilash
@@ -940,6 +982,7 @@ exports.fixAllStudentCourseStatuses = async (req, res) => {
         const inconsistentStudents = await pool.query(`
             SELECT 
                 u.id, u.name, u.surname, 
+                u.status as student_status,
                 u.course_status, u.course_start_date, u.course_end_date,
                 u.group_id, u.group_name,
                 g.status as group_status, g.class_status, g.class_start_date,
@@ -1049,6 +1092,7 @@ exports.fixStudentCourseStatus = async (req, res) => {
         const studentData = await pool.query(`
             SELECT 
                 u.id, u.name, u.surname, 
+                u.status as student_status,
                 u.course_status, u.course_start_date, u.course_end_date,
                 u.group_id, u.group_name,
                 g.status as group_status, g.class_status, g.class_start_date
@@ -1142,6 +1186,7 @@ exports.getStudentGroupInfo = async (req, res) => {
             SELECT 
                 u.id as student_id,
                 u.name || ' ' || u.surname as student_name,
+                u.status as student_status,
                 u.group_id,
                 u.group_name,
                 g.status as group_status,
@@ -1179,6 +1224,7 @@ exports.getStudentGroupInfo = async (req, res) => {
             student: {
                 id: studentData.student_id,
                 name: studentData.student_name,
+                status: studentData.student_status,
                 group: {
                     id: studentData.group_id,
                     name: studentData.group_name,
@@ -1263,6 +1309,7 @@ exports.startGroupClass = async (req, res) => {
 
         const group = groupCheck.rows[0];
 
+        // Faqat draft holatidagi guruhni boshlash mumkin
         if (group.status !== 'draft') {
             return res.status(400).json({ 
                 message: `Guruh allaqachon ${group.status} holatida. Faqat 'draft' holatidagi guruhlarni boshlash mumkin.` 
