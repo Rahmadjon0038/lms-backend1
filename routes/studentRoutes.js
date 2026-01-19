@@ -15,8 +15,11 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  * @swagger
  * /api/students/all:
  *   get:
- *     summary: Studentlarni teacher, group, subject, status bo'yicha filtrlab olish
+ *     summary: Studentlarni teacher, group, subject, status bo'yicha filtrlab olish (ADMIN)
+ *     description: Admin uchun barcha studentlar ro'yxatini filter bilan olish. Har xil parametrlar orqali filter qilish mumkin.
  *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: teacher_id
@@ -41,8 +44,8 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *         required: false
  *         schema:
  *           type: string
- *           enum: [active, inactive, blocked]
- *         description: Student holati (active - faol, inactive - to'xtatgan, blocked - bloklangan)
+ *           enum: [active, inactive, blocked, graduated, dropped_out]
+ *         description: Student holati - active (Faol), inactive (To'xtatilgan), blocked (Bloklangan), graduated (Bitirgan), dropped_out (Bitimasdan chiqib ketgan)
  *       - in: query
  *         name: unassigned
  *         required: false
@@ -77,7 +80,9 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *                     example: "+998912345678"
  *                   status:
  *                     type: string
+ *                     enum: [active, inactive, blocked, graduated, dropped_out]
  *                     example: "active"
+ *                     description: Student holati
  *                   registration_date:
  *                     type: string
  *                     format: date-time
@@ -96,17 +101,30 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *                   paid_amount:
  *                     type: number
  *                     example: 0
+ *       401:
+ *         description: Token kerak (unauthorized)
+ *       403:
+ *         description: Faqat admin uchun
  *       500:
  *         description: Server xatosi
  */
-router.get("/all", studentController.getAllStudents);
+router.get("/all", protect, roleCheck(['admin']), studentController.getAllStudents);
 
 /**
  * @swagger
  * /api/students/{student_id}/status:
  *   patch:
  *     summary: Student statusini o'zgartirish (FAQAT ADMIN)
- *     description: Studentni faollashtirish, o'qishni to'xtatish yoki bloklash
+ *     description: |
+ *       Student holatini o'zgartirish - faollashtirish, to'xtatish, bloklash, bitirish va boshqalar.
+ *       
+ *       **Mavjud statuslar:**
+ *       - `active` - Faol (guruhga biriktirilishi mumkin)
+ *       - `inactive` - O'qishni to'xtatgan (vaqtincha)
+ *       - `blocked` - Bloklangan (admin tomonidan)
+
+ *       - `graduated` - Kursni muvaffaqiyatli bitirgan
+ *       - `dropped_out` - O'qishdan bitimasdan chiqib ketgan
  *     tags: [Students]
  *     security:
  *       - bearerAuth: []
@@ -128,12 +146,18 @@ router.get("/all", studentController.getAllStudents);
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [active, inactive, blocked]
- *                 description: active - faol, inactive - o'qishni to'xtatgan, blocked - bloklangan
- *                 example: "inactive"
+ *                 enum: [active, inactive, blocked, graduated, dropped_out]
+ *                 description: |
+ *                   Student holati:
+ *                   - active: Faol
+ *                   - inactive: To'xtatilgan
+ *                   - blocked: Bloklangan
+ *                   - graduated: Bitirgan
+ *                   - dropped_out: Bitimasdan chiqib ketgan
+ *                 example: "active"
  *     responses:
  *       200:
- *         description: Student statusi o'zgartirildi
+ *         description: Student statusi muvaffaqiyatli o'zgartirildi
  *         content:
  *           application/json:
  *             schema:
@@ -144,22 +168,69 @@ router.get("/all", studentController.getAllStudents);
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: "Student o'qishni to'xtatdi (inactive)"
+ *                   example: "Student hozir o'qimoqda"
+ *                 status_description:
+ *                   type: string
+ *                   example: "O'qimoqda"
  *                 student:
  *                   type: object
  *                   properties:
  *                     id:
  *                       type: integer
+ *                       example: 25
  *                     name:
  *                       type: string
+ *                       example: "Akmal"
  *                     surname:
  *                       type: string
+ *                       example: "Karimov"
+ *                     username:
+ *                       type: string
+ *                       example: "akmal_karimov"
  *                     status:
  *                       type: string
+ *                       enum: [active, inactive, blocked, graduated, dropped_out]
+ *                       example: "active"
+ *                     group_id:
+ *                       type: integer
+ *                       example: 3
+ *                     group_name:
+ *                       type: string
+ *                       example: "English Beginner"
+ *                     course_status:
+ *                       type: string
+ *                       example: "in_progress"
+ *                 previous_status:
+ *                   type: string
+ *                   example: "active"
+ *                   description: Avvalgi status
  *       400:
- *         description: Noto'g'ri status
+ *         description: Noto'g'ri status yoki ma'lumotlar
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Status faqat 'active', 'inactive', 'blocked', 'graduated' yoki 'dropped_out' bo'lishi mumkin"
+ *                 valid_statuses:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["active", "inactive", "blocked", "graduated", "dropped_out"]
  *       404:
  *         description: Student topilmadi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Student topilmadi"
+ *       500:
+ *         description: Server xatosi
  */
 router.patch("/:student_id/status", protect, roleCheck(['admin']), studentController.updateStudentStatus);
 

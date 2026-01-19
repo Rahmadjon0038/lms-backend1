@@ -43,7 +43,15 @@
 **Filter parametrlari:**
 - `?teacher_id=1` - O'qituvchi bo'yicha
 - `?group_id=5` - Guruh bo'yicha
-- `?status=active` - Status bo'yicha (active/inactive/blocked)
+- `?status=active` - Status bo'yicha (active/inactive/blocked/graduated/dropped_out)
+
+**Mavjud statuslar:**
+- `active` - Faol (guruhga biriktirilishi mumkin)
+- `inactive` - O'qishni to'xtatgan (vaqtincha)
+- `blocked` - Bloklangan (admin tomonidan)
+
+- `graduated` - Kursni muvaffaqiyatli bitirgan
+- `dropped_out` - O'qishdan bitimasdan chiqib ketgan
 
 ---
 

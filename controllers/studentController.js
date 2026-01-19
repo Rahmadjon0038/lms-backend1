@@ -1,45 +1,81 @@
 const pool = require('../config/db');
 
-// 1. Student statusini o'zgartirish (active, inactive, blocked) - FAQAT ADMIN
+// 1. Student statusini o'zgartirish (active, inactive, blocked, graduated, dropped_out) - FAQAT ADMIN
 exports.updateStudentStatus = async (req, res) => {
     const { student_id } = req.params;
-    const { status } = req.body; // 'active', 'inactive', 'blocked'
+    const { status } = req.body; 
     
-    // Status validatsiya
-    const validStatuses = ['active', 'inactive', 'blocked'];
+    // Status validatsiya - barcha mumkin bo'lgan statuslar
+    const validStatuses = ['active', 'inactive', 'blocked', 'graduated', 'dropped_out'];
     if (!validStatuses.includes(status)) {
         return res.status(400).json({ 
-            message: "Status faqat 'active', 'inactive' yoki 'blocked' bo'lishi mumkin" 
+            message: "Status faqat 'active', 'inactive', 'blocked', 'graduated' yoki 'dropped_out' bo'lishi mumkin",
+            valid_statuses: validStatuses
         });
     }
 
     try {
-        const result = await pool.query(
-            `UPDATE users SET status = $1 WHERE id = $2 AND role = 'student' 
-             RETURNING id, name, surname, username, status`,
-            [status, student_id]
+        // Avval studentni tekshirish
+        const studentCheck = await pool.query(
+            'SELECT id, name, surname, status, group_id, course_status FROM users WHERE id = $1 AND role = $2',
+            [student_id, 'student']
         );
 
-        if (result.rows.length === 0) {
+        if (studentCheck.rows.length === 0) {
             return res.status(404).json({ message: "Student topilmadi" });
         }
 
+        const currentStudent = studentCheck.rows[0];
+
+        // Student statusini yangilash
+        const result = await pool.query(
+            `UPDATE users SET status = $1 WHERE id = $2 AND role = 'student' 
+             RETURNING id, name, surname, username, status, group_id, group_name, course_status`,
+            [status, student_id]
+        );
+
+        // Status o'zgarishiga mos xabarlar
         let message = '';
-        if (status === 'inactive') {
-            message = "Student o'qishni to'xtatdi (inactive)";
-        } else if (status === 'blocked') {
-            message = "Student bloklandi";
-        } else {
-            message = "Student faollashtirildi (active)";
+        let statusDescription = '';
+        
+        switch(status) {
+            case 'active':
+                message = "Student faollashtirildi";
+                statusDescription = "Faol";
+                break;
+            case 'inactive':
+                message = "Student o'qishni to'xtatdi (vaqtincha)";
+                statusDescription = "To'xtatilgan";
+                break;
+            case 'blocked':
+                message = "Student bloklandi";
+                statusDescription = "Bloklangan";
+                break;
+            case 'graduated':
+                message = "Student kursni muvaffaqiyatli bitirdi";
+                statusDescription = "Bitirgan";
+                break;
+            case 'dropped_out':
+                message = "Student o'qishdan bitimasdan chiqib ketdi";
+                statusDescription = "Chiqib ketgan";
+                break;
         }
 
         res.json({
             success: true,
             message: message,
-            student: result.rows[0]
+            status_description: statusDescription,
+            student: result.rows[0],
+            previous_status: currentStudent.status
         });
+        
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('Student statusini yangilashda xatolik:', err);
+        res.status(500).json({ 
+            success: false,
+            message: "Student statusini yangilashda xatolik",
+            error: err.message 
+        });
     }
 };
 

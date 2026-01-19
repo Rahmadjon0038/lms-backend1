@@ -673,6 +673,111 @@ const patchTeacher = async (req, res) => {
     }
 };
 
+// 12. Teacher ma'lumotlarini yangilash (sodda PATCH) - username va parolsiz
+const updateTeacherInfo = async (req, res) => {
+    const { teacherId } = req.params;
+    const {
+        name, surname, phone, phone2, subject_ids, certificate, age,
+        has_experience, experience_years, experience_place, available_times, work_days_hours
+    } = req.body;
+
+    try {
+        // Teacher mavjudligini tekshirish
+        const teacherExists = await pool.query(
+            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
+            [teacherId, 'teacher']
+        );
+
+        if (teacherExists.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: "Teacher topilmadi" 
+            });
+        }
+
+        const currentTeacher = teacherExists.rows[0];
+
+        // Subject IDs tekshirish (agar berilgan bo'lsa)
+        if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
+            const subjectsCheck = await pool.query(
+                'SELECT id, name FROM subjects WHERE id = ANY($1)',
+                [subject_ids]
+            );
+            
+            if (subjectsCheck.rows.length !== subject_ids.length) {
+                const foundIds = subjectsCheck.rows.map(s => s.id);
+                const missingIds = subject_ids.filter(id => !foundIds.includes(id));
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Ba'zi fanlar mavjud emas",
+                    missing_subject_ids: missingIds
+                });
+            }
+        }
+
+        // User ma'lumotlarini yangilash
+        const updateQuery = `
+            UPDATE users SET 
+                name = COALESCE($1, name),
+                surname = COALESCE($2, surname), 
+                phone = COALESCE($3, phone),
+                phone2 = COALESCE($4, phone2),
+                certificate = COALESCE($5, certificate),
+                age = COALESCE($6, age),
+                has_experience = COALESCE($7, has_experience),
+                experience_years = COALESCE($8, experience_years),
+                experience_place = COALESCE($9, experience_place),
+                available_times = COALESCE($10, available_times),
+                work_days_hours = COALESCE($11, work_days_hours)
+            WHERE id = $12 AND role = 'teacher'
+            RETURNING id, name, surname, username, phone, phone2,
+                     certificate, age, has_experience, experience_years, experience_place,
+                     available_times, work_days_hours, status, start_date, created_at
+        `;
+
+        const updatedTeacher = await pool.query(updateQuery, [
+            name, surname, phone, phone2, certificate, age,
+            has_experience, experience_years, experience_place, available_times, work_days_hours,
+            teacherId
+        ]);
+
+        // Fanlarni yangilash (agar berilgan bo'lsa)
+        if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
+            // Avvalgi fanlarni o'chirish
+            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1', [teacherId]);
+            
+            // Yangi fanlarni qo'shish
+            for (const subjectId of subject_ids) {
+                await pool.query(
+                    'INSERT INTO teacher_subjects (teacher_id, subject_id) VALUES ($1, $2)',
+                    [teacherId, subjectId]
+                );
+            }
+        }
+
+        // Teacher fanlarini olish
+        const teacherSubjects = await getTeacherSubjects(teacherId);
+        
+        res.json({
+            success: true,
+            message: `${currentTeacher.name} ${currentTeacher.surname} ning ma'lumotlari yangilandi`,
+            teacher: updatedTeacher.rows[0],
+            subjects: teacherSubjects,
+            subjects_count: teacherSubjects.length,
+            updated_fields: Object.keys(req.body).filter(key => req.body[key] !== undefined),
+            note: "Username va parolni yangilash mumkin emas"
+        });
+
+    } catch (err) {
+        console.error('Teacher ma\'lumotlarini yangilashda xatolik:', err);
+        res.status(500).json({ 
+            success: false,
+            message: "Teacher ma'lumotlarini yangilashda xatolik",
+            error: err.message 
+        });
+    }
+};
+
 module.exports = { 
     registerStudent, 
     registerTeacher, 
@@ -684,5 +789,6 @@ module.exports = {
     terminateTeacher,
     reactivateTeacher,
     deleteTeacher,
-    patchTeacher
+    patchTeacher,
+    updateTeacherInfo
 };
