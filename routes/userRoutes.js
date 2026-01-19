@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -532,11 +532,14 @@ router.patch('/teachers/:teacherId/reactivate', protect, roleCheck(['admin']), r
  */
 router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeacher);
 
+// Teacher ma'lumotlarini qisman yangilash (eski endpoint)
+router.patch('/teachers/:teacherId', protect, roleCheck(['admin']), patchTeacher);
+
 /**
  * @swagger
- * /api/users/teachers/{teacherId}:
- *   put:
- *     summary: Teacher ma'lumotlarini to'liq yangilash
+ * /api/users/teachers/{teacherId}/update:
+ *   patch:
+ *     summary: Teacher ma'lumotlarini yangilash (sodda endpoint)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -546,9 +549,7 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *         required: true
  *         schema:
  *           type: integer
- *         description: Teacher ID
  *     requestBody:
- *       required: true
  *       content:
  *         application/json:
  *           schema:
@@ -558,10 +559,6 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *                 type: string
  *               surname:
  *                 type: string
- *               username:
- *                 type: string
- *               password:
- *                 type: string
  *               phone:
  *                 type: string
  *               phone2:
@@ -570,8 +567,6 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *                 type: array
  *                 items:
  *                   type: integer
- *                 example: [1, 2, 3]
- *                 description: "Teacher fanlarining ID lari (array ko'rinishida)"
  *               certificate:
  *                 type: string
  *               age:
@@ -588,53 +583,12 @@ router.delete('/teachers/:teacherId', protect, roleCheck(['admin']), deleteTeach
  *                 type: string
  *     responses:
  *       200:
- *         description: Teacher ma'lumotlari yangilandi
- *       404:
- *         description: Teacher topilmadi
+ *         description: Success
  *       400:
- *         description: Username band yoki subject mavjud emas
- */
-/**
- * @swagger
- * /api/users/teachers/{teacherId}:
- *   patch:
- *     summary: Teacher ma'lumotlarini qisman yangilash
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: teacherId
- *         required: true
- *         schema:
- *           type: integer
- *         description: Teacher ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               surname:
- *                 type: string
- *               phone:
- *                 type: string
- *               available_times:
- *                 type: string
- *               work_days_hours:
- *                 type: string
-             description: 'Faqat yangilanishi kerak bo\'lgan maydonlarni yuboring. subject_ids array ko\'rinishida yuboriladi. ESLATMA: username va parolni yangilab bo\'lmaydi!'
- *     responses:
- *       200:
- *         description: Teacher ma'lumotlari qisman yangilandi
+ *         description: Error
  *       404:
- *         description: Teacher topilmadi
- *       400:
- *         description: Yangilanishi kerak bo'lgan maydonlar ko'rsatilmagan
+ *         description: Not Found
  */
-router.patch('/teachers/:teacherId', protect, roleCheck(['admin']), patchTeacher);
+router.patch('/teachers/:teacherId/update', protect, roleCheck(['admin']), updateTeacherInfo);
 
 module.exports = router;

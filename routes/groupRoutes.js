@@ -221,7 +221,7 @@ router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroup
  *                       type: number
  *                       example: 500000
  *       400:
- *         description: Bu student allaqachon guruhda
+ *         description: Student allaqachon guruhda yoki student faol emas. Faqat faol (active) statusdagi studentlarni qo'shish mumkin
  *       404:
  *         description: Guruh topilmadi
  */
@@ -454,7 +454,7 @@ router.delete(
  *                 updated_student:
  *                   type: object
  *       400:
- *         description: Noto'g'ri ma'lumot yoki guruh faol emas
+ *         description: Student faol emas, noto'g'ri ma'lumot yoki guruh faol emas. Faqat faol (active) statusdagi studentlarni o'tkazish mumkin
  *       404:
  *         description: Student yoki guruh topilmadi
  */

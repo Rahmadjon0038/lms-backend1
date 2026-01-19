@@ -447,6 +447,37 @@ exports.removeStudentFromGroup = async (req, res) => {
 exports.adminAddStudentToGroup = async (req, res) => {
     const { student_id, group_id } = req.body;
     try {
+        // Student statusini tekshirish
+        const studentCheck = await pool.query(
+            'SELECT id, name, surname, status FROM users WHERE id = $1 AND role = $2',
+            [student_id, 'student']
+        );
+
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Student topilmadi" });
+        }
+
+        const student = studentCheck.rows[0];
+        
+        // Student faol bo'lmasa guruhga qo'shishni taqiqlash
+        if (student.status !== 'active') {
+            const statusNames = {
+                'inactive': 'o\'qishni to\'xtatgan',
+                'blocked': 'bloklangan',
+                'studying': 'o\'qimoqda',
+                'graduated': 'bitirgan',
+                'dropped_out': 'bitimasdan chiqib ketgan'
+            };
+            
+            return res.status(400).json({ 
+                success: false,
+                message: `${student.name} ${student.surname} ni guruhga qo'shib bo'lmaydi. Student holati: ${statusNames[student.status] || student.status}`,
+                student_status: student.status,
+                allowed_status: 'active',
+                note: "Faqat faol (active) studentlarni guruhga qo'shish mumkin"
+            });
+        }
+
         // Guruh ma'lumotlarini olish
         const groupRes = await pool.query(
             `SELECT g.id, g.name as group_name, g.price, g.teacher_id, g.status, u.name || ' ' || u.surname as teacher_name 
@@ -802,7 +833,7 @@ exports.changeStudentGroup = async (req, res) => {
     try {
         // Studentni tekshirish
         const studentCheck = await pool.query(
-            'SELECT id, name, surname, group_id, group_name FROM users WHERE id = $1 AND role = $2',
+            'SELECT id, name, surname, status, group_id, group_name FROM users WHERE id = $1 AND role = $2',
             [student_id, 'student']
         );
 
@@ -811,6 +842,28 @@ exports.changeStudentGroup = async (req, res) => {
         }
 
         const student = studentCheck.rows[0];
+        
+        // Student faol bo'lmasa guruh o'zgartirishni taqiqlash
+        if (student.status !== 'active') {
+            const statusNames = {
+                'inactive': 'o\'qishni to\'xtatgan',
+                'blocked': 'bloklangan',
+                'studying': 'o\'qimoqda',
+                'graduated': 'bitirgan',
+                'dropped_out': 'bitimasdan chiqib ketgan'
+            };
+            
+            return res.status(400).json({ 
+                success: false,
+                message: `${student.name} ${student.surname} ni boshqa guruhga o'tkazib bo'lmaydi. Student holati: ${statusNames[student.status] || student.status}`,
+                student_status: student.status,
+                allowed_status: 'active',
+                note: "Faqat faol (active) studentlarni guruh o'zgartirish mumkin. Agar kerak bo'lsa, avval studentni faol holatiga o'tkazing.",
+                current_group: student.group_name,
+                allowed_action: "Faqat guruhdan chiqarish mumkin"
+            });
+        }
+
         const oldGroupId = student.group_id;
 
         // Yangi guruhni tekshirish
