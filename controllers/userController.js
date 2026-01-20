@@ -139,7 +139,25 @@ const registerTeacher = async (req, res) => {
 const loginStudent = async (req, res) => {
     const { username, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        const result = await pool.query(
+            `SELECT u.*, 
+                    g.id as group_id,
+                    g.name as group_name,
+                    g.status as group_status,
+                    r.room_number,
+                    r.capacity as room_capacity,
+                    r.has_projector,
+                    s.name as subject_name,
+                    CONCAT(t.name, ' ', t.surname) as teacher_name
+             FROM users u
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
+             LEFT JOIN groups g ON sg.group_id = g.id
+             LEFT JOIN rooms r ON g.room_id = r.id
+             LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN users t ON g.teacher_id = t.id
+             WHERE u.username = $1`, 
+            [username]
+        );
         const user = result.rows[0];
 
         if (user && (await bcrypt.compare(password, user.password))) {
@@ -150,7 +168,20 @@ const loginStudent = async (req, res) => {
             res.json({
                 accessToken,
                 refreshToken,
-                user: { id: user.id, name: user.name, role: user.role }
+                user: { 
+                    id: user.id, 
+                    name: user.name, 
+                    surname: user.surname,
+                    role: user.role,
+                    group_id: user.group_id,
+                    group_name: user.group_name,
+                    group_status: user.group_status,
+                    room_number: user.room_number,
+                    room_capacity: user.room_capacity,
+                    has_projector: user.has_projector,
+                    subject_name: user.subject_name,
+                    teacher_name: user.teacher_name
+                }
             });
         } else {
             res.status(401).json({ message: "Username yoki parol xato!" });
@@ -193,10 +224,25 @@ const refreshAccessToken = async (req, res) => {
 const getProfile = async (req, res) => {
     try {
         const user = await pool.query(
-            `SELECT id, name, surname, username, role, status, phone, phone2, father_name, father_phone, address, age, 
-                    subject, start_date, end_date, certificate, has_experience, experience_years, experience_place, 
-                    available_times, work_days_hours, created_at 
-             FROM users WHERE id = $1`,
+            `SELECT u.id, u.name, u.surname, u.username, u.role, u.status, u.phone, u.phone2, u.father_name, u.father_phone, u.address, u.age, 
+                    u.subject, u.start_date, u.end_date, u.certificate, u.has_experience, u.experience_years, u.experience_place, 
+                    u.available_times, u.work_days_hours, u.created_at,
+                    -- Guruh va xona ma'lumotlari (faqat student uchun)
+                    g.id as group_id,
+                    g.name as group_name,
+                    g.status as group_status,
+                    r.room_number,
+                    r.capacity as room_capacity,
+                    r.has_projector,
+                    s.name as subject_name,
+                    CONCAT(t.name, ' ', t.surname) as teacher_name
+             FROM users u
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
+             LEFT JOIN groups g ON sg.group_id = g.id
+             LEFT JOIN rooms r ON g.room_id = r.id
+             LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN users t ON g.teacher_id = t.id
+             WHERE u.id = $1`,
             [req.user.id]
         );
         res.json(user.rows[0]);

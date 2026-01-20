@@ -168,6 +168,10 @@ exports.getAllStudents = async (req, res) => {
       g.class_status as group_class_status,
       g.class_start_date,
       t.id as teacher_id,
+      -- Xona ma'lumotlari
+      r.room_number,
+      r.capacity as room_capacity,
+      r.has_projector,
       -- Student-guruh bog'lanishi
       sg.joined_at as group_joined_at,
       sg.status as student_group_status
@@ -176,6 +180,7 @@ exports.getAllStudents = async (req, res) => {
     LEFT JOIN groups g ON sg.group_id = g.id
     LEFT JOIN users t ON g.teacher_id = t.id
     LEFT JOIN subjects s ON g.subject_id = s.id
+    LEFT JOIN rooms r ON g.room_id = r.id
     WHERE u.role = 'student' ${whereClause}
     ORDER BY u.name, u.surname, sg.joined_at DESC;
   `;
@@ -224,11 +229,15 @@ exports.getMyGroups = async (req, res) => {
                 sg.joined_at,
                 sg.status as student_group_status,
                 CONCAT(t.name, ' ', t.surname) as teacher_name,
-                s.name as subject_name
+                s.name as subject_name,
+                r.room_number,
+                r.capacity as room_capacity,
+                r.has_projector
              FROM student_groups sg
              JOIN groups g ON sg.group_id = g.id
              LEFT JOIN users t ON g.teacher_id = t.id
              LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN rooms r ON g.room_id = r.id
              WHERE sg.student_id = $1
              ORDER BY sg.joined_at DESC`,
             [student_id]

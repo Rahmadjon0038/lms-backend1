@@ -16,6 +16,7 @@ exports.deleteGroup = async (req, res) => {
 const pool = require('../config/db');
 const crypto = require('crypto');
 const { getTeacherSubjects } = require('../models/teacherSubjectModel');
+const { checkRoomAvailability } = require('../models/roomModel');
 
 // Tasodifiy 6-8 belgili kod yaratish (Masalan: GR-A1B2C3)
 const generateUniqueCode = () => {
@@ -201,7 +202,7 @@ const timeToMinutes = (timeStr) => {
 
 // 1. Guruh yaratish (Teacher-subject va schedule conflict validation bilan)
 exports.createGroup = async (req, res) => {
-    const { name, teacher_id, start_date, schedule, subject_id, price, status } = req.body;
+    const { name, teacher_id, start_date, schedule, subject_id, price, status, room_id } = req.body;
     const unique_code = generateUniqueCode();
     
     try {
@@ -254,9 +255,23 @@ exports.createGroup = async (req, res) => {
             }
         }
 
+        // Xona conflict tekshirish
+        if (room_id && schedule) {
+            const roomCheck = await checkRoomAvailability(room_id, schedule);
+            if (!roomCheck.isAvailable) {
+                return res.status(400).json({
+                    message: "Bu xona tanlangan kun va vaqtda band!",
+                    room_id,
+                    conflict_group: roomCheck.conflictGroup,
+                    new_schedule: schedule,
+                    suggestion: "Boshqa xona yoki vaqt tanlang"
+                });
+            }
+        }
+
         const result = await pool.query(
-            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price, status) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price, status, room_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
             [
                 name, 
                 teacher_id, 
@@ -265,7 +280,8 @@ exports.createGroup = async (req, res) => {
                 schedule ? JSON.stringify(schedule) : null,
                 subject_id,
                 price,
-                status || 'draft' // Default status
+                status || 'draft', // Default status
+                room_id || null
             ]
         );
         res.status(201).json({ success: true, group: result.rows[0] });
@@ -279,13 +295,14 @@ exports.createGroup = async (req, res) => {
 // 2. Guruhni tahrirlash (Teacher-subject va schedule conflict validation bilan)
 exports.updateGroup = async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, teacher_id, is_active, schedule, start_date, price, subject_id } = req.body;
+    const { name, teacher_id, is_active, schedule, start_date, price, subject_id, room_id } = req.body;
     
     try {
         // Bo'sh string va 0 qiymatlarni null ga o'zgartirish
         const processedTeacherId = (teacher_id === 0 || teacher_id === "" || teacher_id === null) ? null : teacher_id;
         const processedSubjectId = (subject_id === 0 || subject_id === "" || subject_id === null) ? null : subject_id;
         const processedStartDate = (start_date === "" || start_date === null) ? null : start_date;
+        const processedRoomId = (room_id === 0 || room_id === "" || room_id === null) ? null : room_id;
         
         // Teacher va subject validation - agar ikkalasi ham berilgan bo'lsa
         if (processedTeacherId && processedSubjectId) {
@@ -335,6 +352,20 @@ exports.updateGroup = async (req, res) => {
                 });
             }
         }
+
+        // Xona conflict tekshirish
+        if (processedRoomId && schedule) {
+            const roomCheck = await checkRoomAvailability(processedRoomId, schedule, id);
+            if (!roomCheck.isAvailable) {
+                return res.status(400).json({
+                    message: "Bu xona tanlangan kun va vaqtda band!",
+                    room_id: processedRoomId,
+                    conflict_group: roomCheck.conflictGroup,
+                    new_schedule: schedule,
+                    suggestion: "Boshqa xona yoki vaqt tanlang"
+                });
+            }
+        }
         
         const result = await pool.query(
             `UPDATE groups SET 
@@ -344,9 +375,10 @@ exports.updateGroup = async (req, res) => {
                 schedule = COALESCE($4, schedule),
                 start_date = COALESCE($5, start_date),
                 price = COALESCE($6, price),
-                subject_id = $7
-             WHERE id = $8 RETURNING *`,
-            [name, processedTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, processedSubjectId, id]
+                subject_id = $7,
+                room_id = $8
+             WHERE id = $9 RETURNING *`,
+            [name, processedTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, processedSubjectId, processedRoomId, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
         res.json({ success: true, group: result.rows[0] });
@@ -649,6 +681,9 @@ exports.getAllGroups = async (req, res) => {
     let query = `SELECT g.*, 
                         CONCAT(u.name, ' ', u.surname) as teacher_name,
                         s.name as subject_name,
+                        r.room_number,
+                        r.capacity as room_capacity,
+                        r.has_projector,
                         -- Teacher-ning barcha fanlarini olish
                         COALESCE(
                             (SELECT json_agg(
@@ -672,6 +707,7 @@ exports.getAllGroups = async (req, res) => {
                  FROM groups g 
                  LEFT JOIN users u ON g.teacher_id = u.id 
                  LEFT JOIN subjects s ON g.subject_id = s.id
+                 LEFT JOIN rooms r ON g.room_id = r.id
                  WHERE 1=1`;
     const params = [];
 
@@ -725,10 +761,15 @@ exports.getGroupById = async (req, res) => {
                    u.experience_place as teacher_experience_place,
                    u.available_times as teacher_available_times, 
                    u.work_days_hours as teacher_work_days_hours,
-                   s.name as subject_name
+                   s.name as subject_name,
+                   r.room_number,
+                   r.capacity as room_capacity,
+                   r.has_projector,
+                   r.description as room_description
             FROM groups g 
             LEFT JOIN users u ON g.teacher_id = u.id 
             LEFT JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN rooms r ON g.room_id = r.id
             WHERE g.id = $1`, [id]);
 
         if (group.rows.length === 0) {
