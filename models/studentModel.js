@@ -42,14 +42,14 @@ const createStudentAdditionalTables = async () => {
       group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
       teacher_id INTEGER REFERENCES users(id), -- O'qituvchi
       month_name VARCHAR(20) NOT NULL, -- Format: '2026-01'
-      daily_records JSON DEFAULT '[]', -- [1,0,1,1,0,...] 31 tagacha kun
+      daily_records JSONB DEFAULT '{}', -- {"2026-01-15": 1, "2026-01-17": 0, ...}
       total_classes INTEGER DEFAULT 0, -- Jami darslar soni
       attended_classes INTEGER DEFAULT 0, -- Qatnashgan darslar
       attendance_percentage DECIMAL(5, 2) DEFAULT 0, -- Foiz
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       created_by INTEGER REFERENCES users(id), -- Kim yaratgan (teacher/admin)
-      UNIQUE(student_id, month_name)
+      UNIQUE(student_id, group_id, month_name)
     );
   `;
   try {
@@ -139,10 +139,11 @@ const createStudentAdditionalTables = async () => {
         RETURNS TRIGGER AS $$
         BEGIN
           -- Daily records dan attended_classes ni hisoblash
+          -- daily_records is JSONB object like {"2024-01-01": 1, "2024-01-02": 0}
           IF NEW.daily_records IS NOT NULL THEN
             SELECT COUNT(*) INTO NEW.attended_classes 
-            FROM json_array_elements_text(NEW.daily_records) AS day
-            WHERE day::INTEGER = 1;
+            FROM jsonb_each(NEW.daily_records) AS record
+            WHERE record.value::TEXT::INTEGER = 1;
           ELSE
             NEW.attended_classes = 0;
           END IF;
