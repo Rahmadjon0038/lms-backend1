@@ -190,3 +190,71 @@ exports.checkAvailability = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// 7. Xonaning to'liq jadvalini olish (barcha guruhlar va ularning jadvallari)
+exports.getRoomSchedule = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Noto'g'ri ID!" });
+    }
+
+    const room = await getRoomById(id);
+    if (!room) {
+      return res.status(404).json({ message: "Xona topilmadi" });
+    }
+
+    // Xonada dars o'tadigan barcha guruhlarni olish
+    const pool = require('../config/db');
+    const groupsResult = await pool.query(`
+      SELECT 
+        g.id,
+        g.name,
+        g.schedule,
+        g.status,
+        g.price,
+        s.name as subject_name,
+        CONCAT(u.name, ' ', u.surname) as teacher_name,
+        u.phone as teacher_phone,
+        -- Guruhda nechta talaba borligini hisoblash
+        COALESCE(
+          (SELECT COUNT(*)::integer
+           FROM student_groups sg
+           WHERE sg.group_id = g.id AND sg.status = 'active'),
+          0
+        ) as student_count
+      FROM groups g
+      LEFT JOIN subjects s ON g.subject_id = s.id
+      LEFT JOIN users u ON g.teacher_id = u.id
+      WHERE g.room_id = $1
+      AND (g.status = 'active' OR g.status = 'draft')
+      ORDER BY g.created_at DESC
+    `, [id]);
+
+    res.json({
+      success: true,
+      room: {
+        id: room.id,
+        room_number: room.room_number,
+        capacity: room.capacity,
+        has_projector: room.has_projector,
+        description: room.description,
+        is_available: room.is_available
+      },
+      groups_count: groupsResult.rows.length,
+      groups: groupsResult.rows.map(group => ({
+        id: group.id,
+        name: group.name,
+        subject_name: group.subject_name,
+        teacher_name: group.teacher_name,
+        teacher_phone: group.teacher_phone,
+        schedule: group.schedule,
+        status: group.status,
+        price: group.price,
+        student_count: group.student_count
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

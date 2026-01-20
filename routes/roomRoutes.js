@@ -6,7 +6,8 @@ const {
   getRoomDetails,
   updateRoom,
   deleteRoom,
-  checkAvailability
+  checkAvailability,
+  getRoomSchedule
 } = require('../controllers/roomController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
@@ -255,5 +256,76 @@ router.delete('/:id', protect, roleCheck(['admin']), deleteRoom);
  *                   description: Agar xona band bo'lsa, to'qnashgan guruh ma'lumotlari
  */
 router.post('/:id/check-availability', protect, checkAvailability);
+
+/**
+ * @swagger
+ * /api/rooms/{id}/schedule:
+ *   get:
+ *     summary: Xonaning to'liq jadvalini olish (barcha guruhlar va ularning jadvallari)
+ *     tags: [Rooms]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Xona ID
+ *     responses:
+ *       200:
+ *         description: Xona jadvali va guruhlar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 room:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     room_number:
+ *                       type: string
+ *                     capacity:
+ *                       type: integer
+ *                     has_projector:
+ *                       type: boolean
+ *                     description:
+ *                       type: string
+ *                 groups_count:
+ *                   type: integer
+ *                 groups:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       name:
+ *                         type: string
+ *                       subject_name:
+ *                         type: string
+ *                       teacher_name:
+ *                         type: string
+ *                       schedule:
+ *                         type: object
+ *                         properties:
+ *                           days:
+ *                             type: array
+ *                             items:
+ *                               type: string
+ *                           time:
+ *                             type: string
+ *                       status:
+ *                         type: string
+ *                       student_count:
+ *                         type: integer
+ *       404:
+ *         description: Xona topilmadi
+ */
+router.get('/:id/schedule', protect, getRoomSchedule);
 
 module.exports = router;
