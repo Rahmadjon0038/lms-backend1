@@ -1,65 +1,61 @@
 const express = require('express');
 const router = express.Router();
-const { protect, protectAdmin } = require('../middlewares/authMiddleware');
+const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 const {
-    getTeacherGroups,
-    getGroupAttendance,
-    updateStudentAttendance,
-    getAttendanceStats,
-    getPoorAttendanceStudents,
-    getAllGroupsAttendance,
-    getAllStudentsAttendance
+  getGroupsForAttendance,
+  createOrGetTodaysLesson,
+  saveLessonAttendance,
+  getMonthlyAttendanceGrid,
+  getGroupLessons,
+  markAttendanceByGroupDate
 } = require('../controllers/attendanceController');
 
 /**
  * @swagger
  * components:
  *   schemas:
- *     Attendance:
+ *     Lesson:
  *       type: object
  *       properties:
  *         id:
  *           type: integer
- *         student_id:
- *           type: integer
  *         group_id:
  *           type: integer
- *         teacher_id:
- *           type: integer
- *         month_name:
+ *         date:
  *           type: string
- *           example: "2026-01"
- *         daily_records:
+ *           format: date
+ *         students:
  *           type: array
  *           items:
- *             type: integer
- *             enum: [0, 1]
- *           description: Kunlik davomat [1=kelgan, 0=kelmagan]
- *           example: [1, 1, 0, 1, 1, 1, 0, 1, 1, 1]
- *         total_classes:
+ *             $ref: '#/components/schemas/StudentAttendance'
+ *     
+ *     StudentAttendance:
+ *       type: object
+ *       properties:
+ *         student_id:
  *           type: integer
- *           description: Jami darslar soni
- *         attended_classes:
- *           type: integer
- *           description: Qatnashgan darslar soni
- *         attendance_percentage:
- *           type: number
- *           description: Davomat foizi
+ *         name:
+ *           type: string
+ *         surname:
+ *           type: string
+ *         status:
+ *           type: string
+ *           enum: [present, absent]
+ *           description: "present=kelgan, absent=kelmagan"
  */
 
 /**
  * @swagger
- * /api/attendance/teacher/groups:
+ * /api/attendance/groups:
  *   get:
- *     summary: O'qituvchining o'z guruhlarini ko'rish (TEACHER)
- *     description: Teacher o'z guruhlari ro'yxatini va har guruhda nechta student borligini ko'radi
+ *     summary: Davomat uchun guruhlar ro'yxati
  *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: O'qituvchi guruhlari
+ *         description: Guruhlar ro'yxati
  *         content:
  *           application/json:
  *             schema:
@@ -67,32 +63,29 @@ const {
  *               properties:
  *                 success:
  *                   type: boolean
- *                 message:
- *                   type: string
- *                 teacher_id:
- *                   type: integer
- *                 groups:
+ *                 data:
  *                   type: array
  *                   items:
  *                     type: object
  *                     properties:
- *                       group_id:
+ *                       id:
  *                         type: integer
- *                       group_name:
+ *                       name:
  *                         type: string
  *                       subject_name:
+ *                         type: string
+ *                       teacher_name:
  *                         type: string
  *                       students_count:
  *                         type: integer
  */
-router.get('/teacher/groups', protect, roleCheck(['teacher']), getTeacherGroups);
+router.get('/groups', protect, roleCheck(['admin', 'teacher']), getGroupsForAttendance);
 
 /**
  * @swagger
- * /api/attendance/group/{group_id}:
- *   get:
- *     summary: Guruh studentlarining davomat ma'lumotlari
- *     description: Teacher o'z guruhining yoki Admin istalgan guruhning studentlari davomatini ko'radi
+ * /api/attendance/lesson/{group_id}:
+ *   post:
+ *     summary: Bugungi kun uchun dars yaratish yoki ochish (New Attendance tugmasi)
  *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
@@ -102,15 +95,10 @@ router.get('/teacher/groups', protect, roleCheck(['teacher']), getTeacherGroups)
  *         required: true
  *         schema:
  *           type: integer
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *         description: Oy (default - joriy oy)
+ *         description: Guruh ID
  *     responses:
  *       200:
- *         description: Guruh davomat ma'lumotlari
+ *         description: Dars ma'lumotlari va talabalar ro'yxati
  *         content:
  *           application/json:
  *             schema:
@@ -118,151 +106,89 @@ router.get('/teacher/groups', protect, roleCheck(['teacher']), getTeacherGroups)
  *               properties:
  *                 success:
  *                   type: boolean
- *                 message:
- *                   type: string
- *                 month:
- *                   type: string
- *                 group:
- *                   type: object
- *                   properties:
- *                     id:
- *                       type: integer
- *                     group_name:
- *                       type: string
- *                     subject_name:
- *                       type: string
- *                     teacher_name:
- *                       type: string
- *                 students:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       student_id:
- *                         type: integer
- *                       student_name:
- *                         type: string
- *                       phone:
- *                         type: string
- *                       phone2:
- *                         type: string
- *                       father_name:
- *                         type: string
- *                       father_phone:
- *                         type: string
- *                       address:
- *                         type: string
- *                       daily_records:
- *                         type: string
- *                         description: JSON array string
- *                       total_classes:
- *                         type: integer
- *                       attended_classes:
- *                         type: integer
- *                       attendance_percentage:
- *                         type: number
+ *                 data:
+ *                   $ref: '#/components/schemas/Lesson'
+ *       403:
+ *         description: Ruxsat yo'q
+ *       404:
+ *         description: Guruh topilmadi
  */
-router.get('/group/:group_id', protect, roleCheck(['teacher', 'admin']), getGroupAttendance);
+router.post('/lesson/:group_id', protect, roleCheck(['admin', 'teacher']), createOrGetTodaysLesson);
 
 /**
  * @swagger
- * /api/attendance/student/{student_id}:
+ * /api/attendance/save:
  *   put:
- *     summary: Student davomatini yangilash
- *     description: Teacher o'z guruhining yoki Admin istalgan studentning davomatini yangilaydi
+ *     summary: Dars davomatini saqlash
  *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: student_id
- *         required: true
- *         schema:
- *           type: integer
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - month_name
- *               - daily_records
  *             properties:
- *               month_name:
- *                 type: string
- *                 example: "2026-01"
- *               daily_records:
+ *               lesson_id:
+ *                 type: integer
+ *                 description: Dars ID
+ *               attendance_data:
  *                 type: array
  *                 items:
- *                   type: integer
- *                   enum: [0, 1]
- *                 example: [1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1]
- *                 description: Oyning har kuniga 1 (kelgan) yoki 0 (kelmagan)
- *               total_classes:
- *                 type: integer
- *                 example: 12
- *                 description: Shu oyda jami o'tilgan darslar soni
+ *                   type: object
+ *                   properties:
+ *                     student_id:
+ *                       type: integer
+ *                     status:
+ *                       type: string
+ *                       enum: [present, absent]
+ *                 description: "Talabalarning attendance ma'lumotlari"
  *     responses:
  *       200:
- *         description: Davomat yangilandi
+ *         description: Davomat muvaffaqiyatli saqlandi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Noto'g'ri ma'lumot
  *       403:
  *         description: Ruxsat yo'q
  *       404:
- *         description: Student topilmadi
+ *         description: Dars topilmadi
  */
-router.put('/student/:student_id', protect, roleCheck(['teacher', 'admin']), updateStudentAttendance);
+router.put('/save', protect, roleCheck(['admin', 'teacher']), saveLessonAttendance);
 
 /**
  * @swagger
- * /api/attendance/stats:
+ * /api/attendance/monthly/{group_id}:
  *   get:
- *     summary: Oylik davomat statistikasi (ADMIN)
- *     description: Barcha yoki malum guruh uchun davomat statistikasini ko'rish
+ *     summary: Guruh uchun oylik davomat jadvali ko'rish
  *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *       - in: query
+ *       - in: path
  *         name: group_id
+ *         required: true
  *         schema:
  *           type: integer
- *         description: Malum guruh uchun filter
- *     responses:
- *       200:
- *         description: Davomat statistikasi
- */
-router.get('/stats', protect, roleCheck(['admin']), getAttendanceStats);
-
-/**
- * @swagger
- * /api/attendance/poor-attendance:
- *   get:
- *     summary: Ko'p dars qoldirayotgan studentlar (ADMIN)
- *     description: Belgilangan foizdan kam davomat qilayotgan studentlarni topish
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     parameters:
+ *         description: Guruh ID
  *       - in: query
- *         name: month_name
+ *         name: month
  *         schema:
  *           type: string
+ *         description: "Oy (YYYY-MM format). Masalan: 2026-01"
  *         example: "2026-01"
- *       - in: query
- *         name: threshold
- *         schema:
- *           type: integer
- *         example: 60
- *         description: Foiz chegarasi (default 60%)
  *     responses:
  *       200:
- *         description: Yomon davomat studentlar ro'yxati
+ *         description: Oylik davomat jadvali
  *         content:
  *           application/json:
  *             schema:
@@ -270,170 +196,176 @@ router.get('/stats', protect, roleCheck(['admin']), getAttendanceStats);
  *               properties:
  *                 success:
  *                   type: boolean
- *                 message:
- *                   type: string
- *                 month:
- *                   type: string
- *                 threshold:
- *                   type: integer
- *                 count:
- *                   type: integer
- *                 students:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       student_id:
- *                         type: integer
- *                       student_name:
- *                         type: string
- *                       phone:
- *                         type: string
- *                       father_name:
- *                         type: string
- *                       father_phone:
- *                         type: string
- *                       group_name:
- *                         type: string
- *                       subject_name:
- *                         type: string
- *                       teacher_name:
- *                         type: string
- *                       attendance_percentage:
- *                         type: number
- *                       missed_classes:
- *                         type: integer
- */
-router.get('/poor-attendance', protect, roleCheck(['admin']), getPoorAttendanceStudents);
-
-/**
- * @swagger
- * /api/attendance/all-groups:
- *   get:
- *     summary: Barcha guruhlar davomati (ADMIN)
- *     description: Barcha guruhlarning davomat statistikasini ko'rish
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *     responses:
- *       200:
- *         description: Barcha guruhlar davomati
- */
-router.get('/all-groups', protect, roleCheck(['admin']), getAllGroupsAttendance);
-
-/**
- * @swagger
- * /api/attendance/all-students:
- *   get:
- *     summary: Barcha studentlar davomati (filter bilan) (ADMIN)
- *     description: Admin uchun barcha studentlarni ko'rish va ularning davomatini boshqarish. Subject, teacher va search filterlari bilan.
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *         description: Oy (default - joriy oy)
- *       - in: query
- *         name: subject_id
- *         schema:
- *           type: integer
- *         example: 1
- *         description: Fan bo'yicha filter
- *       - in: query
- *         name: teacher_id
- *         schema:
- *           type: integer
- *         example: 3
- *         description: O'qituvchi bo'yicha filter
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         example: "Akmal"
- *         description: Ism, familiya yoki telefon raqami bo'yicha qidiruv
- *     responses:
- *       200:
- *         description: Barcha studentlar davomat ma'lumotlari
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 month:
- *                   type: string
- *                 summary:
+ *                 data:
  *                   type: object
  *                   properties:
- *                     total_students:
- *                       type: integer
- *                     students_with_attendance:
- *                       type: integer
- *                     average_percentage:
- *                       type: number
- *                     good_attendance:
- *                       type: integer
- *                     poor_attendance:
- *                       type: integer
- *                 filters:
- *                   type: object
- *                   properties:
- *                     subject_id:
- *                       type: integer
- *                     teacher_id:
- *                       type: integer
- *                     search:
+ *                     group:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                         name:
+ *                           type: string
+ *                         subject_name:
+ *                           type: string
+ *                         teacher_name:
+ *                           type: string
+ *                     lesson_dates:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                         format: date
+ *                       description: "Oy ichidagi barcha dars kunlari"
+ *                     students:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           student_id:
+ *                             type: integer
+ *                           name:
+ *                             type: string
+ *                           surname:
+ *                             type: string
+ *                           daily_attendance:
+ *                             type: object
+ *                             description: "Kunlar bo'yicha davomat (present/absent/null)"
+ *                     month:
  *                       type: string
- *                 count:
- *                   type: integer
- *                 students:
+ *                       example: "2026-01"
+ *       403:
+ *         description: Ruxsat yo'q
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.get('/monthly/:group_id', protect, roleCheck(['admin', 'teacher']), getMonthlyAttendanceGrid);
+
+/**
+ * @swagger
+ * /api/attendance/lessons/{group_id}:
+ *   get:
+ *     summary: Guruhning barcha darslarini ko'rish
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: group_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *       - in: query
+ *         name: start_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: "Boshlang'ich sana"
+ *       - in: query
+ *         name: end_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: "Tugash sanasi"
+ *     responses:
+ *       200:
+ *         description: Darslar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
  *                   type: array
  *                   items:
  *                     type: object
  *                     properties:
- *                       student_id:
+ *                       id:
  *                         type: integer
- *                       student_name:
+ *                         description: "Dars ID"
+ *                       date:
  *                         type: string
- *                       phone:
- *                         type: string
- *                       phone2:
- *                         type: string
- *                       father_name:
- *                         type: string
- *                       father_phone:
- *                         type: string
- *                       address:
- *                         type: string
- *                       group_name:
- *                         type: string
- *                       subject_name:
- *                         type: string
- *                       teacher_name:
- *                         type: string
- *                       daily_records:
- *                         type: string
- *                         description: JSON array string
- *                       total_classes:
+ *                         format: date
+ *                       total_students:
  *                         type: integer
- *                       attended_classes:
+ *                       present_count:
  *                         type: integer
- *                       attendance_percentage:
- *                         type: number
+ *                       absent_count:
+ *                         type: integer
+ *       403:
+ *         description: Ruxsat yo'q
+ *       404:
+ *         description: Guruh topilmadi
  */
-router.get('/all-students', protect, roleCheck(['admin']), getAllStudentsAttendance);
+router.get('/lessons/:group_id', protect, roleCheck(['admin', 'teacher']), getGroupLessons);
+
+/**
+ * @swagger
+ * /api/attendance/mark-simple:
+ *   put:
+ *     summary: Oddiy davomat belgilash (lesson_id kerak emas)
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               group_id:
+ *                 type: integer
+ *                 description: Guruh ID
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 description: "Dars sanasi (YYYY-MM-DD)"
+ *                 example: "2026-01-21"
+ *               attendance_data:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     student_id:
+ *                       type: integer
+ *                     status:
+ *                       type: string
+ *                       enum: [present, absent]
+ *                 description: "Talabalarning davomat ma'lumotlari"
+ *     responses:
+ *       200:
+ *         description: Davomat muvaffaqiyatli saqlandi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     lesson_id:
+ *                       type: integer
+ *                     group_id:
+ *                       type: integer
+ *                     date:
+ *                       type: string
+ *                     updated_count:
+ *                       type: integer
+ *       400:
+ *         description: Noto'g'ri ma'lumot
+ *       403:
+ *         description: Ruxsat yo'q
+ *       404:
+ *         description: Guruh topilmadi
+ */
+router.put('/mark-simple', protect, roleCheck(['admin', 'teacher']), markAttendanceByGroupDate);
+
 
 module.exports = router;
