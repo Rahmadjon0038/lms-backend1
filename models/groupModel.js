@@ -8,6 +8,7 @@ const createGroupTables = async () => {
       name VARCHAR(255) NOT NULL,
       subject_id INTEGER, 
       teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
       unique_code VARCHAR(20) UNIQUE NOT NULL,
       start_date DATE,
       schedule JSONB,
@@ -34,7 +35,7 @@ const createGroupTables = async () => {
   try {
     await pool.query(queryText);
     
-    // Eski jadvallarga status ustuni qo'shish (agar mavjud bo'lmasa)
+    // Eski jadvallarga status va room_id ustuni qo'shish (agar mavjud bo'lmasa)
     try {
       await pool.query(`
         DO $$ 
@@ -48,9 +49,12 @@ const createGroupTables = async () => {
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='class_status') THEN
             ALTER TABLE groups ADD COLUMN class_status VARCHAR(20) DEFAULT 'not_started' CHECK (class_status IN ('not_started', 'started', 'finished'));
           END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='room_id') THEN
+            ALTER TABLE groups ADD COLUMN room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;
+          END IF;
         END $$;
       `);
-      console.log("✅ 'groups' jadvaliga status ustuni qo'shildi.");
+      console.log("✅ 'groups' jadvaliga status va room_id ustuni qo'shildi.");
     } catch (alterErr) {
       console.log("⚠️ Status ustuni qo'shishda xatolik (balki mavjud):", alterErr.message);
     }

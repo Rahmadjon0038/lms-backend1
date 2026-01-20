@@ -40,6 +40,10 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               teacher_id:
  *                 type: integer
  *                 example: 2
+ *               room_id:
+ *                 type: integer
+ *                 example: 1
+ *                 description: "Xona ID - qaysi xonada dars o'tiladi"
  *               start_date:
  *                 type: string
  *                 format: date
@@ -88,6 +92,10 @@ router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
  *                 type: integer
  *               name:
  *                 type: string
+ *               room_id:
+ *                 type: integer
+ *                 example: 1
+ *                 description: "Xona ID"
  *               schedule:
  *                 type: object
  *               price:

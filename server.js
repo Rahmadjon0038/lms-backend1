@@ -32,9 +32,11 @@ const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const subjectRoutes = require('./routes/subjectRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
+const roomRoutes = require('./routes/roomRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
+const { createRoomTable } = require('./models/roomModel');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -43,6 +45,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/subjects', subjectRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/rooms', roomRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
@@ -57,6 +60,7 @@ app.listen(PORT, async () => {
     
     // Server yonganda jadvalni tekshirish va yaratish
     try {
+        await createRoomTable(); // Rooms jadvali birinchi yaratiladi
         await createUserTable();
         await createGroupTables();
         await createStudentAdditionalTables();

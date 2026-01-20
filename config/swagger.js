@@ -14,7 +14,8 @@ const options = {
       { name: 'Groups', description: 'Guruhlarni boshqarish' },
       { name: 'Students', description: 'Studentlarni boshqarish' },
       { name: 'Payments', description: 'To\'lovlar tizimi - oylik to\'lovlar, hisobotlar' },
-      { name: 'Teacher Salary', description: 'O\'qituvchilar maoshi va avans tizimi' }
+      { name: 'Teacher Salary', description: 'O\'qituvchilar maoshi va avans tizimi' },
+      { name: 'Rooms', description: 'Xonalarni boshqarish' }
     ],
     servers: [
       {
