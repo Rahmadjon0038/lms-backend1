@@ -32,7 +32,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * /api/subjects/for-teacher:
  *   get:
  *     summary: Teacher registratsiyasi uchun fanlar ro'yxati
- *     description: Teacher ro'yxatdan o'tishdan oldin qaysi fanlar mavjudligini ko'rish uchun
+ *     description: Teacher ro'yxatdan o'tishdan oldin qaysi fanlar mavjudligini ko'rish uchun. Har bir fan uchun active guruhlar, dars jadvali va boshqa ma'lumotlar ham qaytariladi.
  *     tags: [Subjects]
  *     responses:
  *       200:
@@ -60,9 +60,40 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *                       teachers_count:
  *                         type: integer
  *                         example: 3
+ *                       groups_count:
+ *                         type: integer
+ *                         example: 2
  *                       description:
  *                         type: string
- *                         example: "Ingliz tili fani (3 ta teacher)"
+ *                         example: "Ingliz tili fani (3 ta teacher, 2 ta active guruh)"
+ *                       groups:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             group_id:
+ *                               type: integer
+ *                               example: 5
+ *                             group_name:
+ *                               type: string
+ *                               example: "Beginner A1"
+ *                             schedule:
+ *                               type: object
+ *                               description: "Dars jadvali (JSONB format)"
+ *                               example: {"monday": "09:00-11:00", "wednesday": "09:00-11:00", "friday": "09:00-11:00"}
+ *                             class_start_date:
+ *                               type: string
+ *                               format: date
+ *                               example: "2025-01-15"
+ *                             status:
+ *                               type: string
+ *                               example: "active"
+ *                             price:
+ *                               type: number
+ *                               example: 450000
+ *                             teacher_name:
+ *                               type: string
+ *                               example: "John Smith"
  */
 router.get('/for-teacher', subjectCtrl.getSubjectsForTeacher);
 

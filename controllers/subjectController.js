@@ -25,9 +25,25 @@ exports.getSubjectsForTeacher = async (req, res) => {
             SELECT 
                 s.id, 
                 s.name,
-                COUNT(ts.teacher_id) as teachers_count
+                COUNT(DISTINCT ts.teacher_id) as teachers_count,
+                COUNT(DISTINCT g.id) as groups_count,
+                json_agg(
+                    CASE WHEN g.id IS NOT NULL THEN 
+                        json_build_object(
+                            'group_id', g.id,
+                            'group_name', g.name,
+                            'schedule', g.schedule,
+                            'class_start_date', g.class_start_date,
+                            'status', g.status,
+                            'price', g.price,
+                            'teacher_name', u.full_name
+                        )
+                    ELSE NULL END
+                ) FILTER (WHERE g.id IS NOT NULL) as groups
             FROM subjects s
             LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id
+            LEFT JOIN groups g ON s.id = g.subject_id AND g.status = 'active'
+            LEFT JOIN users u ON g.teacher_id = u.id
             GROUP BY s.id, s.name
             ORDER BY s.name
         `);
@@ -39,7 +55,9 @@ exports.getSubjectsForTeacher = async (req, res) => {
                 id: subject.id,
                 name: subject.name,
                 teachers_count: parseInt(subject.teachers_count) || 0,
-                description: `${subject.name} fani (${subject.teachers_count} ta teacher)`
+                groups_count: parseInt(subject.groups_count) || 0,
+                description: `${subject.name} fani (${subject.teachers_count} ta teacher, ${subject.groups_count} ta active guruh)`,
+                groups: subject.groups || []
             }))
         });
     } catch (err) {

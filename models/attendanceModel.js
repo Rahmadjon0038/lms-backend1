@@ -1,5 +1,15 @@
 const pool = require('../config/db');
 
+// Initialize tables
+const initTables = async () => {
+  try {
+    await createLessonsTable();
+    await createAttendanceTable();
+  } catch (error) {
+    console.error('Jadvallarni yaratishda xatolik:', error);
+  }
+};
+
 // Lessons jadvalini yaratish
 const createLessonsTable = async () => {
   try {
@@ -8,8 +18,8 @@ const createLessonsTable = async () => {
         id SERIAL PRIMARY KEY,
         group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
         date DATE NOT NULL,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(group_id, date)
       );
       
@@ -24,19 +34,16 @@ const createLessonsTable = async () => {
   }
 };
 
-// Attendance jadvalini qayta yaratish (lesson-based)
+// Attendance jadvalini yaratish
 const createAttendanceTable = async () => {
   try {
-    // Eski attendance jadvalini o'chirish
-    await pool.query('DROP TABLE IF EXISTS attendance CASCADE');
-    
-    // Yangi attendance jadvalini yaratish
+    // Faqat jadval mavjud bo'lmasa yaratish
     const createQuery = `
       CREATE TABLE IF NOT EXISTS attendance (
         id SERIAL PRIMARY KEY,
         lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE,
         student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        status VARCHAR(20) NOT NULL DEFAULT 'absent' CHECK (status IN ('present', 'absent')),
+        status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(lesson_id, student_id)
@@ -47,7 +54,7 @@ const createAttendanceTable = async () => {
     `;
     
     await pool.query(createQuery);
-    console.log("✅ Yangi 'attendance' jadvali yaratildi.");
+    console.log("✅ 'attendance' jadvali tayyor.");
   } catch (error) {
     console.error('Attendance jadvalini yaratishda xatolik:', error);
     throw error;
@@ -86,13 +93,18 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
 
     // Oy ichidagi barcha darslarni olish
     const lessonsQuery = `
-      SELECT l.id, l.date
+      SELECT l.id, l.date, CONCAT(u.name, ' ', u.surname) as created_by_name
       FROM lessons l
+      LEFT JOIN users u ON l.created_by = u.id
       WHERE l.group_id = $1 AND l.date >= $2 AND l.date <= $3
       ORDER BY l.date
     `;
     const lessonsResult = await pool.query(lessonsQuery, [groupId, startDateStr, endDateStr]);
-    const lessonDates = lessonsResult.rows.map(row => row.date.toISOString().slice(0, 10));
+    const lessons = lessonsResult.rows.map(row => ({
+      id: row.id,
+      date: row.date.toISOString().slice(0, 10),
+      created_by: row.created_by_name || 'Noma\'lum'
+    }));
 
     // Guruhdagi aktiv talabalarni olish
     const studentsQuery = `
@@ -132,15 +144,15 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
 
     // Har bir talaba uchun davomat kataklarini tayyorlash
     const students = studentsResult.rows.map(student => {
-      const dailyAttendance = {};
-      lessonDates.forEach(date => {
-        dailyAttendance[date] = attendanceMap[student.student_id] ? 
-          attendanceMap[student.student_id][date] || null : null;
+      const attendanceData = {};
+      lessons.forEach(lesson => {
+        attendanceData[lesson.date] = attendanceMap[student.student_id] ? 
+          attendanceMap[student.student_id][lesson.date] || null : null;
       });
 
       return {
         ...student,
-        daily_attendance: dailyAttendance
+        attendance: attendanceData
       };
     });
 
@@ -151,7 +163,7 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
         subject_name: group.subject_name,
         teacher_name: group.teacher_name
       },
-      lesson_dates: lessonDates,
+      lessons: lessons,
       students: students,
       month: currentMonth
     };
@@ -162,54 +174,10 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
   }
 };
 
-// Guruhning barcha darslarini olish (tarix bilan)
-const getGroupLessons = async (groupId, startDate = null, endDate = null) => {
-  try {
-    let query = `
-      SELECT 
-        l.id,
-        l.date,
-        COUNT(a.id) as total_students,
-        COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present_count,
-        COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent_count
-      FROM lessons l
-      LEFT JOIN attendance a ON l.id = a.lesson_id
-      WHERE l.group_id = $1
-    `;
-    
-    const params = [groupId];
-    let paramIndex = 2;
-    
-    if (startDate) {
-      query += ` AND l.date >= $${paramIndex}`;
-      params.push(startDate);
-      paramIndex++;
-    }
-    
-    if (endDate) {
-      query += ` AND l.date <= $${paramIndex}`;
-      params.push(endDate);
-      paramIndex++;
-    }
-    
-    query += ` GROUP BY l.id, l.date ORDER BY l.date DESC`;
-    
-    const result = await pool.query(query, params);
-    
-    return result.rows.map(row => ({
-      ...row,
-      date: row.date.toISOString().slice(0, 10)
-    }));
-    
-  } catch (error) {
-    console.error('Guruh darslarini olishda xatolik:', error);
-    throw error;
-  }
-};
+// initTables(); // Server.js da chaqiriladi
 
 module.exports = {
   createLessonsTable,
   createAttendanceTable,
-  getMonthlyAttendanceGrid,
-  getGroupLessons
+  getMonthlyAttendanceGrid
 };
