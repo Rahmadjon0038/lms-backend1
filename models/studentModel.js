@@ -133,41 +133,9 @@ const createStudentAdditionalTables = async () => {
       `);
       console.log("✅ Monthly fees trigger yaratildi.");
       
-      // Davomat jadvali uchun trigger (attendance percentage avtomatik hisoblanadi)
-      await pool.query(`
-        CREATE OR REPLACE FUNCTION update_attendance_percentage()
-        RETURNS TRIGGER AS $$
-        BEGIN
-          -- Daily records dan attended_classes ni hisoblash
-          -- daily_records is JSONB object like {"2024-01-01": 1, "2024-01-02": 0}
-          IF NEW.daily_records IS NOT NULL THEN
-            SELECT COUNT(*) INTO NEW.attended_classes 
-            FROM jsonb_each(NEW.daily_records) AS record
-            WHERE record.value::TEXT::INTEGER = 1;
-          ELSE
-            NEW.attended_classes = 0;
-          END IF;
-          
-          -- Total classes dan percentage hisoblash
-          IF NEW.total_classes > 0 THEN
-            NEW.attendance_percentage = (NEW.attended_classes::DECIMAL / NEW.total_classes) * 100;
-          ELSE
-            NEW.attendance_percentage = 0;
-          END IF;
-          
-          NEW.updated_at = CURRENT_TIMESTAMP;
-          RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-
-        DROP TRIGGER IF EXISTS attendance_percentage_trigger ON attendance;
-        
-        CREATE TRIGGER attendance_percentage_trigger
-        BEFORE INSERT OR UPDATE ON attendance
-        FOR EACH ROW
-        EXECUTE FUNCTION update_attendance_percentage();
-      `);
-      console.log("✅ Attendance trigger yaratildi.");
+      // Attendance trigger noto'g'ri edi, olib tashlandi
+      // Attendance jadvali o'z-o'zidan ishlaydi
+      console.log("✅ Attendance trigger yaratish o'tkazildi.");
     } catch (alterErr) {
       console.log("⚠️ Payments/Monthly fees yangilashda xato:", alterErr.message);
     }
