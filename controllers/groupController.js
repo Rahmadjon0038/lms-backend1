@@ -697,13 +697,31 @@ exports.getAllGroups = async (req, res) => {
                             WHERE ts.teacher_id = u.id),
                             '[]'::json
                         ) as teacher_subjects,
-                        -- Guruhda nechta talaba borligini hisoblash
+                        -- Guruhda talabalar statistikasi
+                        COALESCE(
+                            (SELECT COUNT(*)::integer
+                            FROM student_groups sg
+                            WHERE sg.group_id = g.id),
+                            0
+                        ) as total_students_count,
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
                             WHERE sg.group_id = g.id AND sg.status = 'active'),
                             0
-                        ) as student_count
+                        ) as active_students_count,
+                        COALESCE(
+                            (SELECT COUNT(*)::integer
+                            FROM student_groups sg
+                            WHERE sg.group_id = g.id AND sg.status = 'stopped'),
+                            0
+                        ) as stopped_students_count,
+                        COALESCE(
+                            (SELECT COUNT(*)::integer
+                            FROM student_groups sg
+                            WHERE sg.group_id = g.id AND sg.status = 'finished'),
+                            0
+                        ) as finished_students_count
                  FROM groups g 
                  LEFT JOIN users u ON g.teacher_id = u.id 
                  LEFT JOIN subjects s ON g.subject_id = s.id
@@ -794,16 +812,19 @@ exports.getGroupById = async (req, res) => {
                 u.course_end_date,
                 u.created_at as registration_date,
                 u.role,
-                u.group_id,
-                u.teacher_id,
-                u.teacher_name,
-                u.group_name,
-                sg.status as student_group_status, 
-                sg.joined_at 
+                sg.status as group_status,
+                CASE 
+                  WHEN sg.status = 'active' THEN 'Faol'
+                  WHEN sg.status = 'stopped' THEN 'Nofaol'
+                  WHEN sg.status = 'finished' THEN 'Bitirgan'
+                  ELSE 'Belgilanmagan'
+                END as group_status_description,
+                sg.joined_at,
+                sg.left_at
             FROM users u 
             JOIN student_groups sg ON u.id = sg.student_id 
             WHERE sg.group_id = $1 
-            ORDER BY u.name, u.surname`, [id]);
+            ORDER BY sg.status = 'active' DESC, u.name, u.surname`, [id]);
 
         res.json({ 
             success: true, 

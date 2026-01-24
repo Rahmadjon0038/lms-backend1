@@ -386,10 +386,13 @@ const setTeacherOnLeave = async (req, res) => {
 
         // Teacher-ning faol guruhlarini tekshirish
         const activeGroups = await pool.query(
-            `SELECT g.id, g.name, g.unique_code, 
-                    COUNT(sg.student_id) as student_count
+            `SELECT g.id, g.name, g.unique_code,
+                    COUNT(sg.student_id) as total_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'active') as active_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'finished') as finished_students_count
              FROM groups g
-             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+             LEFT JOIN student_groups sg ON g.id = sg.group_id
              WHERE g.teacher_id = $1 AND g.status = 'active'
              GROUP BY g.id, g.name, g.unique_code
              ORDER BY g.name`,
@@ -398,7 +401,7 @@ const setTeacherOnLeave = async (req, res) => {
 
         if (activeGroups.rows.length > 0) {
             const groupsList = activeGroups.rows.map(group => 
-                `- ${group.name} (${group.unique_code}) - ${parseInt(group.student_count) || 0} ta student`
+                `- ${group.name} (${group.unique_code}) - Jami: ${parseInt(group.total_students_count) || 0} ta student (Faol: ${parseInt(group.active_students_count) || 0})`
             ).join('\n');
             
             return res.status(400).json({ 
@@ -408,7 +411,10 @@ const setTeacherOnLeave = async (req, res) => {
                     id: group.id,
                     name: group.name,
                     code: group.unique_code,
-                    student_count: parseInt(group.student_count) || 0
+                    total_students_count: parseInt(group.total_students_count) || 0,
+                    active_students_count: parseInt(group.active_students_count) || 0,
+                    stopped_students_count: parseInt(group.stopped_students_count) || 0,
+                    finished_students_count: parseInt(group.finished_students_count) || 0
                 })),
                 groups_count: activeGroups.rows.length,
                 groups_list: groupsList,
@@ -464,9 +470,12 @@ const terminateTeacher = async (req, res) => {
         // Teacher-ning faol guruhlarini tekshirish
         const activeGroups = await pool.query(
             `SELECT g.id, g.name, g.unique_code, g.status,
-                    COUNT(sg.student_id) as student_count
+                    COUNT(sg.student_id) as total_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'active') as active_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
+                    COUNT(sg.student_id) FILTER (WHERE sg.status = 'finished') as finished_students_count
              FROM groups g
-             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
+             LEFT JOIN student_groups sg ON g.id = sg.group_id
              WHERE g.teacher_id = $1 AND g.status IN ('active', 'draft')
              GROUP BY g.id, g.name, g.unique_code, g.status
              ORDER BY g.name`,
@@ -475,7 +484,7 @@ const terminateTeacher = async (req, res) => {
 
         if (activeGroups.rows.length > 0) {
             const groupsList = activeGroups.rows.map(group => 
-                `- ${group.name} (${group.unique_code}) [${group.status}] - ${parseInt(group.student_count) || 0} ta student`
+                `- ${group.name} (${group.unique_code}) [${group.status}] - Jami: ${parseInt(group.total_students_count) || 0} ta student (Faol: ${parseInt(group.active_students_count) || 0})`
             ).join('\n');
             
             return res.status(400).json({ 
@@ -486,7 +495,10 @@ const terminateTeacher = async (req, res) => {
                     name: group.name,
                     code: group.unique_code,
                     status: group.status,
-                    student_count: parseInt(group.student_count) || 0
+                    total_students_count: parseInt(group.total_students_count) || 0,
+                    active_students_count: parseInt(group.active_students_count) || 0,
+                    stopped_students_count: parseInt(group.stopped_students_count) || 0,
+                    finished_students_count: parseInt(group.finished_students_count) || 0
                 })),
                 groups_count: activeGroups.rows.length,
                 groups_list: groupsList,
