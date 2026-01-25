@@ -592,43 +592,7 @@ router.patch('/teachers/:teacherId', protect, roleCheck(['admin']), patchTeacher
 router.patch('/teachers/:teacherId/update', protect, roleCheck(['admin']), updateTeacherInfo);
 
 /**
- * @swagger
- * /api/users/change-student-status:
- *   post:
- *     summary: Student holatini o'zgartirish va leave_date set qilish
- *     description: Admin uchun - student status'ini o'zgartirish va chiqish sanasini belgilash
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - student_id
- *               - status
- *             properties:
- *               student_id:
- *                 type: integer
- *                 example: 34
- *               status:
- *                 type: string
-                 enum: [active, stopped, finished]
-                 example: finished
- *               leave_date:
- *                 type: string
- *                 format: date
- *                 example: "2026-01-26"
- *                 description: Chiqish sanasi (stopped/finished uchun)
- *     responses:
- *       200:
- *         description: Student holati o'zgartirildi
- *       403:
- *         description: Faqat adminlar uchun
- *       404:
- *         description: Student topilmadi
+ * Student holatini o'zgartirish - POST /api/users/change-student-status
  */
 router.post('/change-student-status', protect, roleCheck(['admin']), changeStudentStatus);
 
