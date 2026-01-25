@@ -836,6 +836,82 @@ const updateTeacherInfo = async (req, res) => {
     }
 };
 
+// Student status o'zgartirish (leave_date set qilish)
+const changeStudentStatus = async (req, res) => {
+    const { student_id, status, leave_date } = req.body;
+    const { role } = req.user;
+
+    try {
+        // Faqat admin uchun
+        if (role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Faqat adminlar student holatini o\'zgartira oladi'
+            });
+        }
+
+        // Student tekshiruvi
+        const studentCheck = await pool.query(`
+            SELECT u.id, u.name, u.surname, sg.group_id, g.name as group_name
+            FROM users u
+            JOIN student_groups sg ON u.id = sg.student_id
+            JOIN groups g ON sg.group_id = g.id
+            WHERE u.id = $1 AND u.role = 'student'
+        `, [student_id]);
+
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student topilmadi'
+            });
+        }
+
+        const student = studentCheck.rows[0];
+
+        // Status va leave_date yangilash
+        let updateQuery;
+        let params;
+
+        if (status === 'stopped' || status === 'finished') {
+            const currentLeaveDate = leave_date || new Date().toISOString().split('T')[0];
+            updateQuery = `
+                UPDATE student_groups 
+                SET status = $1, leave_date = $2
+                WHERE student_id = $3
+            `;
+            params = [status, currentLeaveDate, student_id];
+        } else {
+            updateQuery = `
+                UPDATE student_groups 
+                SET status = $1, leave_date = NULL
+                WHERE student_id = $2
+            `;
+            params = [status, student_id];
+        }
+
+        await pool.query(updateQuery, params);
+
+        res.json({
+            success: true,
+            message: 'Student holati muvaffaqiyatli o\'zgartirildi',
+            data: {
+                student_name: `${student.name} ${student.surname}`,
+                group_name: student.group_name,
+                new_status: status,
+                leave_date: status === 'stopped' || status === 'finished' ? leave_date || new Date().toISOString().split('T')[0] : null
+            }
+        });
+
+    } catch (error) {
+        console.error('Student holatini o\'zgartirishda xatolik:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Student holatini o\'zgartirib bo\'lmadi',
+            error: error.message
+        });
+    }
+};
+
 module.exports = { 
     registerStudent, 
     registerTeacher, 
@@ -848,5 +924,6 @@ module.exports = {
     reactivateTeacher,
     deleteTeacher,
     patchTeacher,
-    updateTeacherInfo
+    updateTeacherInfo,
+    changeStudentStatus
 };

@@ -1,105 +1,132 @@
 const express = require('express');
 const router = express.Router();
 const { protect, protectAdmin } = require('../middlewares/authMiddleware');
-const { roleCheck } = require('../middlewares/roleMiddleware');
 const {
-    getStudentsForPayment,
-    setMonthlyRequirement,
-    addPayment,
-    getStudentPayments,
-    getMonthlyPayments,
-    getGroupPayments,
-    getAllPayments,
-    deletePayment,
-    getFinancialReport
+  getMonthlyPayments,
+  makePayment, 
+  getStudentPaymentHistory,
+  giveDiscount,
+  getPaymentFilters,
+  clearStudentPayments
 } = require('../controllers/paymentController');
 
 /**
  * @swagger
  * components:
  *   schemas:
- *     MonthlyFee:
+ *     StudentPayment:
  *       type: object
  *       properties:
- *         id:
- *           type: integer
  *         student_id:
  *           type: integer
- *         group_id:
- *           type: integer
- *         month_name:
+ *           description: Talaba ID si
+ *         name:
  *           type: string
- *           example: "2026-01"
+ *           description: Talaba ismi
+ *         surname:
+ *           type: string
+ *           description: Talaba familiyasi  
+ *         phone:
+ *           type: string
+ *           description: Telefon raqami
+ *         father_name:
+ *           type: string
+ *           description: Otasining ismi
+ *         father_phone:
+ *           type: string
+ *           description: Otasining telefoni
+ *         group_name:
+ *           type: string
+ *           description: Guruh nomi
+ *         subject_name:
+ *           type: string
+ *           description: Fan nomi
+ *         teacher_name:
+ *           type: string
+ *           description: O'qituvchi ism-familiyasi
  *         required_amount:
  *           type: number
- *           description: Shu oy uchun to'lashi kerak bo'lgan summa
+ *           description: To'lashi kerak bo'lgan summa (chegirma hisobga olingan)
  *         paid_amount:
- *           type: number
- *           description: Shu oyga to'lagan summa
- *         status:
+ *           type: number  
+ *           description: To'lagan summasi
+ *         payment_status:
  *           type: string
  *           enum: [paid, partial, unpaid]
- *     Payment:
+ *           description: To'lov holati
+ *         debt_amount:
+ *           type: number
+ *           description: Qarz summasi
+ * 
+ *     PaymentTransaction:
  *       type: object
  *       properties:
- *         id:
- *           type: integer
  *         student_id:
  *           type: integer
- *         group_id:
- *           type: integer
- *         month_name:
- *           type: string
- *           example: "2026-01"
  *         amount:
  *           type: number
- *         note:
+ *         month:
  *           type: string
- *           description: Ixtiyoriy izoh
- *         admin_name:
+ *           format: YYYY-MM
+ *         payment_method:
  *           type: string
- *           description: To'lovni tasdiqlagan admin ismi
- *         created_by:
+ *           enum: [cash, card, transfer]
+ *         description:
+ *           type: string
+ * 
+ *     StudentDiscount:
+ *       type: object
+ *       properties:
+ *         student_id:
  *           type: integer
- *         created_at:
+ *         discount_type:
  *           type: string
- *           format: date-time
+ *           enum: [percent, amount]
+ *         discount_value:
+ *           type: number
+ *           description: Foiz (1-100) yoki aniq summa
+ *         months:
+ *           type: integer
+ *           description: Necha oyga (null = cheksiz)
+ *         description:
+ *           type: string
  */
 
 /**
  * @swagger
- * /api/payments/students-list:
+ * /api/payments/monthly:
  *   get:
- *     summary: To'lov qilish uchun studentlar ro'yxati (ADMIN)
- *     description: Har bir student uchun oy bo'yicha to'lash kerak/to'langan summalarni ko'rsatadi. Teacher_id va subject_id bo'yicha filter qilish mumkin.
+ *     summary: Oylik to'lov ro'yxati
+ *     description: Faqat aktiv talabalarning oylik to'lovi. Teacher faqat o'z talabalarini ko'ra oladi
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: query
- *         name: month_name
+ *         name: month
  *         schema:
  *           type: string
- *         example: "2026-01"
- *         description: Oy (default - joriy oy)
- *       - in: query
- *         name: group_id
- *         schema:
- *           type: integer
- *         description: Guruh bo'yicha filter
+ *           example: "2026-01"
+ *         description: Qaysi oy uchun (default = joriy oy)
  *       - in: query
  *         name: teacher_id
  *         schema:
  *           type: integer
- *         description: O'qituvchi bo'yicha filter
+ *         description: O'qituvchi bo'yicha filtr (faqat admin uchun)
  *       - in: query
  *         name: subject_id
  *         schema:
  *           type: integer
- *         description: Fan bo'yicha filter
+ *         description: Fan bo'yicha filtr
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [paid, partial, unpaid]
+ *         description: To'lov holati bo'yicha filtr
  *     responses:
  *       200:
- *         description: Studentlar ro'yxati qo'shimcha ma'lumotlar bilan
+ *         description: Muvaffaqiyatli
  *         content:
  *           application/json:
  *             schema:
@@ -109,116 +136,41 @@ const {
  *                   type: boolean
  *                 message:
  *                   type: string
- *                 month:
- *                   type: string
- *                 count:
- *                   type: integer
- *                 students:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       student_id:
- *                         type: integer
- *                       student_name:
- *                         type: string
- *                       phone:
- *                         type: string
- *                       phone2:
- *                         type: string
- *                       father_name:
- *                         type: string
- *                       father_phone:
- *                         type: string
- *                       address:
- *                         type: string
- *                       group_name:
- *                         type: string
- *                       subject_name:
- *                         type: string
- *                       teacher_name:
- *                         type: string
- *                       teacher_id:
- *                         type: integer
- *                       default_price:
- *                         type: number
- *                         description: Guruhning asosiy narxi
- *                       required_amount:
- *                         type: number
- *                         description: Shu oy uchun to'lashi kerak bo'lgan summa (custom yoki default)
- *                       paid_amount:
- *                         type: number
- *                         description: Shu oyga to'lagan summa
- *                       debt:
- *                         type: number
- *                         description: Qarzi (required_amount - paid_amount)
- *                       status:
- *                         type: string
- *                         enum: [paid, partial, unpaid]
-
- */
-router.get('/students-list', protect, roleCheck(['admin']), getStudentsForPayment);
-
-/**
- * @swagger
- * /api/payments/set-requirement:
- *   post:
- *     summary: Studentning oylik to'lov summasini belgilash (ADMIN)
- *     description: Har bir student uchun har bir oyda qancha to'lashi kerakligini belgilash. Bir necha oyga ham belgilash mumkin.
- *     tags: [Payments]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - student_id
- *               - month_name
- *               - required_amount
- *             properties:
- *               student_id:
- *                 type: integer
- *                 example: 5
- *               month_name:
- *                 type: string
- *                 example: "2026-01"
- *               required_amount:
- *                 type: number
- *                 example: 500000
- *               duration_months:
- *                 type: integer
- *                 example: 3
- *                 description: Necha oy davomida shu narxni qo'llash (ixtiyoriy, default=1)
- *     responses:
- *       200:
- *         description: To'lov summasi belgilandi
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 months:
- *                   type: array
- *                   items:
- *                     type: string
  *                 data:
- *                   type: array
+ *                   type: object
+ *                   properties:
+ *                     month:
+ *                       type: string
+ *                     students:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/StudentPayment'
+ *                     stats:
+ *                       type: object
+ *                       properties:
+ *                         total_students:
+ *                           type: integer
+ *                         paid:
+ *                           type: integer
+ *                         partial:
+ *                           type: integer
+ *                         unpaid:
+ *                           type: integer
+ *                         total_expected:
+ *                           type: number
+ *                         total_collected:
+ *                           type: number
+ *                         total_debt:
+ *                           type: number
  */
-router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequirement);
+router.get('/monthly', protect, getMonthlyPayments);
 
 /**
  * @swagger
- * /api/payments/add:
+ * /api/payments/pay:
  *   post:
- *     summary: Studentning to'lovini qo'shish (ADMIN)
- *     description: Student to'lov qilganda summasini yozib qo'yish. To'lovni tasdiqlagan admin ismi avtomatik yoziladi. Avtomatik monthly_fees yangilanadi.
+ *     summary: To'lov qilish
+ *     description: Talaba uchun to'lov qabul qilish. Bo'lib-bo'lib to'lash mumkin
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -230,25 +182,27 @@ router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequire
  *             type: object
  *             required:
  *               - student_id
- *               - month_name
  *               - amount
  *             properties:
  *               student_id:
  *                 type: integer
- *                 example: 5
- *               month_name:
- *                 type: string
- *                 example: "2026-01"
  *               amount:
  *                 type: number
- *                 example: 500000
- *               note:
+ *                 minimum: 0.01
+ *               month:
  *                 type: string
- *                 example: "Yanvar oyi to'lovi"
- *                 description: Ixtiyoriy izoh
+ *                 format: YYYY-MM
+ *                 description: Default = joriy oy
+ *               payment_method:
+ *                 type: string
+ *                 enum: [cash, card, transfer]
+ *                 default: cash
+ *               description:
+ *                 type: string
+ *                 description: To'lov haqida izoh
  *     responses:
- *       201:
- *         description: To'lov qo'shildi va monthly_fees yangilandi
+ *       200:
+ *         description: To'lov muvaffaqiyatli qabul qilindi
  *         content:
  *           application/json:
  *             schema:
@@ -258,213 +212,204 @@ router.post('/set-requirement', protect, roleCheck(['admin']), setMonthlyRequire
  *                   type: boolean
  *                 message:
  *                   type: string
- *                 payment:
- *                   $ref: '#/components/schemas/Payment'
- *                 monthly_summary:
- *                   $ref: '#/components/schemas/MonthlyFee'
- *       400:
- *         description: Noto'g'ri ma'lumot
- *       404:
- *         description: Student topilmadi
- */
-router.post('/add', protect, roleCheck(['admin']), addPayment);
-
-/**
- * @swagger
- * /api/payments/student/{student_id}:
- *   get:
- *     summary: Studentning to'lov tarixi va oylik ma'lumotlari
- *     description: Barcha oylar bo'yicha to'lash kerak/to'lagan summalari va to'lovlar tarixi
- *     tags: [Payments]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: student_id
- *         required: true
- *         schema:
- *           type: integer
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *         description: Agar ko'rsatilsa - faqat shu oy
- *     responses:
- *       200:
- *         description: Student to'lovlari va oylik ma'lumotlari
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 student:
- *                   type: object
- *                 monthly_fees:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/MonthlyFee'
- *                 payments:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Payment'
- *                 total_debt:
- *                   type: number
- */
-router.get('/student/:student_id', protect, getStudentPayments);
-
-/**
- * @swagger
- * /api/payments/month/{month_name}:
- *   get:
- *     summary: Oylik to'lovlar hisoboti (ADMIN)
- *     description: Barcha studentlar uchun oylik to'lash kerak/to'lagan summalar va statistika
- *     tags: [Payments]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: month_name
- *         required: true
- *         schema:
- *           type: string
- *         example: "2026-01"
- *     responses:
- *       200:
- *         description: Oylik hisobot va statistika
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 month:
- *                   type: string
- *                 statistics:
+ *                 data:
  *                   type: object
  *                   properties:
- *                     total_students:
- *                       type: integer
- *                     total_required:
+ *                     student_name:
+ *                       type: string
+ *                     group_name:
+ *                       type: string
+ *                     month:
+ *                       type: string
+ *                     paid_amount:
  *                       type: number
- *                     total_paid:
+ *                     required_amount:
  *                       type: number
- *                     paid_count:
- *                       type: integer
- *                     partial_count:
- *                       type: integer
- *                     unpaid_count:
- *                       type: integer
- *                 students:
- *                   type: array
+ *                     remaining:
+ *                       type: number
+ *                     status:
+ *                       type: string
+ *                     processed_by:
+ *                       type: string
  */
-router.get('/month/:month_name', protect, roleCheck(['admin']), getMonthlyPayments);
+router.post('/pay', protectAdmin, makePayment);
 
 /**
  * @swagger
- * /api/payments/group/{group_id}:
+ * /api/payments/student/{student_id}/history:
  *   get:
- *     summary: Guruh to'lovlari (FAQAT ADMIN)
+ *     summary: Talaba to'lov tarixi
+ *     description: Talaba o'z tarixini ko'rishi uchun yoki admin boshqa talaba tarixini ko'rishi uchun
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
- *         name: group_id
- *         required: true
- *         schema:
- *           type: integer
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *         example: "2026-01"
- *     responses:
- *       200:
- *         description: Guruh to'lovlari
- */
-router.get('/group/:group_id', protect, roleCheck(['admin']), getGroupPayments);
-
-/**
- * @swagger
- * /api/payments/all:
- *   get:
- *     summary: Barcha to'lovlar (filter bilan) (FAQAT ADMIN)
- *     tags: [Payments]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: month_name
- *         schema:
- *           type: string
- *       - in: query
  *         name: student_id
- *         schema:
- *           type: integer
- *       - in: query
- *         name: group_id
- *         schema:
- *           type: integer
- *       - in: query
- *         name: teacher_id
- *         schema:
- *           type: integer
- *         description: O'qituvchi bo'yicha filter
- *     responses:
- *       200:
- *         description: Barcha to'lovlar
- */
-router.get('/all', protect, roleCheck(['admin']), getAllPayments);
-
-/**
- * @swagger
- * /api/payments/{payment_id}:
- *   delete:
- *     summary: To'lovni o'chirish (FAQAT ADMIN)
- *     tags: [Payments]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: payment_id
  *         required: true
  *         schema:
  *           type: integer
+ *         description: Talaba ID si
  *     responses:
  *       200:
- *         description: To'lov o'chirildi
- *       404:
- *         description: To'lov topilmadi
+ *         description: To'lov tarixi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     student:
+ *                       type: object
+ *                       properties:
+ *                         name:
+ *                           type: string
+ *                         surname:
+ *                           type: string
+ *                         group_name:
+ *                           type: string
+ *                     payments:
+ *                       type: array
+ *                       description: Oylik to'lovlar
+ *                     transactions:
+ *                       type: array
+ *                       description: Barcha tranzaksiyalar
  */
-router.delete('/:payment_id', protect, roleCheck(['admin']), deletePayment);
+router.get('/student/:student_id/history', protect, getStudentPaymentHistory);
 
 /**
  * @swagger
- * /api/payments/report/financial:
- *   get:
- *     summary: Moliyaviy hisobot (Dashboard) (FAQAT ADMIN)
+ * /api/payments/discount:
+ *   post:
+ *     summary: Talabaga chegirma berish
+ *     description: Talaba uchun foizli yoki summali chegirma yaratish
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: start_date
- *         schema:
- *           type: string
- *           format: date
- *       - in: query
- *         name: end_date
- *         schema:
- *           type: string
- *           format: date
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *               - discount_type
+ *               - discount_value
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *               discount_type:
+ *                 type: string
+ *                 enum: [percent, amount]
+ *               discount_value:
+ *                 type: number
+ *                 description: Foiz (1-100) yoki aniq summa
+ *               months:
+ *                 type: integer
+ *                 description: Necha oyga (null = umrboqiy)
+ *               description:
+ *                 type: string
  *     responses:
  *       200:
- *         description: Moliyaviy hisobot
+ *         description: Chegirma muvaffaqiyatli berildi
  */
-router.get('/report/financial', protect, roleCheck(['admin']), getFinancialReport);
+router.post('/discount', protectAdmin, giveDiscount);
 
+/**
+ * @swagger
+ * /api/payments/filters:
+ *   get:
+ *     summary: Filter uchun ma'lumotlar
+ *     description: Teacher va subject ro'yxati, to'lov statuslari
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Filter ma'lumotlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     teachers:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           name:
+ *                             type: string
+ *                     subjects:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           name:
+ *                             type: string
+ *                     statuses:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           value:
+ *                             type: string
+ *                           label:
+ *                             type: string
+ */
+router.get('/filters', protect, getPaymentFilters);
+
+/**
+ * @swagger
+ * /api/payments/clear-student:
+ *   post:
+ *     summary: Student to'lov ma'lumotlarini tozalash
+ *     description: Admin uchun - student'ning barcha to'lov, tranzaksiya va chegirma ma'lumotlarini o'chirish
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *               - confirm
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *                 example: 34
+ *                 description: Tozalanishi kerak bo'lgan student ID'si
+ *               confirm:
+ *                 type: boolean
+ *                 example: true
+ *                 description: Tasdiqlash parametri (true bo'lishi shart)
+ *     responses:
+ *       200:
+ *         description: Student ma'lumotlari muvaffaqiyatli tozalandi
+ *       403:
+ *         description: Faqat adminlar uchun
+ *       404:
+ *         description: Student topilmadi
+ *       400:
+ *         description: Parametrlar xato
+ */
+router.post('/clear-student', protectAdmin, clearStudentPayments);
+
+module.exports = router;
 module.exports = router;

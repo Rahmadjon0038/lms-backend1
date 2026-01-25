@@ -38,6 +38,7 @@ const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
 const { createRoomTable } = require('./models/roomModel');
 const { createLessonsTable, createAttendanceTable } = require('./models/attendanceModel');
+const { createPaymentTables } = require('./scripts/createPaymentTables');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -68,6 +69,7 @@ app.listen(PORT, async () => {
         await createTeacherSubjectTables(); // Teacher-Subject many-to-many jadvallari
         await createLessonsTable(); // Lessons jadvali
         await createAttendanceTable(); // Yangi attendance jadvali
+        await createPaymentTables(); // Yangi to'lov tizimi jadvallari
     } catch (error) {
         console.error("Dastlabki sozlashda xatolik:", error);
     }
