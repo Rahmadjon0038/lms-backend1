@@ -82,14 +82,15 @@ exports.createLesson = async (req, res) => {
       });
     }
 
-    // Date formatini tekshirish
-    const lessonDate = new Date(date);
-    if (isNaN(lessonDate.getTime())) {
+    // Date formatini tekshirish (faqat YYYY-MM-DD qabul qilamiz, timezone muammosiz)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({
         success: false,
-        message: 'Date noto\'g\'ri formatda (YYYY-MM-DD bo\'lishi kerak)'
+        message: "Date noto'g'ri formatda (YYYY-MM-DD bo'lishi kerak)"
       });
     }
+    
+    console.log(`Frontend dan kelgan sana: ${date}`);
 
     // TEACHER faqat o'z guruhida dars yarata oladi
     if (role === 'teacher') {
@@ -133,19 +134,26 @@ exports.createLesson = async (req, res) => {
       });
     }
 
-    // Yangi dars yaratish
+    // Yangi dars yaratish (sanani aniq formatda saqlash)
     const newLessonResult = await pool.query(
-      'INSERT INTO lessons (group_id, date, created_by) VALUES ($1, $2, $3) RETURNING id',
+      'INSERT INTO lessons (group_id, date, created_by) VALUES ($1, $2::date, $3) RETURNING id, date',
       [group_id, date, userId]
     );
     const lesson_id = newLessonResult.rows[0].id;
+    const savedDate = newLessonResult.rows[0].date;
+    console.log(`Saqlangan sana: ${savedDate}`);
 
-    // Guruhdagi barcha studentlar uchun attendance yaratish
+    // Guruhdagi barcha studentlar uchun attendance yaratish (haqiqiy status bilan)
     const studentsResult = await pool.query(
       `SELECT DISTINCT sg.student_id, sg.status as group_status
        FROM student_groups sg 
-       WHERE sg.group_id = $1`,
-      [group_id]
+       WHERE sg.group_id = $1
+         AND (
+           sg.left_at IS NULL
+           OR DATE_TRUNC('month', sg.left_at) = DATE_TRUNC('month', $2::date)
+           OR DATE(sg.left_at) > $2
+         )`,
+      [group_id, date]
     );
 
     if (studentsResult.rows.length > 0) {
@@ -165,7 +173,8 @@ exports.createLesson = async (req, res) => {
 
       const attendanceParams = [];
       studentsResult.rows.forEach(student => {
-        const defaultStatus = student.group_status === 'active' ? 'kelmadi' : 'inactive';
+        // Faqat ruxsat etilgan statuslardan foydalanamiz
+        const defaultStatus = 'kelmadi';
         attendanceParams.push(lesson_id, student.student_id, defaultStatus, student.group_status);
       });
 
@@ -181,7 +190,8 @@ exports.createLesson = async (req, res) => {
       data: {
         lesson_id,
         group_id: parseInt(group_id),
-        date: date,
+        requested_date: date,
+        saved_date: savedDate,
         students_count: studentsResult.rows.length
       }
     });
@@ -204,7 +214,7 @@ exports.getLessonStudents = async (req, res) => {
   try {
     // Dars ma'lumotlarini olish
     const lessonCheck = await pool.query(
-      `SELECT l.id, l.group_id, l.date, g.name as group_name, g.teacher_id
+      `SELECT l.id, l.group_id, TO_CHAR(l.date, 'YYYY-MM-DD') as date, g.name as group_name, g.teacher_id
        FROM lessons l
        JOIN groups g ON l.group_id = g.id
        WHERE l.id = $1`,
@@ -266,7 +276,7 @@ exports.getLessonStudents = async (req, res) => {
           id: lesson.id,
           group_id: lesson.group_id,
           group_name: lesson.group_name,
-          date: lesson.date.toISOString().split('T')[0]
+          date: lesson.date // TO_CHAR dan YYYY-MM-DD formatda string
         },
         students: studentsData.rows
       }
@@ -331,18 +341,15 @@ exports.markAttendance = async (req, res) => {
         });
       }
       
-      // Faqat active studentlar uchun davomat o'zgartirish mumkin
-      const studentStatusCheck = await pool.query(
-        `SELECT sg.status as group_status 
-         FROM student_groups sg 
-         WHERE sg.student_id = $1 AND sg.group_id = $2`,
-        [record.student_id, lesson.group_id]
+      // Faqat attendance jadvalidagi yozuv mavjud bo‘lsa, davomat belgilash mumkin
+      const attendanceCheck = await pool.query(
+        `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2`,
+        [lesson.id, record.student_id]
       );
-      
-      if (studentStatusCheck.rows.length > 0 && studentStatusCheck.rows[0].group_status !== 'active') {
+      if (attendanceCheck.rows.length === 0) {
         return res.status(400).json({
           success: false,
-          message: `Student ID ${record.student_id} faol emas. Faqat faol studentlar uchun davomat belgilash mumkin.`
+          message: `Student ID ${record.student_id} uchun ushbu darsda attendance mavjud emas.`
         });
       }
     }
@@ -423,9 +430,16 @@ exports.getMonthlyAttendance = async (req, res) => {
       }
     }
 
-    // Guruh mavjudligini tekshirish
+    // Guruh mavjudligini tekshirish (teacher va subject ma'lumotlari bilan)
     const groupCheck = await pool.query(
-      'SELECT id, name, schedule FROM groups WHERE id = $1 AND status = $2',
+      `SELECT g.id, g.name, g.schedule, 
+              CONCAT(u.name, ' ', u.surname) as teacher_name,
+              u.phone as teacher_phone,
+              s.name as subject_name
+       FROM groups g
+       LEFT JOIN users u ON g.teacher_id = u.id
+       LEFT JOIN subjects s ON g.subject_id = s.id
+       WHERE g.id = $1 AND g.status = $2`,
       [group_id, 'active']
     );
     
@@ -439,82 +453,144 @@ exports.getMonthlyAttendance = async (req, res) => {
     const group = groupCheck.rows[0];
     const [year, monthNum] = month.split('-');
     const startDate = `${year}-${monthNum}-01`;
-    const endDate = `${year}-${monthNum}-${new Date(year, monthNum, 0).getDate()}`;
+    // Oy oxirgi kunini aniqlash
+    const lastDay = new Date(Number(year), Number(monthNum), 0).getDate();
+    const endDate = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}`;
 
     // Shu oydagi barcha darslar
     const lessons = await pool.query(
-      `SELECT id, date 
+      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date
        FROM lessons 
-       WHERE group_id = $1 AND date >= $2 AND date <= $3
-       ORDER BY date`,
+       WHERE group_id = $1 AND date >= $2::date AND date <= $3::date
+       ORDER BY date ASC`,
       [group_id, startDate, endDate]
     );
-
-    // Guruhdagi barcha studentlar
-    const students = await pool.query(
-      `SELECT 
-         u.id,
-         u.name,
-         u.surname,
-         sg.status as group_status,
-         CASE 
-           WHEN sg.status = 'active' THEN 'Faol'
-           WHEN sg.status = 'stopped' THEN 'Nofaol'
-           WHEN sg.status = 'finished' THEN 'Bitirgan'
-           ELSE 'Belgilanmagan'
-         END as group_status_description
-       FROM student_groups sg
-       JOIN users u ON sg.student_id = u.id
-       WHERE sg.group_id = $1
-       ORDER BY sg.status = 'active' DESC, u.name, u.surname`,
-      [group_id]
+    // lessonsArr ASC tartibda (eski darsdan yangi darsga)
+    // TO_CHAR dan string formatda keladi
+    const lessonsArr = lessons.rows.map(l => ({
+      id: l.id,
+      date: l.date // YYYY-MM-DD formatda string
+    }));
+    // attendance_grid: har bir student uchun darslar bo'yicha status
+    // Avval barcha attendance yozuvlarini olish (student_groups bilan JOIN qilib haqiqiy status olish)
+    const attendanceAll = await pool.query(
+      `SELECT a.lesson_id, a.student_id, a.status, u.name, u.surname, 
+              COALESCE(sg.status, a.group_status, 'unknown') as group_status,
+              sg.left_at
+       FROM attendance a
+       JOIN users u ON a.student_id = u.id
+       LEFT JOIN student_groups sg ON sg.student_id = a.student_id AND sg.group_id = $2
+       WHERE a.lesson_id = ANY($1::int[])`,
+      [lessonsArr.map(l => l.id), group_id]
     );
 
-    // Har bir student uchun davomat ma'lumotlari
-    const attendanceGrid = [];
-    for (const student of students.rows) {
-      const studentAttendance = {
-        student_id: student.id,
-        name: student.name,
-        surname: student.surname,
-        group_status: student.group_status,
-        group_status_description: student.group_status_description,
-        attendance: {}
-      };
+    // Faqat group_status = 'active' bo'lgan attendance yozuvlari (statistika uchun)
+    const activeAttendanceRows = attendanceAll.rows.filter(row => row.group_status === 'active');
 
-      for (const lesson of lessons.rows) {
-        const attendanceResult = await pool.query(
-          `SELECT status 
-           FROM attendance 
-           WHERE lesson_id = $1 AND student_id = $2`,
-          [lesson.id, student.id]
-        );
-
-        const dateKey = lesson.date.toISOString().split('T')[0];
-        studentAttendance.attendance[dateKey] = attendanceResult.rows.length > 0 
-          ? attendanceResult.rows[0].status 
-          : null;
+    // attendance_grid: BARCHA talabalar (active, finished, stopped) - user istagan
+    const studentMap = new Map();
+    attendanceAll.rows.forEach(row => {
+      if (!studentMap.has(row.student_id)) {
+        studentMap.set(row.student_id, {
+          student_id: row.student_id,
+          name: row.name,
+          surname: row.surname,
+          group_status: row.group_status, // active, finished, stopped
+          group_status_description: row.group_status === 'active' ? 'Faol' : 
+                                   row.group_status === 'finished' ? 'Bitirgan' : 
+                                   row.group_status === 'stopped' ? 'To\'xtatgan' : 'Noma\'lum',
+          left_at: row.left_at ? row.left_at.toISOString().split('T')[0] : null,
+          attendance: {}
+        });
       }
+    });
 
-      attendanceGrid.push(studentAttendance);
+    // Har bir attendance yozuvini studentga joylash
+    // Har bir student uchun barcha dars sanalari bo‘yicha attendance obyektini to‘ldirish
+    for (const student of studentMap.values()) {
+      for (const lesson of lessonsArr) {
+        const dateKey = lesson.date;
+        // Shu student va shu dars uchun attendance yozuvi bormi? (barcha statuslar)
+        const att = attendanceAll.rows.find(a => a.student_id === student.student_id && a.lesson_id === lesson.id);
+        
+        if (att) {
+          // left_at sanasini tekshirish (faqat kun qismi)
+          const leftDate = att.left_at ? att.left_at.toISOString().split('T')[0] : null;
+          const lessonDate = lesson.date;
+          
+          // Agar student hozir active bo'lsa (left_at = null), hech qachon "toxtatgan/bitirgan" bermaslik
+          if (student.group_status === 'active') {
+            student.attendance[dateKey] = att.status; // Active student - haqiqiy davomat
+          }
+          // Agar student to'xtatgan/bitirgan bo'lsa va dars sanasi left_at dan keyinroq bo'lsa
+          else if (leftDate && lessonDate > leftDate) {
+            if (student.group_status === 'finished') {
+              student.attendance[dateKey] = 'bitirgan'; // Bitirish sanasidan keyin
+            } else if (student.group_status === 'stopped') {
+              student.attendance[dateKey] = 'toxtatgan'; // To'xtatish sanasidan keyin
+            } else {
+              student.attendance[dateKey] = att.status; // Boshqa holatda
+            }
+          } else {
+            // Left_at dan oldingi darslar yoki left_at yo'q bo'lsa - oddiy davomat
+            student.attendance[dateKey] = att.status;
+          }
+        } else {
+          student.attendance[dateKey] = null; // Attendance yo'q
+        }
+      }
     }
 
-    // Statistika
+    const attendanceGrid = Array.from(studentMap.values()).sort((a, b) => {
+      // Avval active, keyin finished, keyin stopped
+      const statusOrder = { 'active': 1, 'finished': 2, 'stopped': 3 };
+      const aOrder = statusOrder[a.group_status] || 4;
+      const bOrder = statusOrder[b.group_status] || 4;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+      // Bir xil status bo'lsa, ism bo'yicha tartiblash
+      return a.name.localeCompare(b.name);
+    });
+
+    // lessonsArr teskari bo'lsa, attendance_grid ham darslar tartibiga mos bo'lishi uchun kerak bo'lsa, frontendga qulaylik uchun reverse qilinadi
+
+    // Statistika: har bir dars uchun qatnashgan studentlar soni (faqat active studentlar bo'yicha)
     const stats = {
       group_name: group.name,
       month: month,
-      total_lessons: lessons.rows.length,
-      total_students: students.rows.length,
-      active_students: students.rows.filter(s => s.group_status === 'active').length,
-      lesson_dates: lessons.rows.map(l => l.date.toISOString().split('T')[0])
+      total_lessons: lessonsArr.length,
+      total_students_in_grid: attendanceGrid.length, // barcha studentlar (active + finished + stopped)
+      total_active_students: activeAttendanceRows.length > 0 ? new Set(activeAttendanceRows.map(a => a.student_id)).size : 0, // faqat active
+      lesson_dates: lessonsArr.map(l => l.date),
+      lessons_stats: lessonsArr.map(lesson => {
+        const count = activeAttendanceRows.filter(a => a.lesson_id === lesson.id).length;
+        return {
+          lesson_id: lesson.id,
+          date: lesson.date,
+          active_students: count // faqat active talabalar statistikasi
+        };
+      })
     };
 
     res.json({
       success: true,
       message: 'Oylik davomat jadvali muvaffaqiyatli olindi',
       data: {
-        stats,
-        attendance_grid: attendanceGrid
+        group: {
+          id: group.id,
+          name: group.name,
+          schedule: group.schedule,
+          teacher_name: group.teacher_name,
+          teacher_phone: group.teacher_phone,
+          subject_name: group.subject_name
+        },
+        lessons: lessonsArr.map(l => ({
+          id: l.id,
+          date: l.date
+        })),
+        attendance_grid: attendanceGrid,
+        stats
       }
     });
 
@@ -522,11 +598,12 @@ exports.getMonthlyAttendance = async (req, res) => {
     console.error('Oylik davomat jadvalini olishda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Davomat jadvalini olishda xatolik yuz berdi',
+      message: 'Oylik davomat jadvalini olishda xatolik yuz berdi',
       error: error.message
     });
   }
 };
+
 
 // Guruh uchun yaratilgan darslar ro'yxati
 const getGroupLessons = async (req, res) => {
@@ -540,7 +617,6 @@ const getGroupLessons = async (req, res) => {
         'SELECT id FROM groups WHERE id = $1 AND teacher_id = $2',
         [group_id, req.user.id]
       );
-      
       if (checkTeacher.rows.length === 0) {
         return res.status(403).json({
           success: false,
@@ -549,37 +625,62 @@ const getGroupLessons = async (req, res) => {
       }
     }
 
-    let query = `
-      SELECT 
-        l.id,
-        l.date as lesson_date,
-        l.created_at,
-        COUNT(u.id) as students_count,
-        COUNT(CASE WHEN a.status = 'keldi' THEN 1 END) as present_count,
-        COUNT(CASE WHEN a.status = 'kelmadi' THEN 1 END) as absent_count,
-        COUNT(CASE WHEN a.status = 'kechikdi' THEN 1 END) as late_count
+    // Darslar ro'yxatini olish
+    let lessonsQuery = `
+      SELECT l.id, TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date, l.created_at
       FROM lessons l
-      LEFT JOIN student_groups sg ON sg.group_id = l.group_id AND sg.status = 'active'
-      LEFT JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-      LEFT JOIN attendance a ON a.lesson_id = l.id AND a.student_id = u.id
       WHERE l.group_id = $1
     `;
-
     const params = [group_id];
-
     if (month) {
-      query += ` AND l.date >= $2 AND l.date < $3`;
+      lessonsQuery += ` AND l.date >= $2 AND l.date <= $3`;
+      const [year, monthNum] = month.split('-');
       const startDate = `${month}-01`;
-      const endDate = `${month}-31`;
+      // Oy oxirgi kunini aniqlash
+      const lastDay = new Date(year, monthNum, 0).getDate();
+      const endDate = `${month}-${lastDay}`;
       params.push(startDate, endDate);
     }
+    lessonsQuery += ` ORDER BY l.date DESC`;
+    const lessonsResult = await pool.query(lessonsQuery, params);
+    const lessons = lessonsResult.rows;
 
-    query += `
-      GROUP BY l.id, l.date, l.created_at
-      ORDER BY l.date DESC
-    `;
-
-    const result = await pool.query(query, params);
+    // Har bir dars uchun attendance statistikasi
+    let lessonsStats = [];
+    if (lessons.length > 0) {
+      const lessonIds = lessons.map(l => l.id);
+      const attendanceStatsResult = await pool.query(
+        `SELECT 
+            lesson_id,
+            COUNT(*) as students_count,
+            COUNT(CASE WHEN status = 'keldi' THEN 1 END) as present_count,
+            COUNT(CASE WHEN status = 'kelmadi' THEN 1 END) as absent_count,
+            COUNT(CASE WHEN status = 'kechikdi' THEN 1 END) as late_count
+         FROM attendance
+         WHERE lesson_id = ANY($1::int[])
+           AND group_status = 'active'
+         GROUP BY lesson_id`,
+        [lessonIds]
+      );
+      const statsMap = new Map();
+      attendanceStatsResult.rows.forEach(row => {
+        statsMap.set(parseInt(row.lesson_id), {
+          students_count: parseInt(row.students_count),
+          present_count: parseInt(row.present_count),
+          absent_count: parseInt(row.absent_count),
+          late_count: parseInt(row.late_count)
+        });
+      });
+      lessonsStats = lessons.map(lesson => ({
+        ...lesson,
+        ...statsMap.get(lesson.id) || {
+          students_count: 0,
+          present_count: 0,
+          absent_count: 0,
+          late_count: 0
+        }
+      }));
+    }
 
     // Guruh ma'lumotlarini olish
     const groupInfo = await pool.query(`
@@ -604,14 +705,7 @@ const getGroupLessons = async (req, res) => {
       message: 'Darslar ro\'yxati muvaffaqiyatli olindi',
       data: {
         group_info: groupInfo.rows[0],
-        lessons: result.rows.map(lesson => ({
-          ...lesson,
-          lesson_date: lesson.lesson_date,
-          students_count: parseInt(lesson.students_count),
-          present_count: parseInt(lesson.present_count),
-          absent_count: parseInt(lesson.absent_count),
-          late_count: parseInt(lesson.late_count)
-        }))
+        lessons: lessonsStats
       }
     });
 
