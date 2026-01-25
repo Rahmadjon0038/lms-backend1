@@ -51,7 +51,7 @@ exports.getMonthlyPayments = async (req, res) => {
           AND sd.is_active = true
           AND (sd.start_month IS NULL OR $${role === 'teacher' ? 2 : 1} >= sd.start_month)
           AND (sd.end_month IS NULL OR $${role === 'teacher' ? 2 : 1} <= sd.end_month)
-        WHERE sg.status = 'active'
+        WHERE sg.status IN ('active', 'stopped', 'finished')
         GROUP BY sg.student_id, sg.group_id, g.price
       )
       SELECT 
@@ -132,7 +132,8 @@ exports.getMonthlyPayments = async (req, res) => {
       
       WHERE (
           -- Bu guruhda student active bo'lishi kerak YOKI
-          -- Bu guruh uchun o'sha oyda to'lov qilgan bo'lishi kerak
+          -- Bu guruh uchun o'sha oyda to'lov qilgan bo'lishi kerak YOKI
+          -- Payment status filtri bo'lsa barcha statusdagi talabalar
           sg.status = 'active' 
           OR
           EXISTS (
@@ -141,6 +142,8 @@ exports.getMonthlyPayments = async (req, res) => {
               AND sp_check.month = ${role === 'teacher' ? '$2' : '$1'}
               -- Group-specific payment check uchun kelajakda group_id qo'shish mumkin
           )
+          OR
+          (${status ? 'true' : 'false'} AND sg.status IN ('active', 'stopped', 'finished'))
         )
         AND u.role = 'student'
         -- Bu guruhga student o'sha oyda join qilgan bo'lishi kerak
@@ -174,9 +177,9 @@ exports.getMonthlyPayments = async (req, res) => {
 
     if (status) {
       if (status === 'paid') {
-        query += ` AND COALESCE(sp.paid_amount, 0) >= COALESCE(sp.required_amount, g.price)`;
+        query += ` AND COALESCE(sp.paid_amount, 0) >= GREATEST(g.price - COALESCE(sdc.total_discount_amount, 0), 0)`;
       } else if (status === 'partial') {
-        query += ` AND COALESCE(sp.paid_amount, 0) > 0 AND COALESCE(sp.paid_amount, 0) < COALESCE(sp.required_amount, g.price)`;
+        query += ` AND COALESCE(sp.paid_amount, 0) > 0 AND COALESCE(sp.paid_amount, 0) < GREATEST(g.price - COALESCE(sdc.total_discount_amount, 0), 0)`;
       } else if (status === 'unpaid') {
         query += ` AND COALESCE(sp.paid_amount, 0) = 0`;
       }
