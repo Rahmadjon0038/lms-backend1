@@ -8,6 +8,8 @@ const {
   getLessonStudents,
   markAttendance,
   getMonthlyAttendance,
+  getStudentMonthlyAttendance,
+  exportGroupMonthlyAttendance,
   getGroupLessons,
   deleteLesson
 } = require('../controllers/attendanceController');
@@ -695,5 +697,188 @@ router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'teacher'])
  *                   example: "Dars topilmadi"
  */
 router.delete('/lessons/:lesson_id', protect, roleCheck(['admin', 'teacher']), deleteLesson);
+
+/**
+ * @swagger
+ * /api/attendance/students/{student_id}/monthly:
+ *   get:
+ *     summary: Talabaning oylik davomat hisoboti
+ *     description: Ma'lum talabaning bitta oydagi barcha guruhlaridagi davomat holatini ko'rish
+ *     tags:
+ *       - Davomat
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: student_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Talaba ID
+ *         example: 123
+ *       - in: query
+ *         name: month
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Oy (YYYY-MM formatda)
+ *         example: "2026-01"
+ *     responses:
+ *       200:
+ *         description: Talabaning oylik davomat hisoboti
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Talabaning oylik davomat hisoboti muvaffaqiyatli olindi"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     student:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                           example: 123
+ *                         name:
+ *                           type: string
+ *                           example: "Ali"
+ *                         surname:
+ *                           type: string
+ *                           example: "Valiyev"
+ *                         phone:
+ *                           type: string
+ *                           example: "+998901234567"
+ *                     groups:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           group_id:
+ *                             type: integer
+ *                             example: 43
+ *                           group_name:
+ *                             type: string
+ *                             example: "Mathematics A1"
+ *                           subject_name:
+ *                             type: string
+ *                             example: "Mathematics"
+ *                           teacher_name:
+ *                             type: string
+ *                             example: "Bekzod Aliyev"
+ *                           lessons:
+ *                             type: array
+ *                             items:
+ *                               type: object
+ *                               properties:
+ *                                 lesson_id:
+ *                                   type: integer
+ *                                   example: 567
+ *                                 date:
+ *                                   type: string
+ *                                   example: "2026-01-15"
+ *                                 formatted_date:
+ *                                   type: string
+ *                                   example: "15.01"
+ *                                 day_name:
+ *                                   type: string
+ *                                   example: "Dushanba"
+ *                                 attendance_status:
+ *                                   type: string
+ *                                   example: "keldi"
+ *                                 attendance_status_description:
+ *                                   type: string
+ *                                   example: "Keldi"
+ *                           stats:
+ *                             type: object
+ *                             properties:
+ *                               total_lessons:
+ *                                 type: integer
+ *                                 example: 12
+ *                               present:
+ *                                 type: integer
+ *                                 example: 10
+ *                               absent:
+ *                                 type: integer
+ *                                 example: 1
+ *                               late:
+ *                                 type: integer
+ *                                 example: 1
+ *                               attendance_percentage:
+ *                                 type: integer
+ *                                 example: 92
+ *                     overall_stats:
+ *                       type: object
+ *                       properties:
+ *                         total_lessons:
+ *                           type: integer
+ *                           example: 12
+ *                         present:
+ *                           type: integer
+ *                           example: 10
+ *                         absent:
+ *                           type: integer
+ *                           example: 1
+ *                         late:
+ *                           type: integer
+ *                           example: 1
+ *                         attendance_percentage:
+ *                           type: integer
+ *                           example: 92
+ *                         groups_count:
+ *                           type: integer
+ *                           example: 1
+ *       403:
+ *         description: Talabani ko'rish huquqi yo'q
+ *       404:
+ *         description: Talaba topilmadi
+ */
+router.get('/students/:student_id/monthly', protect, roleCheck(['admin', 'teacher', 'student']), getStudentMonthlyAttendance);
+
+/**
+ * @swagger
+ * /api/attendance/groups/{group_id}/monthly/export:
+ *   get:
+ *     summary: Guruh oylik davomat hisobotini Excel formatida yuklab olish
+ *     description: Ma'lum guruh uchun oylik davomat jadvalini Excel fayl sifatida export qilish
+ *     tags:
+ *       - Davomat
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: group_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *         example: 43
+ *       - in: query
+ *         name: month
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Oy (YYYY-MM formatda)
+ *         example: "2026-01"
+ *     responses:
+ *       200:
+ *         description: Excel fayl muvaffaqiyatli yuklanadi
+ *         content:
+ *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       403:
+ *         description: Guruhni ko'rish huquqi yo'q
+ *       404:
+ *         description: Guruh yoki darslar topilmadi
+ */
+router.get('/groups/:group_id/monthly/export', protect, roleCheck(['admin', 'teacher']), exportGroupMonthlyAttendance);
 
 module.exports = router;

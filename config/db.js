@@ -7,6 +7,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
   port: Number(process.env.DB_PORT) || 5432,
+  options: '-c timezone=Asia/Tashkent',
 });
 
 const connectWithRetry = async () => {
@@ -14,6 +15,11 @@ const connectWithRetry = async () => {
     try {
       const client = await pool.connect();
       console.log("✅ PostgreSQL bazasiga ulanildi");
+      
+      // Timezone ni Toshkent vaqtiga o'rnatish
+      await client.query("SET timezone = 'Asia/Tashkent'");
+      console.log("✅ Timezone Toshkent vaqtiga o'rnatildi");
+      
       client.release();
       break;
     } catch (err) {
