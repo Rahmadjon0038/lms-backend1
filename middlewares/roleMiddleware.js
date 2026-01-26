@@ -10,4 +10,17 @@ const roleCheck = (roles) => {
     };
 };
 
-module.exports = { roleCheck };
+/**
+ * Faqat super adminlar uchun middleware
+ */
+const protectSuperAdmin = (req, res, next) => {
+    if (!req.user || req.user.role !== 'super_admin') {
+        return res.status(403).json({ 
+            success: false,
+            message: "Faqat super adminlar bu ma'lumotlarga kirish huquqiga ega!" 
+        });
+    }
+    next();
+};
+
+module.exports = { roleCheck, protectSuperAdmin };

@@ -98,6 +98,25 @@ exports.updateStudentGroupStatus = async (req, res) => {
             'finished': 'Bitirgan'
         };
 
+        // Users jadvalidagi course ma'lumotlarini yangilash
+        if (status === 'finished' || status === 'stopped') {
+            // Student kursni bitirgan yoki to'xtatgan
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = $1, course_end_date = CURRENT_TIMESTAMP 
+                 WHERE id = $2`,
+                [status === 'finished' ? 'finished' : 'stopped', student_id]
+            );
+        } else if (status === 'active') {
+            // Student yana kursni boshlagan - end_date ni tozalash
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'in_progress', course_end_date = NULL 
+                 WHERE id = $1`,
+                [student_id]
+            );
+        }
+
         res.json({
             success: true,
             message: message,
@@ -143,6 +162,12 @@ exports.getStudentGroups = async (req, res) => {
                 sg.status as group_status,
                 sg.joined_at,
                 sg.left_at,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as formatted_left_date,
+                CASE 
+                    WHEN sg.status = 'finished' THEN sg.left_at
+                    WHEN sg.status = 'stopped' THEN sg.left_at  
+                    ELSE NULL
+                END as status_changed_date,
                 g.id as group_id,
                 g.name as group_name,
                 g.unique_code,
@@ -228,6 +253,7 @@ exports.getAllStudents = async (req, res) => {
         u.course_status,
         u.course_start_date,
         u.course_end_date,
+        TO_CHAR(u.course_end_date, 'DD.MM.YYYY') as formatted_course_end_date,
         u.role
       FROM users u
     `;
@@ -310,6 +336,12 @@ exports.getAllStudents = async (req, res) => {
             WHEN sg.status = 'finished' THEN 'Bitirgan'
             ELSE 'Belgilanmagan'
           END as group_status_description,
+          CASE 
+            WHEN sg.status = 'finished' THEN sg.left_at
+            WHEN sg.status = 'stopped' THEN sg.left_at  
+            ELSE NULL
+          END as status_changed_date,
+          TO_CHAR(sg.left_at, 'DD.MM.YYYY') as formatted_left_date,
           CONCAT(t.name, ' ', t.surname) as teacher_name,
           s.name as subject_name,
           r.room_number,
@@ -380,98 +412,8 @@ exports.getAllStudents = async (req, res) => {
 };
 
 // Student o'zi qatnashayotgan guruhlarni olish
-exports.getMyGroups = async (req, res) => {
-    const student_id = req.user.id; // JWT tokendan olingan student ID
-    
-    try {
-        const result = await pool.query(
-            `SELECT 
-                g.id as group_id,
-                g.name as group_name,
-                g.unique_code,
-                g.start_date,
-                g.schedule,
-                g.price,
-                g.is_active,
-                g.status as group_status,
-                g.class_status,
-                g.class_start_date,
-                sg.joined_at,
-                sg.status as student_group_status,
-                CONCAT(t.name, ' ', t.surname) as teacher_name,
-                s.name as subject_name,
-                r.room_number,
-                r.capacity as room_capacity,
-                r.has_projector
-             FROM student_groups sg
-             JOIN groups g ON sg.group_id = g.id
-             LEFT JOIN users t ON g.teacher_id = t.id
-             LEFT JOIN subjects s ON g.subject_id = s.id
-             LEFT JOIN rooms r ON g.room_id = r.id
-             WHERE sg.student_id = $1
-             ORDER BY sg.joined_at DESC`,
-            [student_id]
-        );
-
-        if (result.rows.length === 0) {
-            return res.json({
-                success: true,
-                message: "Siz hali hech qaysi guruhga a'zo emassiz",
-                groups: []
-            });
-        }
-
-        // JSON formatda schedule ma'lumotlarini parse qilish va holat tekstini aniqlash
-        const groups = result.rows.map(group => {
-            let displayStatus = "Guruh tashkil topilmoqda";
-            let startedAt = null; // Darslar boshlangan sana
-            
-            // Guruh bloklangan bo'lsa
-            if (group.group_status === 'blocked' || group.student_group_status === 'stopped') {
-                displayStatus = "Bloklangan";
-            }
-            // Guruh active va darslar boshlangan
-            else if (group.group_status === 'active' && group.class_status === 'started') {
-                displayStatus = "O'qimoqda";
-                startedAt = group.class_start_date; // Faqat dars boshlangan bo'lsagina sana ko'rsatiladi
-            }
-            // Guruh active lekin darslar boshlanmagan
-            else if (group.group_status === 'active' && group.class_status === 'not_started') {
-                displayStatus = "Guruh faol, darslar boshlanishi kutilmoqda";
-            }
-            // Guruh draft holatida
-            else if (group.group_status === 'draft') {
-                displayStatus = "Guruh tashkil topilmoqda";
-            }
-            // Darslar tugagan
-            else if (group.class_status === 'finished') {
-                displayStatus = "Darslar tugagan";
-                startedAt = group.class_start_date;
-            }
-            
-            return {
-                ...group,
-                joined_at: group.joined_at, // Guruhga qo'shilgan sana
-                started_at: startedAt, // Darslar boshlangan sana (faqat dars boshlangan bo'lsa)
-                schedule: group.schedule ? (typeof group.schedule === 'string' ? JSON.parse(group.schedule) : group.schedule) : null,
-                display_status: displayStatus,
-                status_details: {
-                    group_status: group.group_status,
-                    class_status: group.class_status,
-                    student_group_status: group.student_group_status
-                }
-            };
-        });
-
-        res.json({
-            success: true,
-            message: "Sizning guruhlaringiz ro'yxati",
-            groups: groups
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
+// ESKIROQ VERSIYA - OLIB TASHLANDI
+// Eski getMyGroups funksiyasi o'rniga 614-qatordagi yangi versiya ishlatiladi
 
 // 5. Student'ning aniq guruh ma'lumotlari va dars holati (Teacher telefon, guruh price va a'zolar bilan)
 exports.getMyGroupInfo = async (req, res) => {
@@ -573,5 +515,273 @@ exports.getMyGroupInfo = async (req, res) => {
     } catch (err) {
         console.error("Student guruh ma'lumotlarini olishda xato:", err);
         res.status(500).json({ error: err.message });
+    }
+};
+
+/**
+ * Studentning o'zi qo'shilgan guruhlar ro'yxati
+ */
+exports.getMyGroups = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+
+        console.log(`🎓 Student ${studentId} o'z guruhlarini so'ramoqda`);
+
+        const myGroups = await pool.query(`
+            SELECT 
+                g.id as group_id,
+                g.name as group_name,
+                g.unique_code,
+                g.price,
+                s.name as subject_name,
+                u.name || ' ' || u.surname as teacher_name,
+                u.phone as teacher_phone,
+                r.room_number,
+                
+                -- Student guruh ma'lumotlari
+                sg.status as my_status,
+                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as my_join_date,
+                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as my_leave_date,
+                
+                -- Guruh umumiy ma'lumotlari
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as group_start_date,
+                
+                -- Guruh a'zolari soni
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg2 
+                    WHERE sg2.group_id = g.id AND sg2.status = 'active'
+                ) as total_students
+                
+            FROM student_groups sg
+            JOIN groups g ON sg.group_id = g.id
+            JOIN subjects s ON g.subject_id = s.id
+            JOIN users u ON g.teacher_id = u.id
+            LEFT JOIN rooms r ON g.room_id = r.id
+            
+            WHERE sg.student_id = $1
+            ORDER BY 
+                CASE sg.status 
+                    WHEN 'active' THEN 1
+                    WHEN 'stopped' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                g.name
+        `, [studentId]);
+
+        const groupsData = myGroups.rows.map(group => ({
+            group_info: {
+                id: group.group_id,
+                name: group.group_name,
+                unique_code: group.unique_code,
+                price: parseFloat(group.price),
+                status: group.group_status,
+                class_status: group.class_status,
+                start_date: group.group_start_date,
+                total_students: parseInt(group.total_students)
+            },
+            subject_info: {
+                name: group.subject_name
+            },
+            teacher_info: {
+                name: group.teacher_name,
+                phone: group.teacher_phone
+            },
+            room_info: {
+                room_number: group.room_number || 'Tayinlanmagan'
+            },
+            my_status: {
+                status: group.my_status,
+                join_date: group.my_join_date,
+                leave_date: group.my_leave_date
+            }
+        }));
+
+        console.log(`✅ Student ${studentId} ning ${groupsData.length}ta guruhi topildi`);
+
+        res.json({
+            success: true,
+            message: 'Guruhlar ro\'yxati muvaffaqiyatli olindi',
+            data: {
+                student_id: studentId,
+                total_groups: groupsData.length,
+                groups: groupsData
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Student guruhlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruhlar ro\'yxatini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Muayyan guruh haqida batafsil ma'lumot
+ */
+exports.getMyGroupInfo = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const groupId = parseInt(req.params.group_id);
+
+        console.log(`📚 Student ${studentId} guruh ${groupId} ma'lumotlarini so'ramoqda`);
+
+        // Avval student shu guruhda borligini tekshirish
+        const membershipCheck = await pool.query(`
+            SELECT sg.status 
+            FROM student_groups sg 
+            WHERE sg.student_id = $1 AND sg.group_id = $2
+        `, [studentId, groupId]);
+
+        if (membershipCheck.rows.length === 0) {
+            return res.status(403).json({
+                success: false,
+                message: 'Siz ushbu guruhga a\'zo emassiz'
+            });
+        }
+
+        // Guruh to'liq ma'lumotlari va student qo'shilgan sana
+        const groupInfo = await pool.query(`
+            SELECT 
+                g.id,
+                g.name,
+                g.unique_code,
+                g.price,
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
+                TO_CHAR(g.created_at, 'DD.MM.YYYY') as created_date,
+                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as student_joined_date,
+                
+                s.name as subject_name,
+                
+                u.name || ' ' || u.surname as teacher_name,
+                u.phone as teacher_phone
+                
+            FROM groups g
+            JOIN subjects s ON g.subject_id = s.id
+            JOIN users u ON g.teacher_id = u.id
+            JOIN student_groups sg ON g.id = sg.group_id AND sg.student_id = $2
+            WHERE g.id = $1
+        `, [groupId, studentId]);
+
+        if (groupInfo.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Guruh topilmadi'
+            });
+        }
+
+        // Guruh a'zolari (guruh doshlari)
+        const groupmates = await pool.query(`
+            SELECT 
+                u.id,
+                u.name,
+                u.surname,
+                u.phone,
+                sg.status,
+                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                
+                -- Status tavsifi
+                CASE 
+                    WHEN sg.status = 'active' THEN 'Faol'
+                    WHEN sg.status = 'stopped' THEN 'Toʻxtatgan'
+                    WHEN sg.status = 'finished' THEN 'Bitirgan'
+                    ELSE 'Nomaʻlum'
+                END as status_description
+                
+            FROM student_groups sg
+            JOIN users u ON sg.student_id = u.id
+            WHERE sg.group_id = $1
+            ORDER BY 
+                CASE sg.status 
+                    WHEN 'active' THEN 1
+                    WHEN 'stopped' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                u.name, u.surname
+        `, [groupId]);
+
+        // Mening to'lov ma'lumotlarim
+        const myPayment = await pool.query(`
+            SELECT 
+                sp.required_amount,
+                COALESCE(sp.paid_amount, 0) as paid_amount,
+                TO_CHAR(sp.last_payment_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as last_payment_date,
+                CASE 
+                    WHEN COALESCE(sp.paid_amount, 0) >= COALESCE(sp.required_amount, g.price) THEN 'paid'
+                    WHEN COALESCE(sp.paid_amount, 0) > 0 THEN 'partial'
+                    ELSE 'unpaid'
+                END as payment_status
+                
+            FROM groups g
+            LEFT JOIN student_payments sp ON sp.student_id = $1 
+                                          AND sp.group_id = g.id 
+                                          AND sp.month = TO_CHAR(CURRENT_DATE, 'YYYY-MM')
+            WHERE g.id = $2
+        `, [studentId, groupId]);
+
+        const group = groupInfo.rows[0];
+        const payment = myPayment.rows[0];
+
+        const responseData = {
+            group_details: {
+                id: group.id,
+                name: group.name,
+                unique_code: group.unique_code,
+                price: parseFloat(group.price),
+                status: group.group_status,
+                class_status: group.class_status,
+                start_date: group.start_date,
+                created_date: group.created_date,
+                student_joined_date: group.student_joined_date
+            },
+            subject: {
+                name: group.subject_name
+            },
+            teacher: {
+                name: group.teacher_name,
+                phone: group.teacher_phone
+            },
+            group_statistics: {
+                total_members: groupmates.rows.length,
+                active_members: groupmates.rows.filter(m => m.status === 'active').length
+            },
+            groupmates: groupmates.rows.map(mate => ({
+                id: mate.id,
+                full_name: `${mate.name} ${mate.surname}`,
+                name: mate.name,
+                surname: mate.surname,
+                phone: mate.phone,
+                status: mate.status,
+                status_description: mate.status_description,
+                join_date: mate.join_date,
+                leave_date: mate.leave_date
+            }))
+        };
+
+        console.log(`✅ Guruh ${groupId} ma'lumotlari ${groupmates.rows.length} a'zo bilan yuborildi`);
+
+        res.json({
+            success: true,
+            message: 'Guruh ma\'lumotlari muvaffaqiyatli olindi',
+            data: responseData
+        });
+
+    } catch (error) {
+        console.error('❌ Guruh ma\'lumotlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruh ma\'lumotlarini olishda xatolik yuz berdi',
+            error: error.message
+        });
     }
 };

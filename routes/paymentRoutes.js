@@ -7,7 +7,8 @@ const {
   getStudentPaymentHistory,
   giveDiscount,
   getPaymentFilters,
-  clearStudentPayments
+  clearStudentPayments,
+  exportMonthlyPayments
 } = require('../controllers/paymentController');
 
 /**
@@ -183,6 +184,7 @@ router.get('/monthly', protect, getMonthlyPayments);
  *             required:
  *               - student_id
  *               - amount
+ *               - month
  *             properties:
  *               student_id:
  *                 type: integer
@@ -192,7 +194,7 @@ router.get('/monthly', protect, getMonthlyPayments);
  *               month:
  *                 type: string
  *                 format: YYYY-MM
- *                 description: Default = joriy oy
+ *                 description: Qaysi oy uchun to'lov (masalan 2026-02). MAJBURIY!
  *               payment_method:
  *                 type: string
  *                 enum: [cash, card, transfer]
@@ -286,7 +288,7 @@ router.get('/student/:student_id/history', protect, getStudentPaymentHistory);
  * /api/payments/discount:
  *   post:
  *     summary: Talabaga chegirma berish
- *     description: Talaba uchun foizli yoki summali chegirma yaratish
+ *     description: Talaba uchun foizli yoki summali chegirma yaratish (ma'lum bir oy uchun)
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -300,6 +302,7 @@ router.get('/student/:student_id/history', protect, getStudentPaymentHistory);
  *               - student_id
  *               - discount_type
  *               - discount_value
+ *               - month
  *             properties:
  *               student_id:
  *                 type: integer
@@ -309,9 +312,10 @@ router.get('/student/:student_id/history', protect, getStudentPaymentHistory);
  *               discount_value:
  *                 type: number
  *                 description: Foiz (1-100) yoki aniq summa
- *               months:
- *                 type: integer
- *                 description: Necha oyga (null = umrboqiy)
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Qaysi oy uchun chegirma (masalan 2026-02). MAJBURIY!
  *               description:
  *                 type: string
  *     responses:
@@ -410,6 +414,57 @@ router.get('/filters', protect, getPaymentFilters);
  *         description: Parametrlar xato
  */
 router.post('/clear-student', protectAdmin, clearStudentPayments);
+
+/**
+ * @swagger
+ * /api/payments/monthly/export:
+ *   get:
+ *     summary: Oylik to'lov hisobotini Excel formatida yuklab olish
+ *     description: Talabalarning oylik to'lov hisobotini Excel fayl sifatida export qilish
+ *     tags:
+ *       - To'lovlar
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *         description: Oy (YYYY-MM formatda). Agar berilmasa, joriy oy ishlatiladi
+ *         example: "2026-01"
+ *       - in: query
+ *         name: teacher_id
+ *         schema:
+ *           type: integer
+ *         description: O'qituvchi ID (faqat admin uchun)
+ *         example: 123
+ *       - in: query
+ *         name: subject_id
+ *         schema:
+ *           type: integer
+ *         description: Fan ID
+ *         example: 5
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [paid, partial, unpaid]
+ *         description: To'lov holati bo'yicha filter
+ *         example: "unpaid"
+ *     responses:
+ *       200:
+ *         description: Excel fayl muvaffaqiyatli yuklanadi
+ *         content:
+ *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       403:
+ *         description: Huquq yo'q
+ *       404:
+ *         description: Ma'lumotlar topilmadi
+ */
+router.get('/monthly/export', protect, exportMonthlyPayments);
 
 module.exports = router;
 module.exports = router;

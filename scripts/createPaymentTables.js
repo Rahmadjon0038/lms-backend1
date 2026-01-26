@@ -87,14 +87,22 @@ const createPaymentTables = async () => {
       RETURNS TRIGGER AS $$
       DECLARE
         group_price DECIMAL(10,2);
+        group_status VARCHAR(20);
+        group_class_status VARCHAR(20);
         total_discount DECIMAL(10,2) := 0;
         discount_rec RECORD;
       BEGIN
-        -- Guruh narxini olish
-        SELECT g.price INTO group_price
+        -- Guruh narxi va statusini olish
+        SELECT g.price, g.status, g.class_status INTO group_price, group_status, group_class_status
         FROM student_groups sg
         JOIN groups g ON sg.group_id = g.id
         WHERE sg.student_id = NEW.student_id AND sg.status = 'active';
+
+        -- Agar guruh active emas yoki darslar boshlanmagan bo'lsa, payment yaratmaslik
+        IF group_status != 'active' OR group_class_status != 'started' THEN
+          -- Bu holatda trigger funksiyasini to'xtatamiz
+          RETURN NULL;
+        END IF;
 
         -- Aktiv chegirmalarni hisoblash
         FOR discount_rec IN 

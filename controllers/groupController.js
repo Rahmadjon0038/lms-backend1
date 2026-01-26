@@ -399,6 +399,25 @@ exports.updateGroupStatus = async (req, res) => {
     }
 
     try {
+        // Agar guruh bloklansa, avval faol talabalar borligini tekshirish
+        if (status === 'blocked') {
+            const activeStudentsCheck = await pool.query(
+                `SELECT COUNT(*) as count 
+                 FROM student_groups 
+                 WHERE group_id = $1 AND status = 'active'`,
+                [id]
+            );
+            
+            const activeStudentsCount = parseInt(activeStudentsCheck.rows[0].count);
+            
+            if (activeStudentsCount > 0) {
+                return res.status(400).json({ 
+                    message: `Guruhda ${activeStudentsCount} ta faol talaba mavjud. Avval talabalarni to'xtatish kerak!`,
+                    activeStudentsCount: activeStudentsCount
+                });
+            }
+        }
+
         let updateFields = {};
         let updateValues = [];
         let paramCount = 1;
@@ -432,16 +451,42 @@ exports.updateGroupStatus = async (req, res) => {
             // Guruh bloklanganda barcha talabalar statusini 'stopped' ga o'zgartirish
             await pool.query(
                 `UPDATE student_groups 
-                 SET status = 'stopped' 
+                 SET status = 'stopped', left_at = $2
                  WHERE group_id = $1 AND status = 'active'`,
-                [id]
+                [id, new Date()]
+            );
+            
+            // Guruh bloklanganda talabalarning course ma'lumotlarini yangilash
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'stopped', 
+                     course_end_date = $1 
+                 WHERE id IN (
+                     SELECT sg.student_id 
+                     FROM student_groups sg 
+                     WHERE sg.group_id = $2 AND sg.status = 'stopped'
+                 ) AND course_status = 'in_progress'`,
+                [new Date(), id]
             );
         } else if (status === 'active') {
             // Guruh aktiv bo'lganda talabalar statusini 'active' ga qaytarish
             await pool.query(
                 `UPDATE student_groups 
-                 SET status = 'active' 
+                 SET status = 'active', left_at = NULL
                  WHERE group_id = $1 AND status = 'stopped'`,
+                [id]
+            );
+            
+            // Guruh aktiv bo'lganda talabalarning course ma'lumotlarini qaytarish
+            await pool.query(
+                `UPDATE users 
+                 SET course_status = 'in_progress', 
+                     course_end_date = NULL 
+                 WHERE id IN (
+                     SELECT sg.student_id 
+                     FROM student_groups sg 
+                     WHERE sg.group_id = $1 AND sg.status = 'active'
+                 ) AND course_status = 'stopped'`,
                 [id]
             );
         }
