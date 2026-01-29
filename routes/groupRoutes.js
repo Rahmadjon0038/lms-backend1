@@ -783,4 +783,226 @@ router.post('/swap-schedules', protect, roleCheck(['admin']), groupCtrl.swapGrou
  */
 router.get('/teacher-schedule/:teacher_id', protect, roleCheck(['admin']), groupCtrl.getTeacherScheduleOverview);
 
+// ============================================================================
+// TEACHER O'Z GURUHLARINI KO'RISH API'LARI
+// ============================================================================
+
+/**
+ * @swagger
+ * /api/groups/teacher/my-groups:
+ *   get:
+ *     summary: Teacher o'zi o'qitayotgan guruhlar ro'yxati (dars jadvali bilan)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Teacher o'z guruhlarini ko'rish uchun API.
+ *       - Barcha guruhlar ro'yxati
+ *       - Dars jadvali (schedule) 
+ *       - Kunlar bo'yicha jadval
+ *       - Har bir guruhda talabalar soni
+ *     responses:
+ *       200:
+ *         description: Guruhlar ro'yxati
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Guruhlar ro'yxati muvaffaqiyatli olindi"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     teacher_id:
+ *                       type: integer
+ *                       example: 31
+ *                     total_groups:
+ *                       type: integer
+ *                       example: 3
+ *                     groups:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           group_info:
+ *                             type: object
+ *                             properties:
+ *                               id:
+ *                                 type: integer
+ *                               name:
+ *                                 type: string
+ *                               unique_code:
+ *                                 type: string
+ *                               price:
+ *                                 type: number
+ *                               status:
+ *                                 type: string
+ *                                 enum: [draft, active, blocked]
+ *                               class_status:
+ *                                 type: string
+ *                                 enum: [not_started, started, finished]
+ *                           schedule:
+ *                             type: object
+ *                             properties:
+ *                               days:
+ *                                 type: array
+ *                                 items:
+ *                                   type: string
+ *                                 example: ["monday", "wednesday", "friday"]
+ *                               days_uz:
+ *                                 type: array
+ *                                 items:
+ *                                   type: string
+ *                                 example: ["Dushanba", "Chorshanba", "Juma"]
+ *                               time:
+ *                                 type: string
+ *                                 example: "14:00-16:00"
+ *                           subject_info:
+ *                             type: object
+ *                             properties:
+ *                               id:
+ *                                 type: integer
+ *                               name:
+ *                                 type: string
+ *                           room_info:
+ *                             type: object
+ *                             properties:
+ *                               id:
+ *                                 type: integer
+ *                               room_number:
+ *                                 type: string
+ *                               capacity:
+ *                                 type: integer
+ *                           students_count:
+ *                             type: object
+ *                             properties:
+ *                               active:
+ *                                 type: integer
+ *                                 example: 12
+ *                               total:
+ *                                 type: integer
+ *                                 example: 15
+ *                     schedule_by_day:
+ *                       type: object
+ *                       description: Kunlar bo'yicha jadval
+ *                       example:
+ *                         monday: [{"group_id": 1, "group_name": "Frontend 1", "time": "14:00-16:00"}]
+ *                         wednesday: [{"group_id": 1, "group_name": "Frontend 1", "time": "14:00-16:00"}]
+ *       401:
+ *         description: Token kerak
+ *       403:
+ *         description: Faqat teacher kirishi mumkin
+ */
+router.get('/teacher/my-groups', protect, roleCheck(['teacher']), groupCtrl.getTeacherMyGroups);
+
+/**
+ * @swagger
+ * /api/groups/teacher/my-groups/{group_id}:
+ *   get:
+ *     summary: Teacher ma'lum bir guruh haqida batafsil ma'lumot (talabalar ro'yxati bilan)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Teacher o'z guruhining batafsil ma'lumotlarini olish:
+ *       - Guruh ma'lumotlari
+ *       - Dars jadvali
+ *       - Talabalar ro'yxati (ism, familiya, telefon, ota telefoni, status)
+ *       - Talabalar statistikasi
+ *     parameters:
+ *       - in: path
+ *         name: group_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID
+ *     responses:
+ *       200:
+ *         description: Guruh ma'lumotlari
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     group_info:
+ *                       type: object
+ *                     schedule:
+ *                       type: object
+ *                     subject_info:
+ *                       type: object
+ *                     room_info:
+ *                       type: object
+ *                     students_stats:
+ *                       type: object
+ *                       properties:
+ *                         total:
+ *                           type: integer
+ *                           example: 15
+ *                         active:
+ *                           type: integer
+ *                           example: 12
+ *                         stopped:
+ *                           type: integer
+ *                           example: 2
+ *                         finished:
+ *                           type: integer
+ *                           example: 1
+ *                     students:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           name:
+ *                             type: string
+ *                           surname:
+ *                             type: string
+ *                           full_name:
+ *                             type: string
+ *                           phone:
+ *                             type: string
+ *                           phone2:
+ *                             type: string
+ *                           father_name:
+ *                             type: string
+ *                           father_phone:
+ *                             type: string
+ *                           age:
+ *                             type: integer
+ *                           address:
+ *                             type: string
+ *                           group_status:
+ *                             type: string
+ *                             enum: [active, stopped, finished]
+ *                           group_status_description:
+ *                             type: string
+ *                             example: "Faol"
+ *                           join_date:
+ *                             type: string
+ *                             example: "15.01.2026"
+ *                           leave_date:
+ *                             type: string
+ *       400:
+ *         description: Guruh ID noto'g'ri
+ *       401:
+ *         description: Token kerak
+ *       403:
+ *         description: Faqat teacher kirishi mumkin
+ *       404:
+ *         description: Guruh topilmadi yoki sizga tegishli emas
+ */
+router.get('/teacher/my-groups/:group_id', protect, roleCheck(['teacher']), groupCtrl.getTeacherGroupDetails);
+
 module.exports = router;

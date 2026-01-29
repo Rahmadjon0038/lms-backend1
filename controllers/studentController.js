@@ -533,6 +533,7 @@ exports.getMyGroups = async (req, res) => {
                 g.name as group_name,
                 g.unique_code,
                 g.price,
+                g.schedule,
                 s.name as subject_name,
                 u.name || ' ' || u.surname as teacher_name,
                 u.phone as teacher_phone,
@@ -581,7 +582,8 @@ exports.getMyGroups = async (req, res) => {
                 status: group.group_status,
                 class_status: group.class_status,
                 start_date: group.group_start_date,
-                total_students: parseInt(group.total_students)
+                total_students: parseInt(group.total_students),
+                schedule: group.schedule || null
             },
             subject_info: {
                 name: group.subject_name

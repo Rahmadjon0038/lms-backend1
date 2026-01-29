@@ -1653,3 +1653,617 @@ exports.getTeacherScheduleOverview = async (req, res) => {
         });
     }
 };
+
+// ============================================================================
+// TEACHER O'Z GURUHLARINI KO'RISH API'LARI
+// ============================================================================
+
+/**
+ * Teacher o'zi o'qitayotgan guruhlar ro'yxatini olish (dars jadvali bilan)
+ */
+exports.getTeacherMyGroups = async (req, res) => {
+    try {
+        const teacherId = req.user.id;
+
+        console.log(`👨‍🏫 Teacher ${teacherId} o'z guruhlarini so'ramoqda`);
+
+        const myGroups = await pool.query(`
+            SELECT 
+                g.id as group_id,
+                g.name as group_name,
+                g.unique_code,
+                g.price,
+                g.schedule,
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
+                TO_CHAR(g.class_start_date, 'DD.MM.YYYY') as class_start_date,
+                
+                s.id as subject_id,
+                s.name as subject_name,
+                
+                r.id as room_id,
+                r.room_number,
+                r.capacity as room_capacity,
+                
+                -- Aktiv talabalar soni
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg 
+                    WHERE sg.group_id = g.id AND sg.status = 'active'
+                ) as active_students_count,
+                
+                -- Jami talabalar soni (barcha statuslar)
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg 
+                    WHERE sg.group_id = g.id
+                ) as total_students_count
+                
+            FROM groups g
+            JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN rooms r ON g.room_id = r.id
+            
+            WHERE g.teacher_id = $1
+            ORDER BY 
+                CASE g.status 
+                    WHEN 'active' THEN 1
+                    WHEN 'draft' THEN 2  
+                    WHEN 'blocked' THEN 3
+                    ELSE 4
+                END,
+                CASE g.class_status 
+                    WHEN 'started' THEN 1
+                    WHEN 'not_started' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                g.name
+        `, [teacherId]);
+
+        // Schedule'ni formatlash
+        const formatSchedule = (schedule) => {
+            if (!schedule) return null;
+            
+            const dayNames = {
+                'monday': 'Dushanba',
+                'tuesday': 'Seshanba', 
+                'wednesday': 'Chorshanba',
+                'thursday': 'Payshanba',
+                'friday': 'Juma',
+                'saturday': 'Shanba',
+                'sunday': 'Yakshanba'
+            };
+            
+            return {
+                days: schedule.days || [],
+                days_uz: (schedule.days || []).map(d => dayNames[d] || d),
+                time: schedule.time || null
+            };
+        };
+
+        const groupsData = myGroups.rows.map(group => ({
+            group_info: {
+                id: group.group_id,
+                name: group.group_name,
+                unique_code: group.unique_code,
+                price: parseFloat(group.price) || 0,
+                status: group.group_status,
+                class_status: group.class_status,
+                start_date: group.start_date,
+                class_start_date: group.class_start_date
+            },
+            schedule: formatSchedule(group.schedule),
+            subject_info: {
+                id: group.subject_id,
+                name: group.subject_name
+            },
+            room_info: {
+                id: group.room_id,
+                room_number: group.room_number || 'Tayinlanmagan',
+                capacity: group.room_capacity
+            },
+            students_count: {
+                active: parseInt(group.active_students_count),
+                total: parseInt(group.total_students_count)
+            }
+        }));
+
+        // Kunlar bo'yicha guruhlash
+        const scheduleByDay = {};
+        const dayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        
+        myGroups.rows.forEach(group => {
+            if (group.schedule && group.schedule.days) {
+                group.schedule.days.forEach(day => {
+                    if (!scheduleByDay[day]) {
+                        scheduleByDay[day] = [];
+                    }
+                    scheduleByDay[day].push({
+                        group_id: group.group_id,
+                        group_name: group.group_name,
+                        time: group.schedule.time,
+                        room_number: group.room_number,
+                        subject_name: group.subject_name,
+                        active_students: parseInt(group.active_students_count)
+                    });
+                });
+            }
+        });
+
+        // Kunlarni tartiblash
+        const orderedSchedule = {};
+        dayOrder.forEach(day => {
+            if (scheduleByDay[day]) {
+                orderedSchedule[day] = scheduleByDay[day].sort((a, b) => {
+                    if (!a.time || !b.time) return 0;
+                    return a.time.localeCompare(b.time);
+                });
+            }
+        });
+
+        console.log(`✅ Teacher ${teacherId} ning ${groupsData.length}ta guruhi topildi`);
+
+        res.json({
+            success: true,
+            message: 'Guruhlar ro\'yxati muvaffaqiyatli olindi',
+            data: {
+                teacher_id: teacherId,
+                total_groups: groupsData.length,
+                groups: groupsData,
+                schedule_by_day: orderedSchedule
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Teacher guruhlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruhlar ro\'yxatini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Teacher ma'lum bir guruh haqida batafsil ma'lumot olish (talabalar ro'yxati bilan)
+ */
+exports.getTeacherGroupDetails = async (req, res) => {
+    try {
+        const teacherId = req.user.id;
+        const groupId = parseInt(req.params.group_id);
+
+        if (isNaN(groupId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Guruh ID raqam bo'lishi kerak"
+            });
+        }
+
+        console.log(`👨‍🏫 Teacher ${teacherId} ${groupId}-guruh ma'lumotlarini so'ramoqda`);
+
+        // Guruhni tekshirish va teacher'ga tegishliligini tasdiqlash
+        const groupResult = await pool.query(`
+            SELECT 
+                g.id as group_id,
+                g.name as group_name,
+                g.unique_code,
+                g.price,
+                g.schedule,
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
+                TO_CHAR(g.class_start_date, 'DD.MM.YYYY') as class_start_date,
+                TO_CHAR(g.created_at, 'DD.MM.YYYY') as created_at,
+                
+                s.id as subject_id,
+                s.name as subject_name,
+                
+                r.id as room_id,
+                r.room_number,
+                r.capacity as room_capacity,
+                r.has_projector
+                
+            FROM groups g
+            JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN rooms r ON g.room_id = r.id
+            
+            WHERE g.id = $1 AND g.teacher_id = $2
+        `, [groupId, teacherId]);
+
+        if (groupResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Guruh topilmadi yoki sizga tegishli emas'
+            });
+        }
+
+        const group = groupResult.rows[0];
+
+        // Talabalar ro'yxatini olish
+        const studentsResult = await pool.query(`
+            SELECT 
+                u.id as student_id,
+                u.name,
+                u.surname,
+                u.phone,
+                u.phone2,
+                u.father_name,
+                u.father_phone,
+                u.age,
+                u.address,
+                
+                sg.status as group_status,
+                CASE 
+                    WHEN sg.status = 'active' THEN 'Faol'
+                    WHEN sg.status = 'stopped' THEN 'Nofaol'
+                    WHEN sg.status = 'finished' THEN 'Bitirgan'
+                    ELSE 'Belgilanmagan'
+                END as group_status_description,
+                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                sg.joined_at
+                
+            FROM student_groups sg
+            JOIN users u ON sg.student_id = u.id
+            
+            WHERE sg.group_id = $1
+            ORDER BY 
+                CASE sg.status 
+                    WHEN 'active' THEN 1
+                    WHEN 'stopped' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                u.name, u.surname
+        `, [groupId]);
+
+        // Schedule formatlash
+        const dayNames = {
+            'monday': 'Dushanba',
+            'tuesday': 'Seshanba', 
+            'wednesday': 'Chorshanba',
+            'thursday': 'Payshanba',
+            'friday': 'Juma',
+            'saturday': 'Shanba',
+            'sunday': 'Yakshanba'
+        };
+
+        const formatSchedule = (schedule) => {
+            if (!schedule) return null;
+            return {
+                days: schedule.days || [],
+                days_uz: (schedule.days || []).map(d => dayNames[d] || d),
+                time: schedule.time || null
+            };
+        };
+
+        // Talabalar statistikasi
+        const studentsStats = {
+            total: studentsResult.rows.length,
+            active: studentsResult.rows.filter(s => s.group_status === 'active').length,
+            stopped: studentsResult.rows.filter(s => s.group_status === 'stopped').length,
+            finished: studentsResult.rows.filter(s => s.group_status === 'finished').length
+        };
+
+        // Talabalar ro'yxatini formatlash
+        const students = studentsResult.rows.map(student => ({
+            id: student.student_id,
+            name: student.name,
+            surname: student.surname,
+            full_name: `${student.name} ${student.surname}`,
+            phone: student.phone,
+            phone2: student.phone2 || null,
+            father_name: student.father_name || null,
+            father_phone: student.father_phone || null,
+            age: student.age,
+            address: student.address || null,
+            group_status: student.group_status,
+            group_status_description: student.group_status_description,
+            join_date: student.join_date,
+            leave_date: student.leave_date
+        }));
+
+        console.log(`✅ Guruh ${groupId} ma'lumotlari olindi: ${students.length}ta talaba`);
+
+        res.json({
+            success: true,
+            message: 'Guruh ma\'lumotlari muvaffaqiyatli olindi',
+            data: {
+                group_info: {
+                    id: group.group_id,
+                    name: group.group_name,
+                    unique_code: group.unique_code,
+                    price: parseFloat(group.price) || 0,
+                    status: group.group_status,
+                    class_status: group.class_status,
+                    start_date: group.start_date,
+                    class_start_date: group.class_start_date,
+                    created_at: group.created_at
+                },
+                schedule: formatSchedule(group.schedule),
+                subject_info: {
+                    id: group.subject_id,
+                    name: group.subject_name
+                },
+                room_info: {
+                    id: group.room_id,
+                    room_number: group.room_number || 'Tayinlanmagan',
+                    capacity: group.room_capacity,
+                    has_projector: group.has_projector
+                },
+                students_stats: studentsStats,
+                students: students
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Guruh ma\'lumotlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruh ma\'lumotlarini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+// ============================================================================
+// TEACHER API'LARI
+// ============================================================================
+
+/**
+ * Teacher o'zining guruhlar ro'yxatini olish (dars jadvali bilan)
+ * GET /api/groups/teacher/my-groups
+ */
+exports.getTeacherMyGroups = async (req, res) => {
+    try {
+        const teacherId = req.user.id;
+
+        console.log(`👨‍🏫 Teacher ${teacherId} o'z guruhlarini so'ramoqda`);
+
+        const myGroups = await pool.query(`
+            SELECT 
+                g.id as group_id,
+                g.name as group_name,
+                g.unique_code,
+                g.price,
+                g.schedule,
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
+                TO_CHAR(g.class_start_date, 'DD.MM.YYYY') as class_start_date,
+                
+                s.id as subject_id,
+                s.name as subject_name,
+                
+                r.id as room_id,
+                r.room_number,
+                
+                -- Guruh a'zolari statistikasi
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg2 
+                    WHERE sg2.group_id = g.id AND sg2.status = 'active'
+                ) as active_students,
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg2 
+                    WHERE sg2.group_id = g.id AND sg2.status = 'stopped'
+                ) as stopped_students,
+                (
+                    SELECT COUNT(*) 
+                    FROM student_groups sg2 
+                    WHERE sg2.group_id = g.id
+                ) as total_students
+                
+            FROM groups g
+            JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN rooms r ON g.room_id = r.id
+            
+            WHERE g.teacher_id = $1
+            ORDER BY 
+                CASE g.class_status 
+                    WHEN 'started' THEN 1
+                    WHEN 'not_started' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                g.name
+        `, [teacherId]);
+
+        const groupsData = myGroups.rows.map(group => ({
+            group_info: {
+                id: group.group_id,
+                name: group.group_name,
+                unique_code: group.unique_code,
+                price: parseFloat(group.price) || 0,
+                status: group.group_status,
+                class_status: group.class_status,
+                start_date: group.start_date,
+                class_start_date: group.class_start_date,
+                schedule: group.schedule || null
+            },
+            subject_info: {
+                id: group.subject_id,
+                name: group.subject_name
+            },
+            room_info: {
+                id: group.room_id,
+                room_number: group.room_number || 'Tayinlanmagan'
+            },
+            students_stats: {
+                active: parseInt(group.active_students) || 0,
+                stopped: parseInt(group.stopped_students) || 0,
+                total: parseInt(group.total_students) || 0
+            }
+        }));
+
+        console.log(`✅ Teacher ${teacherId} ning ${groupsData.length}ta guruhi topildi`);
+
+        res.json({
+            success: true,
+            message: 'Guruhlar ro\'yxati muvaffaqiyatli olindi',
+            data: {
+                teacher_id: teacherId,
+                total_groups: groupsData.length,
+                groups: groupsData
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Teacher guruhlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruhlarni olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Teacher o'zining bitta guruhini batafsil olish (talabalar bilan)
+ * GET /api/groups/teacher/my-groups/:group_id
+ */
+exports.getTeacherGroupDetails = async (req, res) => {
+    try {
+        const teacherId = req.user.id;
+        const groupId = parseInt(req.params.group_id);
+
+        console.log(`👨‍🏫 Teacher ${teacherId} guruh ${groupId} ma'lumotlarini so'ramoqda`);
+
+        // Avval guruh teacher'ga tegishli ekanligini tekshirish
+        const groupResult = await pool.query(`
+            SELECT 
+                g.id as group_id,
+                g.name as group_name,
+                g.unique_code,
+                g.price,
+                g.schedule,
+                g.status as group_status,
+                g.class_status,
+                TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
+                TO_CHAR(g.class_start_date, 'DD.MM.YYYY') as class_start_date,
+                TO_CHAR(g.created_at, 'DD.MM.YYYY HH24:MI') as created_at,
+                
+                s.id as subject_id,
+                s.name as subject_name,
+                
+                r.id as room_id,
+                r.room_number,
+                r.capacity as room_capacity,
+                r.has_projector
+                
+            FROM groups g
+            JOIN subjects s ON g.subject_id = s.id
+            LEFT JOIN rooms r ON g.room_id = r.id
+            
+            WHERE g.id = $1 AND g.teacher_id = $2
+        `, [groupId, teacherId]);
+
+        if (groupResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Guruh topilmadi yoki sizga tegishli emas'
+            });
+        }
+
+        const group = groupResult.rows[0];
+
+        // Guruh talabalari
+        const studentsResult = await pool.query(`
+            SELECT 
+                u.id as student_id,
+                u.name,
+                u.surname,
+                u.phone,
+                u.phone2,
+                u.father_name,
+                u.father_phone,
+                sg.status as group_status,
+                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                CASE sg.status 
+                    WHEN 'active' THEN 'Faol'
+                    WHEN 'stopped' THEN 'To''xtatilgan'
+                    WHEN 'finished' THEN 'Tugatgan'
+                    ELSE sg.status
+                END as status_description
+                
+            FROM student_groups sg
+            JOIN users u ON sg.student_id = u.id
+            WHERE sg.group_id = $1
+            ORDER BY 
+                CASE sg.status 
+                    WHEN 'active' THEN 1
+                    WHEN 'stopped' THEN 2  
+                    WHEN 'finished' THEN 3
+                    ELSE 4
+                END,
+                u.name, u.surname
+        `, [groupId]);
+
+        // Statistika
+        const stats = {
+            active: studentsResult.rows.filter(s => s.group_status === 'active').length,
+            stopped: studentsResult.rows.filter(s => s.group_status === 'stopped').length,
+            finished: studentsResult.rows.filter(s => s.group_status === 'finished').length,
+            total: studentsResult.rows.length
+        };
+
+        const students = studentsResult.rows.map(student => ({
+            id: student.student_id,
+            name: student.name,
+            surname: student.surname,
+            full_name: `${student.name} ${student.surname}`,
+            phone: student.phone,
+            phone2: student.phone2 || null,
+            father_name: student.father_name || null,
+            father_phone: student.father_phone || null,
+            group_status: student.group_status,
+            status_description: student.status_description,
+            join_date: student.join_date,
+            leave_date: student.leave_date
+        }));
+
+        console.log(`✅ Teacher guruh ${groupId} ma'lumotlari olindi: ${students.length}ta talaba`);
+
+        res.json({
+            success: true,
+            message: 'Guruh ma\'lumotlari muvaffaqiyatli olindi',
+            data: {
+                group_info: {
+                    id: group.group_id,
+                    name: group.group_name,
+                    unique_code: group.unique_code,
+                    price: parseFloat(group.price) || 0,
+                    status: group.group_status,
+                    class_status: group.class_status,
+                    start_date: group.start_date,
+                    class_start_date: group.class_start_date,
+                    created_at: group.created_at,
+                    schedule: group.schedule || null
+                },
+                subject_info: {
+                    id: group.subject_id,
+                    name: group.subject_name
+                },
+                room_info: {
+                    id: group.room_id,
+                    room_number: group.room_number || 'Tayinlanmagan',
+                    capacity: group.room_capacity || null,
+                    has_projector: group.has_projector || false
+                },
+                students_stats: stats,
+                students: students
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Teacher guruh ma\'lumotlarini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Guruh ma\'lumotlarini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};

@@ -8,7 +8,10 @@ const {
   giveDiscount,
   getPaymentFilters,
   clearStudentPayments,
-  exportMonthlyPayments
+  exportMonthlyPayments,
+  getMyPayments,
+  getMyPaymentHistory,
+  getMyDiscounts
 } = require('../controllers/paymentController');
 
 /**
@@ -466,5 +469,220 @@ router.post('/clear-student', protectAdmin, clearStudentPayments);
  */
 router.get('/monthly/export', protect, exportMonthlyPayments);
 
-module.exports = router;
+// ============================================================================
+// TALABA UCHUN ENDPOINT LAR
+// ============================================================================
+
+/**
+ * @swagger
+ * /api/payments/my:
+ *   get:
+ *     summary: Talabaning o'z oylik to'lov ma'lumotlarini olish
+ *     tags: [Student Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           pattern: '^\d{4}-\d{2}$'
+ *         description: Oy (YYYY-MM formatda, ixtiyoriy)
+ *         example: '2026-01'
+ *     responses:
+ *       200:
+ *         description: To'lov ma'lumotlari muvaffaqiyatli olindi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     month:
+ *                       type: string
+ *                     groups:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           group_id:
+ *                             type: integer
+ *                           group_name:
+ *                             type: string
+ *                           subject_name:
+ *                             type: string
+ *                           teacher_name:
+ *                             type: string
+ *                           original_price:
+ *                             type: string
+ *                           discount_amount:
+ *                             type: string
+ *                           paid_amount:
+ *                             type: string
+ *                           payment_status:
+ *                             type: string
+ *                             enum: [paid, partial, unpaid]
+ *                           remaining_amount:
+ *                             type: string
+ *                           discount_description:
+ *                             type: string
+ *                           last_payment_date:
+ *                             type: string
+ *                             format: date-time
+ *                     summary:
+ *                       type: object
+ *                       properties:
+ *                         total_groups:
+ *                           type: integer
+ *                         total_original_amount:
+ *                           type: number
+ *                         total_discount_amount:
+ *                           type: number
+ *                         total_required_amount:
+ *                           type: number
+ *                         total_paid_amount:
+ *                           type: number
+ *                         total_remaining_amount:
+ *                           type: number
+ *                         overall_status:
+ *                           type: string
+ *                           enum: [paid, partial, unpaid]
+ *       403:
+ *         description: Faqat talabalar uchun
+ *       400:
+ *         description: Noto'g'ri parametr
+ */
+router.get('/my', protect, getMyPayments);
+
+/**
+ * @swagger
+ * /api/payments/my/history:
+ *   get:
+ *     summary: Talabaning o'z to'lov tarixini olish
+ *     tags: [Student Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: group_id
+ *         schema:
+ *           type: integer
+ *         description: Aniq guruh uchun filter (ixtiyoriy)
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *         description: Nechta yozuv qaytarish (ixtiyoriy)
+ *     responses:
+ *       200:
+ *         description: To'lov tarixi muvaffaqiyatli olindi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     payments:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           month:
+ *                             type: string
+ *                           amount:
+ *                             type: string
+ *                           payment_method:
+ *                             type: string
+ *                           description:
+ *                             type: string
+ *                           payment_date:
+ *                             type: string
+ *                             format: date-time
+ *                           group_name:
+ *                             type: string
+ *                           subject_name:
+ *                             type: string
+ *                           received_by:
+ *                             type: string
+ *                     total_count:
+ *                       type: integer
+ *       403:
+ *         description: Faqat talabalar uchun
+ */
+router.get('/my/history', protect, getMyPaymentHistory);
+
+/**
+ * @swagger
+ * /api/payments/my/discounts:
+ *   get:
+ *     summary: Talabaning o'z chegirma ma'lumotlarini olish
+ *     tags: [Student Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Chegirma ma'lumotlari muvaffaqiyatli olindi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     discounts:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           start_month:
+ *                             type: string
+ *                           end_month:
+ *                             type: string
+ *                           discount_type:
+ *                             type: string
+ *                             enum: [percent, amount]
+ *                           discount_value:
+ *                             type: string
+ *                           description:
+ *                             type: string
+ *                           is_active:
+ *                             type: boolean
+ *                           created_at:
+ *                             type: string
+ *                             format: date-time
+ *                           group_name:
+ *                             type: string
+ *                           subject_name:
+ *                             type: string
+ *                           discount_display:
+ *                             type: string
+ *                     total_count:
+ *                       type: integer
+ *       403:
+ *         description: Faqat talabalar uchun
+ */
+router.get('/my/discounts', protect, getMyDiscounts);
+
 module.exports = router;

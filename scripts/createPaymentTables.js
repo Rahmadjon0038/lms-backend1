@@ -47,6 +47,7 @@ const createPaymentTables = async () => {
       CREATE TABLE IF NOT EXISTS student_discounts (
         id SERIAL PRIMARY KEY,
         student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
         discount_type VARCHAR(20) NOT NULL, -- 'percent' yoki 'amount'
         discount_value DECIMAL(10,2) NOT NULL, -- Foiz yoki summa
         months INTEGER, -- Necha oyga (NULL = cheksiz)
@@ -58,7 +59,8 @@ const createPaymentTables = async () => {
         created_by INTEGER REFERENCES users(id),
         
         CHECK (discount_type IN ('percent', 'amount')),
-        CHECK (discount_value > 0)
+        CHECK (discount_value > 0),
+        UNIQUE (student_id, group_id, start_month, end_month)
       )
     `);
     console.log('✅ student_discounts jadvali yaratildi');
@@ -67,6 +69,11 @@ const createPaymentTables = async () => {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_student_payments_month 
       ON student_payments(student_id, month)
+    `);
+    
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_discounts_group 
+      ON student_discounts(student_id, group_id, is_active)
     `);
 
     await pool.query(`
