@@ -54,22 +54,21 @@ const getDashboardStats = async (req, res) => {
     const debtorStudents = await client.query(`
       WITH student_discounts_calc AS (
         SELECT 
-          student_id,
-          group_id,
+          sd.student_id,
+          sd.group_id,
           SUM(
-            CASE discount_type
-              WHEN 'percent' THEN (discount_value / 100.0) * (
-                SELECT price FROM groups WHERE id = student_discounts.group_id
-              )
-              WHEN 'amount' THEN discount_value
+            CASE sd.discount_type
+              WHEN 'percent' THEN (sd.discount_value / 100.0) * g.price
+              WHEN 'amount' THEN sd.discount_value
               ELSE 0
             END
           ) as total_discount_amount
-        FROM student_discounts 
-        WHERE is_active = true
-          AND start_month <= $1
-          AND (end_month IS NULL OR end_month >= $1)
-        GROUP BY student_id, group_id
+        FROM student_discounts sd
+        JOIN groups g ON sd.group_id = g.id
+        WHERE sd.is_active = true
+          AND sd.start_month <= $1
+          AND (sd.end_month IS NULL OR sd.end_month >= $1)
+        GROUP BY sd.student_id, sd.group_id
       )
       SELECT COUNT(DISTINCT sg.student_id) as count
       FROM student_groups sg
@@ -179,22 +178,21 @@ const getDebtorStudents = async (req, res) => {
     const debtorsList = await client.query(`
       WITH student_discounts_calc AS (
         SELECT 
-          student_id,
-          group_id,
+          sd.student_id,
+          sd.group_id,
           SUM(
-            CASE discount_type
-              WHEN 'percent' THEN (discount_value / 100.0) * (
-                SELECT price FROM groups WHERE id = student_discounts.group_id
-              )
-              WHEN 'amount' THEN discount_value
+            CASE sd.discount_type
+              WHEN 'percent' THEN (sd.discount_value / 100.0) * g.price
+              WHEN 'amount' THEN sd.discount_value
               ELSE 0
             END
           ) as total_discount_amount
-        FROM student_discounts 
-        WHERE is_active = true
-          AND start_month <= $1
-          AND (end_month IS NULL OR end_month >= $1)
-        GROUP BY student_id, group_id
+        FROM student_discounts sd
+        JOIN groups g ON sd.group_id = g.id
+        WHERE sd.is_active = true
+          AND sd.start_month <= $1
+          AND (sd.end_month IS NULL OR sd.end_month >= $1)
+        GROUP BY sd.student_id, sd.group_id
       )
       SELECT 
         u.id,

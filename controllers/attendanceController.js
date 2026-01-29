@@ -638,7 +638,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 // 6. TALABANING OYLIK DAVOMAT HISOBOTI
 exports.getStudentMonthlyAttendance = async (req, res) => {
   const { student_id } = req.params;
-  const { month } = req.query; // "2026-01" format
+  const { month, group_id } = req.query; // "2026-01" format
   const { role, id: userId } = req.user;
   
   try {
@@ -720,13 +720,13 @@ exports.getStudentMonthlyAttendance = async (req, res) => {
                            AND l.date <= $3::date
        LEFT JOIN attendance a ON a.lesson_id = l.id 
                               AND a.student_id = sg.student_id
-       WHERE sg.student_id = $1
+       WHERE sg.student_id = $1 ${group_id ? "AND g.id = $4" : ""}
          AND (
            sg.status = 'active' 
            OR l.date IS NOT NULL
          )
        ORDER BY g.name, l.date`,
-      [student_id, startDate, endDate]
+      group_id ? [student_id, startDate, endDate, group_id] : [student_id, startDate, endDate]
     );
 
     // Ma'lumotlarni guruhlar bo'yicha guruhlash

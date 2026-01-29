@@ -16,9 +16,9 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 app.get('/', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW()');
-        res.json({ 
-            status: "Server ishlayapti", 
-            currentTime: result.rows[0].now 
+        res.json({
+            status: "Server ishlayapti",
+            currentTime: result.rows[0].now
         });
     } catch (err) {
         console.error(err.message);
@@ -58,10 +58,10 @@ console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
 // Serverni portga ulash va jadvalni yaratish
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server ${PORT}-portda ishga tushdi...`);
     console.log(`Swagger: http://localhost:${PORT}/api-docs/`);
-    
+
     // Server yonganda jadvalni tekshirish va yaratish
     try {
         await createRoomTable(); // Rooms jadvali birinchi yaratiladi
