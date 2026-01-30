@@ -19,10 +19,16 @@ const {
  *     DashboardStats:
  *       type: object
  *       properties:
- *         summary:
+ *         daily:
  *           type: object
  *           properties:
- *             today_payments:
+ *             date:
+ *               type: string
+ *               example: "2026-01-31"
+ *             is_today:
+ *               type: boolean
+ *               example: true
+ *             payments:
  *               type: object
  *               properties:
  *                 count:
@@ -31,7 +37,50 @@ const {
  *                 amount:
  *                   type: number
  *                   example: 4500000
- *             monthly_payments:
+ *             new_students:
+ *               type: object
+ *               properties:
+ *                 count:
+ *                   type: integer
+ *                   example: 3
+ *                 list:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       student_name:
+ *                         type: string
+ *                       phone:
+ *                         type: string
+ *                       group_name:
+ *                         type: string
+ *                       subject_name:
+ *                         type: string
+ *                       join_date:
+ *                         type: string
+ *             payment_methods:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   method:
+ *                     type: string
+ *                   count:
+ *                     type: integer
+ *                   total_amount:
+ *                     type: number
+ *         monthly:
+ *           type: object
+ *           properties:
+ *             month:
+ *               type: string
+ *               example: "2026-01"
+ *             is_current_month:
+ *               type: boolean
+ *               example: true
+ *             payments:
  *               type: object
  *               properties:
  *                 count:
@@ -40,57 +89,73 @@ const {
  *                 amount:
  *                   type: number
  *                   example: 73500000
- *             active_students:
+ *             new_students:
  *               type: integer
- *               example: 320
- *             today_new_students:
- *               type: integer
- *               example: 3
+ *               example: 28
  *             debtor_students:
  *               type: integer
  *               example: 45
- *             today_attendance:
- *               type: object
- *               properties:
- *                 total_lessons:
- *                   type: integer
- *                   example: 12
- *                 present:
- *                   type: integer
- *                   example: 85
- *                 absent:
- *                   type: integer
- *                   example: 5
- *                 late:
- *                   type: integer
- *                   example: 2
- *         details:
+ *         overall:
  *           type: object
  *           properties:
- *             top_paying_groups:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   group_name:
- *                     type: string
- *                   subject_name:
- *                     type: string
- *                   payment_count:
- *                     type: integer
- *                   total_amount:
- *                     type: number
+ *             total_payments:
+ *               type: object
+ *               properties:
+ *                 count:
+ *                   type: integer
+ *                   example: 1523
+ *                 amount:
+ *                   type: number
+ *                   example: 458000000
+ *             students:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 350
+ *                 active:
+ *                   type: integer
+ *                   example: 320
+ *             groups:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 45
+ *                 active:
+ *                   type: integer
+ *                   example: 38
  */
 
 /**
  * @swagger
  * /api/dashboard/stats:
  *   get:
- *     summary: Admin dashboard uchun umumiy statistikalar
- *     description: Qabulxonada ishlaydigan admin uchun kerakli barcha statistikalar
+ *     summary: Admin dashboard uchun statistikalar (kunlik, oylik, umumiy)
+ *     description: |
+ *       Qabulxonada ishlaydigan admin uchun kerakli barcha statistikalar.
+ *       - Kunlik statistikalar (filter orqali boshqa kunlarni ko'rish)
+ *       - Oylik statistikalar (filter orqali oldingi oylarni ko'rish)
+ *       - Umumiy statistikalar (dastur boshidan)
+ *       - Yaqinda qo'shilgan talabalar ro'yxati
  *     tags: [Dashboard]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         schema:
+ *           type: string
+ *           format: date
+ *           example: "2026-01-31"
+ *         description: Kunlik statistikalar uchun sana (YYYY-MM-DD). Default - bugun
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           pattern: '^\d{4}-\d{2}$'
+ *           example: "2026-01"
+ *         description: Oylik statistikalar uchun oy (YYYY-MM). Default - joriy oy
  *     responses:
  *       200:
  *         description: Dashboard statistikalari muvaffaqiyatli olindi

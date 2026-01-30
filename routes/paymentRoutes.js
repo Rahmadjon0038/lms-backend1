@@ -564,7 +564,10 @@ router.get('/my', protect, getMyPayments);
  * @swagger
  * /api/payments/my/history:
  *   get:
- *     summary: Talabaning o'z to'lov tarixini olish
+ *     summary: To'lov tarixi olish (Talaba, Admin, Super Admin)
+ *     description: |
+ *       Talaba o'z to'lov tarixini ko'radi.
+ *       Admin va Super Admin student_id parametri orqali istalgan talabaning tarixini ko'ra oladi.
  *     tags: [Student Payments]
  *     security:
  *       - bearerAuth: []
@@ -574,6 +577,11 @@ router.get('/my', protect, getMyPayments);
  *         schema:
  *           type: integer
  *         description: Aniq guruh uchun filter (ixtiyoriy)
+ *       - in: query
+ *         name: student_id
+ *         schema:
+ *           type: integer
+ *         description: Talaba IDsi (faqat admin va super admin uchun)
  *       - in: query
  *         name: limit
  *         schema:
