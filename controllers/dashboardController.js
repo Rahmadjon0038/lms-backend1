@@ -6,51 +6,86 @@ const pool = require('../config/db');
 
 /**
  * Admin dashboard uchun sodda statistikalar (qabulxona admin)
+ * Query params:
+ *  - date: kunlik statistikalar uchun sana (YYYY-MM-DD) - default: bugun
+ *  - month: oylik statistikalar uchun oy (YYYY-MM) - default: joriy oy
  */
 const getDashboardStats = async (req, res) => {
   const client = await pool.connect();
   
   try {
+    // Filter parametrlari
+    const selectedDate = req.query.date || new Date().toISOString().split('T')[0];
+    const selectedMonth = req.query.month || new Date().toISOString().slice(0, 7);
     const today = new Date().toISOString().split('T')[0];
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7);
     
-    console.log(`📊 Admin dashboard statistikalari so'ralmoqda - ${today}`);
+    console.log(`📊 Admin dashboard statistikalari - Sana: ${selectedDate}, Oy: ${selectedMonth}`);
 
-    // 1. BUGUNGI TO'LOVLAR
-    const todayPayments = await client.query(`
+    // ========== KUNLIK STATISTIKALAR (tanlangan sana bo'yicha) ==========
+    
+    // 1. KUNLIK TO'LOVLAR
+    const dailyPayments = await client.query(`
       SELECT 
         COUNT(*) as count,
         COALESCE(SUM(amount), 0) as total_amount
       FROM payment_transactions 
       WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1
-    `, [today]);
+    `, [selectedDate]);
 
-    // 2. BUGUNGI YANGI RO'YXATDAN O'TGAN TALABALAR
-    const todayNewStudents = await client.query(`
-      SELECT COUNT(*) as count
-      FROM student_groups sg
-      WHERE DATE(sg.join_date) = $1
-    `, [today]);
-
-    // 3. KECHA YANGI RO'YXATDAN O'TGAN TALABALAR  
-    const yesterdayNewStudents = await client.query(`
-      SELECT COUNT(*) as count
-      FROM student_groups sg
-      WHERE DATE(sg.join_date) = $1
-    `, [new Date(Date.now() - 24*60*60*1000).toISOString().split('T')[0]]);
-
-    // 4. OXIRGI 7 KUNDAGI YANGI TALABALAR
-    const weeklyNewStudents = await client.query(`
+    // 2. KUNLIK YANGI TALABALAR (tanlangan kun)
+    const dailyNewStudents = await client.query(`
       SELECT 
-        DATE(sg.join_date) as date,
-        COUNT(*) as count
+        u.id,
+        u.name || ' ' || u.surname as student_name,
+        u.phone,
+        g.name as group_name,
+        s.name as subject_name,
+        TO_CHAR(sg.join_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as join_date
       FROM student_groups sg
-      WHERE sg.join_date >= CURRENT_DATE - INTERVAL '7 days'
-      GROUP BY DATE(sg.join_date)
-      ORDER BY date
-    `);
+      JOIN users u ON sg.student_id = u.id
+      JOIN groups g ON sg.group_id = g.id
+      JOIN subjects s ON g.subject_id = s.id
+      WHERE DATE(sg.join_date) = $1
+      ORDER BY sg.join_date DESC
+    `, [selectedDate]);
 
-    // 5. QARZDOR TALABALAR SONI
+    // 3. TO'LOV USULLARI (tanlangan kun)
+    const paymentMethods = await client.query(`
+      SELECT 
+        CASE payment_method 
+          WHEN 'cash' THEN 'Naqd'
+          WHEN 'card' THEN 'Karta'
+          WHEN 'transfer' THEN 'O''tkazma'
+          ELSE payment_method
+        END as method,
+        COUNT(*) as count,
+        SUM(amount) as total_amount
+      FROM payment_transactions 
+      WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1
+      GROUP BY payment_method
+      ORDER BY total_amount DESC
+    `, [selectedDate]);
+
+    // ========== OYLIK STATISTIKALAR (tanlangan oy bo'yicha) ==========
+    
+    // 4. OYLIK TO'LOVLAR
+    const monthlyPayments = await client.query(`
+      SELECT 
+        COUNT(*) as count,
+        COALESCE(SUM(amount), 0) as total_amount
+      FROM payment_transactions 
+      WHERE month = $1
+    `, [selectedMonth]);
+
+    // 5. OYLIK YANGI TALABALAR
+    const monthlyNewStudents = await client.query(`
+      SELECT COUNT(DISTINCT student_id) as count
+      FROM student_groups
+      WHERE TO_CHAR(join_date, 'YYYY-MM') = $1
+    `, [selectedMonth]);
+
+    // 6. QARZDOR TALABALAR SONI (tanlangan oy uchun)
     const debtorStudents = await client.query(`
       WITH student_discounts_calc AS (
         SELECT 
@@ -82,70 +117,114 @@ const getDashboardStats = async (req, res) => {
         AND g.status = 'active' 
         AND g.class_status = 'started'
         AND COALESCE(sp.paid_amount, 0) < GREATEST(g.price - COALESCE(sdc.total_discount_amount, 0), 0)
-    `, [currentMonth]);
+    `, [selectedMonth]);
 
-    // 6. AKTIV GURUHLAR SONI
+    // ========== UMUMIY STATISTIKALAR (dastur boshidan) ==========
+    
+    // 7. JAMI TO'LOVLAR (barchasi)
+    const totalPayments = await client.query(`
+      SELECT 
+        COUNT(*) as count,
+        COALESCE(SUM(amount), 0) as total_amount
+      FROM payment_transactions
+    `);
+
+    // 8. JAMI TALABALAR (barchasi - aktiv va noaktiv)
+    const totalStudents = await client.query(`
+      SELECT COUNT(DISTINCT student_id) as count
+      FROM student_groups
+    `);
+
+    // 9. AKTIV TALABALAR
+    const activeStudents = await client.query(`
+      SELECT COUNT(DISTINCT sg.student_id) as count
+      FROM student_groups sg
+      JOIN groups g ON sg.group_id = g.id
+      WHERE sg.status = 'active' 
+        AND g.status = 'active' 
+        AND g.class_status = 'started'
+    `);
+
+    // 10. AKTIV GURUHLAR
     const activeGroups = await client.query(`
       SELECT COUNT(*) as count
       FROM groups 
       WHERE status = 'active' AND class_status = 'started'
     `);
 
-    // 7. AKTIV O'QITUVCHILAR SONI
-    const activeTeachers = await client.query(`
-      SELECT COUNT(DISTINCT teacher_id) as count
-      FROM groups 
-      WHERE status = 'active' AND class_status = 'started'
+    // 11. JAMI GURUHLAR
+    const totalGroups = await client.query(`
+      SELECT COUNT(*) as count
+      FROM groups
     `);
 
-    // 8. TO'LOV USULLARI STATISTIKASI (bugun)
-    const paymentMethods = await client.query(`
-      SELECT 
-        CASE payment_method 
-          WHEN 'cash' THEN 'Naqd'
-          WHEN 'card' THEN 'Karta'
-          WHEN 'transfer' THEN 'O''tkazma'
-          ELSE payment_method
-        END as method,
-        COUNT(*) as count,
-        SUM(amount) as total_amount
-      FROM payment_transactions 
-      WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1
-      GROUP BY payment_method
-      ORDER BY total_amount DESC
-    `, [today]);
-
     const dashboardData = {
-      summary: {
-        today_payments: {
-          count: parseInt(todayPayments.rows[0].count),
-          amount: parseFloat(todayPayments.rows[0].total_amount)
+      // Kunlik statistikalar
+      daily: {
+        date: selectedDate,
+        is_today: selectedDate === today,
+        payments: {
+          count: parseInt(dailyPayments.rows[0].count),
+          amount: parseFloat(dailyPayments.rows[0].total_amount)
         },
         new_students: {
-          today: parseInt(todayNewStudents.rows[0].count),
-          yesterday: parseInt(yesterdayNewStudents.rows[0].count),
-          weekly_trend: weeklyNewStudents.rows.map(row => ({
-            date: row.date,
-            count: parseInt(row.count)
+          count: dailyNewStudents.rows.length,
+          list: dailyNewStudents.rows.map(row => ({
+            id: row.id,
+            student_name: row.student_name,
+            phone: row.phone,
+            group_name: row.group_name,
+            subject_name: row.subject_name,
+            join_date: row.join_date
           }))
         },
-        debtor_students: parseInt(debtorStudents.rows[0].count),
-        active_groups: parseInt(activeGroups.rows[0].count),
-        active_teachers: parseInt(activeTeachers.rows[0].count),
-        payment_methods_today: paymentMethods.rows.map(row => ({
+        payment_methods: paymentMethods.rows.map(row => ({
           method: row.method,
           count: parseInt(row.count),
           total_amount: parseFloat(row.total_amount)
         }))
       },
+
+      // Oylik statistikalar
+      monthly: {
+        month: selectedMonth,
+        is_current_month: selectedMonth === currentMonth,
+        payments: {
+          count: parseInt(monthlyPayments.rows[0].count),
+          amount: parseFloat(monthlyPayments.rows[0].total_amount)
+        },
+        new_students: parseInt(monthlyNewStudents.rows[0].count),
+        debtor_students: parseInt(debtorStudents.rows[0].count)
+      },
+
+      // Umumiy statistikalar
+      overall: {
+        total_payments: {
+          count: parseInt(totalPayments.rows[0].count),
+          amount: parseFloat(totalPayments.rows[0].total_amount)
+        },
+        students: {
+          total: parseInt(totalStudents.rows[0].count),
+          active: parseInt(activeStudents.rows[0].count)
+        },
+        groups: {
+          total: parseInt(totalGroups.rows[0].count),
+          active: parseInt(activeGroups.rows[0].count)
+        }
+      },
+
       meta: {
         generated_at: new Date().toISOString(),
-        current_month: currentMonth,
-        today_date: today
+        filters: {
+          selected_date: selectedDate,
+          selected_month: selectedMonth,
+          today_date: today,
+          current_month: currentMonth
+        }
       }
     };
 
-    console.log(`✅ Admin dashboard statistikalari muvaffaqiyatli yaratildi`);
+    console.log(`✅ Admin dashboard muvaffaqiyatli yaratildi`);
     
     res.json({
       success: true,

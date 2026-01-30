@@ -1189,18 +1189,30 @@ exports.getMyPayments = async (req, res) => {
 };
 
 /**
- * Talaba o'z to'lov tarixini olish
+ * Talaba o'z to'lov tarixini olish (Admin va Super Admin ham foydalana oladi)
  */
 exports.getMyPaymentHistory = async (req, res) => {
-  const { group_id, limit = 10 } = req.query;
+  const { group_id, limit = 10, student_id } = req.query;
   const { role, id: userId } = req.user;
 
   try {
-    // Faqat talabalar foydalana oladi
-    if (role !== 'student') {
+    // Admin va super admin barcha talabalarning tarixini ko'ra oladi
+    // Talaba faqat o'z tarixini ko'ra oladi
+    let targetStudentId = userId; // Default: o'zi
+
+    if (role === 'admin' || role === 'super_admin') {
+      // Admin student_id parametri orqali istalgan talabaning tarixini ko'ra oladi
+      if (student_id) {
+        targetStudentId = student_id;
+      }
+      // Agar student_id berilmasa, admin o'z ID sini ishlatadi (lekin admin student emas, shuning uchun bo'sh qaytadi)
+    } else if (role === 'student') {
+      // Talaba faqat o'z tarixini ko'ra oladi
+      targetStudentId = userId;
+    } else {
       return res.status(403).json({
         success: false,
-        message: 'Bu API faqat talabalar uchun'
+        message: 'Bu API faqat talabalar, admin va super admin uchun'
       });
     }
 
@@ -1214,16 +1226,20 @@ exports.getMyPaymentHistory = async (req, res) => {
         pt.created_at as payment_date,
         g.name as group_name,
         s.name as subject_name,
-        CONCAT(admin.name, ' ', admin.surname) as received_by
+        CONCAT(admin.name, ' ', admin.surname) as received_by,
+        -- Talaba ma'lumotlari admin uchun
+        CONCAT(student.name, ' ', student.surname) as student_name,
+        student.phone as student_phone
       FROM payment_transactions pt
       JOIN student_groups sg ON pt.student_id = sg.student_id AND pt.group_id = sg.group_id
       JOIN groups g ON sg.group_id = g.id
       JOIN subjects s ON g.subject_id = s.id
       LEFT JOIN users admin ON pt.created_by = admin.id
+      LEFT JOIN users student ON pt.student_id = student.id
       WHERE pt.student_id = $1
     `;
 
-    const params = [userId];
+    const params = [targetStudentId];
     let paramCount = 1;
 
     // Group filter
@@ -1243,7 +1259,9 @@ exports.getMyPaymentHistory = async (req, res) => {
       message: 'To\'lov tarixi muvaffaqiyatli olindi',
       data: {
         payments: result.rows,
-        total_count: result.rows.length
+        total_count: result.rows.length,
+        target_student_id: targetStudentId,
+        requested_by: role
       }
     });
 
