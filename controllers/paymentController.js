@@ -19,13 +19,10 @@ exports.getMonthlyPayments = async (req, res) => {
     }
 
     // Parameters va filters
-    let params = [selectedMonth];
+    let params = [selectedMonth]; // $1 = selectedMonth
     let paramIndex = 2;
     let whereConditions = [];
     let teacherFilter = '';
-
-    // Snapshot majburiy bo'lishi kerak
-    whereConditions.push('gms.month IS NOT NULL');
 
     // Teacher faqat o'z talabalarini ko'ra oladi
     if (role === 'teacher') {
@@ -64,17 +61,6 @@ exports.getMonthlyPayments = async (req, res) => {
     const additionalWhere = whereConditions.length > 0 
       ? ` AND ${whereConditions.join(' AND ')}`
       : '';
-
-    // O'sha oyda active bo'lgan barcha talabalar uchun date range
-    const monthStart = `${selectedMonth}-01`;
-    const nextMonth = new Date(selectedMonth.split('-')[0], selectedMonth.split('-')[1], 1);
-    const monthEnd = new Date(nextMonth.getTime() - 1).toISOString().split('T')[0];
-    
-    // Parametrlarga qo'shamiz
-    const monthStartParam = paramIndex;
-    const monthEndParam = paramIndex + 1;
-    params.push(monthStart, monthEnd);
-    paramIndex += 2;
 
     // HISTORICAL DATA bilan query - group_monthly_settings dan foydalanish
     const query = `
@@ -216,9 +202,27 @@ exports.getMonthlyPayments = async (req, res) => {
         AND g.status = 'active' 
         AND g.class_status = 'started'
         AND gms.month IS NOT NULL
-        -- O'sha oyda bir lahzada ham active bo'lgan talabalar
-        AND sg.join_date::date <= $${monthEndParam}
-        AND (sg.leave_date IS NULL OR sg.leave_date::date >= $${monthStartParam})
+        -- O'sha oyda group status asosida filtrlash (user status emas)
+        AND (
+          -- 1. Hozir ham active bo'lgan talabalar
+          (sg.status = 'active')
+          OR
+          -- 2. O'sha oyda to'xtatilgan talabalar (o'sha oy uchun to'lov kerak)
+          (
+            sg.status IN ('stopped', 'finished')
+            AND sg.leave_date IS NOT NULL 
+            AND TO_CHAR(sg.leave_date, 'YYYY-MM') = $1
+            AND (
+              sg.join_date IS NULL 
+              OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+            )
+          )
+        )
+        -- Guruhga o'sha oydan oldin qo'shilgan bo'lishi kerak  
+        AND (
+          sg.join_date IS NULL 
+          OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+        )
         ${teacherFilter}
         ${additionalWhere}
         ${statusFilter}
@@ -237,7 +241,7 @@ exports.getMonthlyPayments = async (req, res) => {
       if (parseFloat(student.required_amount) === 0 && student.original_price) {
         console.log(`⚠️  ${student.name} ${student.surname} uchun ${selectedMonth} oyda to'lov qaydi yo'q. Avtomatik yaratilmoqda...`);
         
-        // Chegirmalarni hisoblash
+        // Chegirmalarni hisoblash - har oy uchun alohida, oraliq hisobga olinadi
         const discountQuery = `
           SELECT 
             SUM(
@@ -248,7 +252,10 @@ exports.getMonthlyPayments = async (req, res) => {
               END
             ) as total_discount
           FROM student_discounts sd 
-          WHERE sd.student_id = $1 AND sd.group_id = $2 AND sd.start_month = $3 AND sd.is_active = true
+          WHERE sd.student_id = $1 AND sd.group_id = $2 
+            AND $3 >= sd.start_month
+            AND ($3 <= sd.end_month OR sd.end_month IS NULL)
+            AND sd.is_active = true
         `;
         
         const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, selectedMonth]);
@@ -317,14 +324,22 @@ exports.getMonthlyPayments = async (req, res) => {
  */
 exports.makePayment = async (req, res) => {
   try {
-    const { student_id, group_id, amount, payment_method = 'cash', description = '' } = req.body;
+    const { student_id, group_id, amount, month, payment_method = 'cash', description = '' } = req.body;
     const { id: admin_id } = req.user;
 
     // Validatsiyalar
-    if (!student_id || !group_id || !amount) {
+    if (!student_id || !group_id || !amount || !month) {
       return res.status(400).json({
         success: false,
-        message: 'student_id, group_id va amount maydonlari talab qilinadi'
+        message: 'student_id, group_id, amount va month maydonlari talab qilinadi (month: YYYY-MM formatda)'
+      });
+    }
+
+    // Month formatini tekshirish
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'month parametri YYYY-MM formatida bo\'lishi kerak'
       });
     }
 
@@ -335,8 +350,8 @@ exports.makePayment = async (req, res) => {
       });
     }
 
-    // Joriy oy
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    // Belgilangan oy uchun to'lov
+    const selectedMonth = month;
 
     // Guruh ma'lumotlarini olish (joriy narx)
     const groupQuery = `
@@ -371,7 +386,7 @@ exports.makePayment = async (req, res) => {
       });
     }
 
-    // Chegirmalarni hisoblash
+    // O'sha oy uchun chegirmalarni hisoblash
     const discountQuery = `
       SELECT 
         SUM(
@@ -382,9 +397,12 @@ exports.makePayment = async (req, res) => {
           END
         ) as total_discount
       FROM student_discounts 
-      WHERE student_id = $1 AND group_id = $2 AND start_month = $3 AND is_active = true
+      WHERE student_id = $1 AND group_id = $2 
+        AND $3 >= start_month
+        AND ($3 <= end_month OR end_month IS NULL)
+        AND is_active = true
     `;
-    const discountResult = await db.query(discountQuery, [student_id, group_id, currentMonth]);
+    const discountResult = await db.query(discountQuery, [student_id, group_id, selectedMonth]);
     const totalDiscount = discountResult.rows[0].total_discount || 0;
 
     // Required amount (joriy narx - chegirma, minimum 0)
@@ -402,7 +420,7 @@ exports.makePayment = async (req, res) => {
         END
       RETURNING *
     `;
-    const paymentResult = await db.query(paymentQuery, [student_id, group_id, currentMonth, requiredAmount]);
+    const paymentResult = await db.query(paymentQuery, [student_id, group_id, selectedMonth, requiredAmount]);
     const payment = paymentResult.rows[0];
 
     // Yangi to'lov summasi
@@ -418,7 +436,7 @@ exports.makePayment = async (req, res) => {
       WHERE student_id = $2 AND group_id = $3 AND month = $4
       RETURNING *
     `;
-    const updateResult = await db.query(updateQuery, [newPaidAmount, student_id, group_id, currentMonth]);
+    const updateResult = await db.query(updateQuery, [newPaidAmount, student_id, group_id, selectedMonth]);
 
     // Transaction qo'shish
     const transactionQuery = `
@@ -428,7 +446,7 @@ exports.makePayment = async (req, res) => {
       RETURNING *
     `;
     const transactionResult = await db.query(transactionQuery, 
-      [student_id, group_id, currentMonth, amount, payment_method, description, admin_id]);
+      [student_id, group_id, selectedMonth, amount, payment_method, description, admin_id]);
 
     res.json({
       success: true,
@@ -490,6 +508,7 @@ exports.getStudentPaymentHistory = async (req, res) => {
 
 /**
  * 5. OYLIK GROUP SNAPSHOT YARATISH (Har oy boshlanganda)
+ * Bu funksiya group_monthly_settings VA student_payments ni ham yaratadi
  */
 exports.createMonthlyGroupSnapshot = async (req, res) => {
   try {
@@ -513,7 +532,7 @@ exports.createMonthlyGroupSnapshot = async (req, res) => {
       });
     }
 
-    // Barcha faol guruhlar uchun snapshot yaratish
+    // 1. Group snapshot yaratish
     const snapshotQuery = `
       INSERT INTO group_monthly_settings 
       (group_id, month, name_for_month, price_for_month, teacher_id_for_month, 
@@ -543,15 +562,101 @@ exports.createMonthlyGroupSnapshot = async (req, res) => {
       RETURNING *
     `;
 
-    const result = await db.query(snapshotQuery, [selectedMonth, userId]);
+    const snapshotResult = await db.query(snapshotQuery, [selectedMonth, userId]);
+
+    // 2. Student payments yaratish
+    const studentsQuery = `
+      SELECT 
+        sg.student_id,
+        sg.group_id,
+        g.price as current_price,
+        u.name,
+        u.surname,
+        g.name as group_name,
+        sg.status as group_status
+      FROM student_groups sg
+      JOIN users u ON sg.student_id = u.id
+      JOIN groups g ON sg.group_id = g.id
+      WHERE u.role = 'student'
+        AND g.status = 'active'
+        AND g.class_status = 'started'
+        AND (
+          -- 1. Hozir ham active bo'lgan talabalar
+          (sg.status = 'active')
+          OR
+          -- 2. O'sha oyda to'xtatilgan talabalar (o'sha oy uchun to'lov kerak)
+          (
+            sg.status IN ('stopped', 'finished') 
+            AND sg.leave_date IS NOT NULL 
+            AND TO_CHAR(sg.leave_date, 'YYYY-MM') = $1
+            AND (
+              sg.join_date IS NULL 
+              OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+            )
+          )
+        )
+        -- Guruhga o'sha oydan oldin qo'shilgan bo'lishi kerak
+        AND (
+          sg.join_date IS NULL 
+          OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+        )
+      ORDER BY u.name, g.name
+    `;
+
+    const studentsResult = await db.query(studentsQuery, [selectedMonth]);
+    
+    let paymentsCreated = 0;
+    let paymentsExists = 0;
+
+    for (const student of studentsResult.rows) {
+      // Chegirmalarni hisoblash
+      const discountQuery = `
+        SELECT 
+          SUM(
+            CASE 
+              WHEN discount_type = 'percent' THEN ($3 * discount_value / 100)
+              WHEN discount_type = 'amount' THEN discount_value
+              ELSE 0
+            END
+          ) as total_discount
+        FROM student_discounts 
+        WHERE student_id = $1 
+          AND group_id = $2 
+          AND $4 >= start_month
+          AND ($4 <= end_month OR end_month IS NULL)
+          AND is_active = true
+      `;
+      const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, student.current_price, selectedMonth]);
+      const totalDiscount = discountResult.rows[0].total_discount || 0;
+
+      // Required amount
+      const requiredAmount = Math.max(student.current_price - totalDiscount, 0);
+
+      // Payment record yaratish
+      const paymentInsert = `
+        INSERT INTO student_payments (student_id, group_id, month, required_amount, paid_amount, created_at)
+        VALUES ($1, $2, $3, $4, 0, NOW())
+        ON CONFLICT (student_id, group_id, month) DO NOTHING
+      `;
+      
+      const paymentResult = await db.query(paymentInsert, [student.student_id, student.group_id, selectedMonth, requiredAmount]);
+      
+      if (paymentResult.rowCount > 0) {
+        paymentsCreated++;
+      } else {
+        paymentsExists++;
+      }
+    }
 
     res.json({
       success: true,
-      message: `${selectedMonth} oy uchun guruh snapshot yaratildi`,
+      message: `${selectedMonth} oy uchun to'liq snapshot yaratildi`,
       data: {
         month: selectedMonth,
-        groups_processed: result.rows.length,
-        snapshots: result.rows
+        groups_processed: snapshotResult.rows.length,
+        students_found: studentsResult.rows.length,
+        payments_created: paymentsCreated,
+        payments_already_exists: paymentsExists
       }
     });
 
@@ -590,7 +695,12 @@ exports.createMonthlyPaymentRecord = async (req, res) => {
       });
     }
 
-    // Barcha faol talabalar va ularning guruhlarini olish
+    // O'sha oyda bir lahzada ham active bo'lgan talabalar va ularning guruhlarini olish
+    // Group status asosida ishlash - user status emas
+    const monthStart = `${selectedMonth}-01`;
+    const nextMonth = new Date(selectedMonth.split('-')[0], selectedMonth.split('-')[1], 1);
+    const monthEnd = new Date(nextMonth.getTime() - 1).toISOString().split('T')[0];
+
     const studentsQuery = `
       SELECT 
         sg.student_id,
@@ -598,34 +708,61 @@ exports.createMonthlyPaymentRecord = async (req, res) => {
         g.price as current_price,
         u.name,
         u.surname,
-        g.name as group_name
+        g.name as group_name,
+        sg.status as group_status,
+        sg.join_date,
+        sg.leave_date
       FROM student_groups sg
       JOIN users u ON sg.student_id = u.id
       JOIN groups g ON sg.group_id = g.id
-      WHERE sg.status = 'active'
-        AND u.role = 'student'
+      WHERE u.role = 'student'
         AND g.status = 'active'
         AND g.class_status = 'started'
+        AND (
+          -- 1. Hozir ham active bo'lgan talabalar
+          (sg.status = 'active')
+          OR
+          -- 2. O'sha oyda to'xtatilgan talabalar (o'sha oy uchun to'lov kerak)
+          (
+            sg.status IN ('stopped', 'finished') 
+            AND sg.leave_date IS NOT NULL 
+            AND TO_CHAR(sg.leave_date, 'YYYY-MM') = $1
+            AND (
+              sg.join_date IS NULL 
+              OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+            )
+          )
+        )
+        -- Guruhga o'sha oydan oldin yoki o'sha oyda qo'shilgan bo'lishi kerak
+        AND (
+          sg.join_date IS NULL 
+          OR TO_CHAR(sg.join_date, 'YYYY-MM') <= $1
+        )
+      ORDER BY u.name, g.name
     `;
     
-    const studentsResult = await db.query(studentsQuery);
+    const studentsResult = await db.query(studentsQuery, [selectedMonth]);
     
     let created = 0;
     let alreadyExists = 0;
 
     for (const student of studentsResult.rows) {
-      // Chegirmalarni hisoblash
+      // Chegirmalarni hisoblash - faqat o'sha oy uchun
       const discountQuery = `
         SELECT 
           SUM(
             CASE 
-              WHEN discount_type = 'percent' THEN (${student.current_price} * discount_value / 100)
+              WHEN discount_type = 'percent' THEN ($3 * discount_value / 100)
               WHEN discount_type = 'amount' THEN discount_value
               ELSE 0
             END
           ) as total_discount
         FROM student_discounts 
-        WHERE student_id = $1 AND group_id = $2 AND start_month = $3 AND is_active = true
+        WHERE student_id = $1 
+          AND group_id = $2 
+          AND $4 >= start_month
+          AND ($4 <= end_month OR end_month IS NULL)
+          AND is_active = true
       `;
       const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, selectedMonth]);
       const totalDiscount = discountResult.rows[0].total_discount || 0;
@@ -840,15 +977,16 @@ exports.giveDiscount = async (req, res) => {
     
     const newRequiredAmount = Math.max(originalPrice - discountAmount, 0);
 
-    // Chegirma yaratish/yangilash
+    // Chegirma yaratish/yangilash - FAQAT BELGILANGAN OY UCHUN
     await db.query(`
       INSERT INTO student_discounts 
-      (student_id, group_id, discount_type, discount_value, start_month, description, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      (student_id, group_id, discount_type, discount_value, start_month, end_month, description, created_by)
+      VALUES ($1, $2, $3, $4, $5, $5, $6, $7)
       ON CONFLICT (student_id, group_id, start_month) 
       DO UPDATE SET 
         discount_type = EXCLUDED.discount_type,
         discount_value = EXCLUDED.discount_value,
+        end_month = EXCLUDED.end_month,
         description = EXCLUDED.description,
         is_active = true
     `, [student_id, group_id, discount_type, discount_value, month, description, adminId]);

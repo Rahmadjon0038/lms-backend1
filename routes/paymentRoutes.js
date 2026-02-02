@@ -108,7 +108,7 @@ router.get('/monthly', protect, getMonthlyPayments);
  * /api/payments/pay:
  *   post:
  *     summary: To'lov qilish
- *     description: Talaba uchun to'lov amalga oshirish (faqat admin)
+ *     description: Talaba uchun muayyan oy bo'yicha to'lov amalga oshirish (faqat admin)
  *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
@@ -122,6 +122,7 @@ router.get('/monthly', protect, getMonthlyPayments);
  *               - student_id
  *               - group_id
  *               - amount
+ *               - month
  *             properties:
  *               student_id:
  *                 type: integer
@@ -132,6 +133,10 @@ router.get('/monthly', protect, getMonthlyPayments);
  *               amount:
  *                 type: number
  *                 description: To'lov summasi
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Qaysi oy uchun to'lov (masalan 2026-03)
  *               payment_method:
  *                 type: string
  *                 enum: [cash, card, transfer]
@@ -261,7 +266,56 @@ router.get('/student/:student_id/history', protect, getStudentPaymentHistory);
  */
 router.post('/clear-student-month', protectAdmin, clearStudentPaymentsByMonth);
 
-// Chegirma berish
+/**
+ * @swagger
+ * /api/payments/discount:
+ *   post:
+ *     summary: Talabaga chegirma berish
+ *     description: Muayyan talabaga muayyan oy uchun chegirma berish (faqat o'sha oy uchun)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *               - group_id
+ *               - discount_type
+ *               - discount_value
+ *               - month
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *                 description: Talaba ID
+ *               group_id:
+ *                 type: integer
+ *                 description: Guruh ID
+ *               discount_type:
+ *                 type: string
+ *                 enum: [percent, amount]
+ *                 description: Chegirma turi (foiz yoki miqdor)
+ *               discount_value:
+ *                 type: number
+ *                 description: Chegirma qiymati (foiz uchun 0-100, miqdor uchun so'm)
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Qaysi oy uchun chegirma (masalan 2026-03) - FAQAT SHU OY UCHUN
+ *               description:
+ *                 type: string
+ *                 description: Chegirma sababi/tavsifi
+ *     responses:
+ *       200:
+ *         description: Chegirma muvaffaqiyatli berildi
+ *       400:
+ *         description: Noto'g'ri ma'lumotlar
+ *       404:
+ *         description: Talaba topilmadi
+ */
 router.post('/discount', protectAdmin, giveDiscount);
 
 // Filter ma'lumotlari
@@ -305,6 +359,32 @@ router.get('/my-discounts', protect, getMyDiscounts);
  *     responses:
  *       200:
  *         description: Snapshot muvaffaqiyatli yaratildi
+ */
+/**
+ * @swagger
+ * /api/payments/create-monthly-snapshot:
+ *   post:
+ *     summary: Oylik to'liq snapshot yaratish
+ *     description: |
+ *       Har oy boshlanganda barcha guruhlar uchun historical snapshot yaratish VA 
+ *       o'sha oyda faol/to'xtatilgan talabalar uchun to'lov qaydlarini yaratish (faqat admin)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Qaysi oy uchun snapshot (masalan 2026-02). Agar berilmasa hozirgi oy
+ *     responses:
+ *       200:
+ *         description: To'liq snapshot muvaffaqiyatli yaratildi
  */
 router.post('/create-monthly-snapshot', protectAdmin, createMonthlyGroupSnapshot);
 
