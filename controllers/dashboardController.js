@@ -41,13 +41,13 @@ const getDashboardStats = async (req, res) => {
         u.phone,
         g.name as group_name,
         s.name as subject_name,
-        TO_CHAR(sg.join_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as join_date
+        TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as join_date
       FROM student_groups sg
       JOIN users u ON sg.student_id = u.id
       JOIN groups g ON sg.group_id = g.id
       JOIN subjects s ON g.subject_id = s.id
-      WHERE DATE(sg.join_date) = $1
-      ORDER BY sg.join_date DESC
+      WHERE DATE(sg.joined_at) = $1
+      ORDER BY sg.joined_at DESC
     `, [selectedDate]);
 
     // 3. TO'LOV USULLARI (tanlangan kun)

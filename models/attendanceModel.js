@@ -37,23 +37,51 @@ const createLessonsTable = async () => {
 // Attendance jadvalini yaratish
 const createAttendanceTable = async () => {
   try {
-    // Faqat jadval mavjud bo'lmasa yaratish
-    const createQuery = `
-      CREATE TABLE IF NOT EXISTS attendance (
-        id SERIAL PRIMARY KEY,
-        lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE,
-        student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(lesson_id, student_id)
+    // Avval jadval mavjudligini tekshirish
+    const checkTable = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'attendance'
       );
-      
-      CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);
-      CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);
-    `;
+    `);
     
-    await pool.query(createQuery);
+    const tableExists = checkTable.rows[0].exists;
+    
+    if (!tableExists) {
+      // Jadval yaratish - YANGI TIZIM: Oylik mustaqil status bilan
+      await pool.query(`
+        CREATE TABLE attendance (
+          id SERIAL PRIMARY KEY,
+          lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE,
+          student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+          month VARCHAR(7) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
+          monthly_status VARCHAR(20) DEFAULT 'active' CHECK (monthly_status IN ('active', 'stopped', 'finished')),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(lesson_id, student_id)
+        );
+      `);
+    } else {
+      // Mavjud jadvalga yangi ustunlarni qo'shish
+      await pool.query(`
+        ALTER TABLE attendance 
+        ADD COLUMN IF NOT EXISTS month VARCHAR(7),
+        ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        ADD COLUMN IF NOT EXISTS monthly_status VARCHAR(20) DEFAULT 'active' 
+          CHECK (monthly_status IN ('active', 'stopped', 'finished'));
+      `);
+    }
+    
+    // Index'larni yaratish
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_month ON attendance(month);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_group_month ON attendance(group_id, month);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_student_month ON attendance(student_id, month);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_monthly_status ON attendance(monthly_status);`);
+    
     console.log("✅ 'attendance' jadvali tayyor.");
   } catch (error) {
     console.error('Attendance jadvalini yaratishda xatolik:', error);
