@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -420,6 +420,38 @@ router.get('/profile', protect, getProfile);
  *         description: Server xatosi
  */
 router.get('/teachers', protect, roleCheck(['admin', 'super_admin']), getAllTeachers);
+
+/**
+ * @swagger
+ * /api/users/teachers/english:
+ *   get:
+ *     summary: Joriy teacher ingliz tili o'qituvchisimi tekshirish (Teacher kabineti uchun)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Teacher turi muvaffaqiyatli tekshirildi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Teacher turi tekshirildi"
+ *                 isEnglishTeacher:
+ *                   type: boolean
+ *                   example: true
+ *                 teacherId:
+ *                   type: integer
+ *                   example: 5
+ *       401:
+ *         description: Ruxsatsiz kirish
+ *       500:
+ *         description: Server xatosi
+ */
+router.get('/teachers/english', protect, checkIsEnglishTeacher);
 
 /**
  * @swagger
