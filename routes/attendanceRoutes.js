@@ -10,7 +10,8 @@ const {
   getMonthlyAttendance,
   updateStudentMonthlyStatus,
   getGroupLessons,
-  deleteLesson
+  deleteLesson,
+  exportMonthlyAttendance
 } = require('../controllers/attendanceController');
 
 /**
@@ -252,5 +253,45 @@ router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'teacher'])
  *         description: Dars o'chirildi
  */
 router.delete('/lessons/:lesson_id', protect, roleCheck(['admin', 'teacher']), deleteLesson);
+
+/**
+ * @swagger
+ * /api/attendance/groups/{group_id}/monthly/export:
+ *   get:
+ *     summary: Oylik davomatni Excel formatida eksport qilish
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: group_id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Guruh ID raqami
+ *       - name: month
+ *         in: query
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^\\d{4}-\\d{2}$'
+ *           example: "2026-02"
+ *         description: Oy (YYYY-MM formatida)
+ *     responses:
+ *       200:
+ *         description: Excel fayl
+ *         content:
+ *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       400:
+ *         description: Noto'g'ri parametr
+ *       403:
+ *         description: Ruxsat yo'q
+ *       404:
+ *         description: Ma'lumot topilmadi
+ */
+router.get('/groups/:group_id/monthly/export', protect, roleCheck(['admin', 'teacher']), exportMonthlyAttendance);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const XLSX = require('xlsx');
 
 /**
  * YANGI ATTENDANCE TIZIMI
@@ -214,26 +215,37 @@ exports.getLessonStudents = async (req, res) => {
 
     const { group_id, month } = lessonInfo.rows[0];
 
-    // Guruhdagi barcha talabalarni olish (qo'shilgan sana bilan)
-    const allStudents = await pool.query(
-      `SELECT student_id, DATE(joined_at) as joined_date FROM student_groups WHERE group_id = $1`,
-      [group_id]
-    );
-
-    // Dars sanasini olish
+    // Dars sanasini olish (birinchi bo'lib)
     const lessonDate = await pool.query(
       `SELECT date FROM lessons WHERE id = $1`,
       [lesson_id]
     );
     const currentLessonDate = lessonDate.rows[0].date;
 
+    // Guruhdagi barcha talabalarni olish - FAQAT HOZIR GURUHDA BO'LGANLAR
+    // MUHIM: left_at NULL bo'lganlar yoki dars sanasidan keyingi left_at
+    const allStudents = await pool.query(
+      `SELECT 
+        student_id, 
+        DATE(joined_at) as joined_date,
+        left_at
+      FROM student_groups 
+      WHERE group_id = $1 
+      AND (left_at IS NULL OR left_at > $2)
+      AND joined_at <= $2`,
+      [group_id, currentLessonDate]
+    );
+
     // Har bir talaba uchun attendance yozuvi borligini tekshirish
     for (const student of allStudents.rows) {
       // Agar talaba dars sanasidan KEYIN qo'shilgan bo'lsa, o'tkazib yuboramiz
       if (student.joined_date > currentLessonDate) {
-        console.log(`⏭️ Talaba ${student.student_id} bu darsdan keyin qo'shilgan (${student.joined_date} > ${currentLessonDate}), o'tkazib yuborildi`);
+        console.log(`⏭️ Talaba ${student.student_id} bu darsdan keyin qo'shilgan, attendance yaratilmaydi`);
         continue;
       }
+
+      // YANGI mantiq: faqat hozir guruhda bo'lgan studentlar uchun attendance yaratamiz
+      // Agar left_at mavjud va dars sanasidan oldin bo'lsa, attendance yaratmaymiz
 
       const existingAttendance = await pool.query(
         `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2`,
@@ -278,7 +290,8 @@ exports.getLessonStudents = async (req, res) => {
       }
     }
 
-    // Barcha talabalarni olish (faqat dars sanasidan OLDIN yoki O'SHA KUNDA qo'shilganlar)
+    // Dars studentlarini olish - attendance yozuvi mavjud bo'lgan barcha studentlar
+    // MUHIM: student chiqib ketgan bo'lsa ham, agar attendance yozuvi mavjud bo'lsa ko'rinsin
     const students = await pool.query(
       `SELECT 
          a.id as attendance_id,
@@ -296,10 +309,9 @@ exports.getLessonStudents = async (req, res) => {
          CASE WHEN a.monthly_status = 'active' THEN true ELSE false END as can_mark
        FROM attendance a
        JOIN users u ON a.student_id = u.id
-       JOIN student_groups sg ON a.student_id = sg.student_id AND a.group_id = sg.group_id
-       WHERE a.lesson_id = $1 AND DATE(sg.joined_at) <= $2
+       WHERE a.lesson_id = $1 
        ORDER BY a.monthly_status, u.name`,
-      [lesson_id, currentLessonDate]
+      [lesson_id]
     );
 
     res.json({
@@ -420,7 +432,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       [group_id, selectedMonth]
     );
 
-    // Shu oydagi barcha studentlar va ularning attendance yozuvlari
+    // Shu oydagi barcha attendance yozuvlari - student chiqib ketgan bo'lsa ham ko'rinsin
     const attendance = await pool.query(
       `SELECT 
          a.student_id,
@@ -433,7 +445,12 @@ exports.getMonthlyAttendance = async (req, res) => {
              'date', TO_CHAR(l.date, 'YYYY-MM-DD'),
              'status', a.status
            ) ORDER BY l.date
-         ) as attendance_records
+         ) as attendance_records,
+         -- Statistika hisoblash (barcha mavjud attendance yozuvlari uchun)
+         COUNT(CASE WHEN a.status = 'keldi' THEN 1 END) as total_present,
+         COUNT(CASE WHEN a.status = 'kelmadi' THEN 1 END) as total_absent,
+         COUNT(CASE WHEN a.status = 'kechikdi' THEN 1 END) as total_late,
+         COUNT(CASE WHEN a.status IN ('keldi', 'kelmadi', 'kechikdi') THEN 1 END) as total_lessons
        FROM attendance a
        JOIN users u ON a.student_id = u.id
        JOIN lessons l ON a.lesson_id = l.id
@@ -443,12 +460,30 @@ exports.getMonthlyAttendance = async (req, res) => {
       [group_id, selectedMonth]
     );
 
+    // Har bir student uchun statistika hisoblash va qo'shish
+    const studentsWithStats = attendance.rows.map(student => {
+      const totalAttended = parseInt(student.total_present) + parseInt(student.total_late);
+      const totalLessons = parseInt(student.total_lessons);
+      const attendancePercentage = totalLessons > 0 ? Math.round((totalAttended / totalLessons) * 100) : 0;
+      
+      return {
+        ...student,
+        statistics: {
+          total_attended: totalAttended,      // Nechta darsga qatnashdi (keldi + kechikdi)
+          total_missed: parseInt(student.total_absent),        // Nechta darsni qoldirdi
+          total_late: parseInt(student.total_late),            // Nechta marta kechikdi
+          total_lessons: totalLessons,        // Jami darslar soni (faqat student guruhda bo'lgan)
+          attendance_percentage: attendancePercentage  // Davomat foizi
+        }
+      };
+    });
+
     res.json({
       success: true,
       data: {
         month: selectedMonth,
         lessons: lessons.rows,
-        students: attendance.rows
+        students: studentsWithStats
       }
     });
 
@@ -648,6 +683,238 @@ exports.deleteLesson = async (req, res) => {
   }
 };
 
+// ============================================================================
+// 9. OYLIK DAVOMAT EXCEL EXPORT
+// ============================================================================
+exports.exportMonthlyAttendance = async (req, res) => {
+  const { group_id } = req.params;
+  const { role, id: userId } = req.user;
+  const { month } = req.query;
+  
+  try {
+    // Faqat YYYY-MM formatni qabul qilamiz
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Oy formatida xatolik (YYYY-MM format ishlatilsin)'
+      });
+    }
+    
+    // Guruhni tekshiramiz
+    const groupResult = await pool.query(`
+      SELECT 
+        g.id,
+        g.name,
+        g.teacher_id,
+        s.name as subject_name,
+        CONCAT(t.name, ' ', t.surname) as teacher_name
+      FROM groups g
+      LEFT JOIN subjects s ON g.subject_id = s.id
+      LEFT JOIN users t ON g.teacher_id = t.id
+      WHERE g.id = $1
+    `, [group_id]);
+    
+    if (groupResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+    
+    const group = groupResult.rows[0];
+    
+    // O'qituvchi faqat o'z guruhlarini export qila oladi
+    if (role === 'teacher' && group.teacher_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'z guruhlaringizni export qila olasiz'
+      });
+    }
+    
+    // Avval oyning barcha darslarini olamiz (getMonthlyAttendance kabi)
+    const lessons = await pool.query(
+      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day
+       FROM lessons 
+       WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
+       ORDER BY date`,
+      [group_id, month]
+    );
+    
+    if (lessons.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bu oy uchun darslar topilmadi'
+      });
+    }
+    
+    // Oylik davomatni olamiz - barcha mavjud attendance yozuvlari
+    const attendanceQuery = `
+      SELECT 
+        a.student_id,
+        u.name,
+        u.surname,
+        l.id as lesson_id,
+        TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date,
+        a.status,
+        COALESCE(a.monthly_status, 'active') as monthly_status
+      FROM attendance a
+      JOIN users u ON a.student_id = u.id  
+      JOIN lessons l ON a.lesson_id = l.id
+      WHERE a.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
+      ORDER BY u.name, u.surname, l.date
+    `;
+    
+    const attendanceResult = await pool.query(attendanceQuery, [group_id, month]);
+    
+    if (attendanceResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bu oy uchun davomat ma\'lumotlari topilmadi'
+      });
+    }
+    
+    // Ma'lumotlarni Excel formatiga tayyorlaymiz
+    const studentsMap = new Map();
+    const dates = new Set();
+    
+    // Darslar sanalarini olish (lessons dan)
+    lessons.rows.forEach(lesson => {
+      dates.add(lesson.date);
+    });
+    
+    // Student ma'lumotlarini to'plash
+    attendanceResult.rows.forEach(row => {
+      const studentKey = `${row.student_id}`;
+      if (!studentsMap.has(studentKey)) {
+        studentsMap.set(studentKey, {
+          name: `${row.name} ${row.surname}`,
+          monthly_status: row.monthly_status || 'active',
+          attendance: {}
+        });
+      }
+      
+      // Har bir dars uchun status
+      studentsMap.get(studentKey).attendance[row.lesson_date] = row.status;
+    });
+    
+    // Sanalarni tartiblaymiz
+    const sortedDates = Array.from(dates).sort();
+    
+    // Excel data tayyorlaymiz
+    const worksheetData = [];
+    
+    // Oy va yil nomi uchun title qatori
+    const monthName = {
+      '01': 'Yanvar', '02': 'Fevral', '03': 'Mart', '04': 'Aprel',
+      '05': 'May', '06': 'Iyun', '07': 'Iyul', '08': 'Avgust',
+      '09': 'Sentyabr', '10': 'Oktyabr', '11': 'Noyabr', '12': 'Dekabr'
+    };
+    
+    const [year, monthNum] = month.split('-');
+    const titleRow = [`${group.name} - ${monthName[monthNum]} ${year} - Oylik Davomat`];
+    worksheetData.push(titleRow);
+    worksheetData.push([]); // Bo'sh qator
+    
+    // Header qatori - to'liq sanalar bilan
+    const header = ['#', 'Talaba', 'Holati', ...sortedDates.map(date => {
+      const d = new Date(date);
+      return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()}`;
+    }), 'Jami keldi', 'Jami kelmadi', 'Kelish foizi'];
+    
+    worksheetData.push(header);
+    
+    // Student ma'lumotlari
+    let index = 1;
+    studentsMap.forEach((student, studentId) => {
+      let totalPresent = 0;
+      let totalAbsent = 0;
+      
+      const row = [
+        index++,
+        student.name,
+        student.monthly_status === 'active' ? 'Faol' : 
+        student.monthly_status === 'stopped' ? 'To\'xtatildi' : 
+        student.monthly_status === 'finished' ? 'Tugatdi' : student.monthly_status
+      ];
+      
+      // Har bir sana uchun davomat holati
+      sortedDates.forEach(date => {
+        const status = student.attendance[date] || '';
+        let displayStatus = '';
+        
+        if (status === 'keldi') {
+          displayStatus = '✓';
+          totalPresent++;
+        } else if (status === 'kelmadi') {
+          displayStatus = '✗';
+          totalAbsent++;
+        } else if (status === 'kechikdi') {
+          displayStatus = 'K';
+          totalPresent++;
+        } else if (status === 'uzrli') {
+          displayStatus = 'U';
+        } else {
+          displayStatus = '';
+        }
+        
+        row.push(displayStatus);
+      });
+      
+      // Statistika
+      const totalLessons = totalPresent + totalAbsent;
+      const attendancePercentage = totalLessons > 0 ? Math.round((totalPresent / totalLessons) * 100) : 0;
+      
+      row.push(totalPresent, totalAbsent, attendancePercentage + '%');
+      worksheetData.push(row);
+    });
+    
+    // Excel fayl yaratamiz
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+    
+    // Title qatorini merge qilamiz
+    const titleCellsCount = 3 + sortedDates.length + 3; // barcha ustunlar soni
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: titleCellsCount - 1 } }
+    ];
+    
+    // Ustunlar kengligini sozlaymiz
+    worksheet['!cols'] = [
+      { wch: 5 },   // #
+      { wch: 25 },  // Talaba
+      { wch: 15 },  // Holati
+      ...sortedDates.map(() => ({ wch: 12 })), // Sanalar (kengroq)
+      { wch: 10 },  // Jami keldi
+      { wch: 12 },  // Jami kelmadi
+      { wch: 12 }   // Kelish foizi
+    ];
+    
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Oylik Davomat');
+    
+    // Excel faylni bufferga yozamiz
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    
+    // Fayl nomini yaratamiz
+    const fileName = `${group.name}_${monthName[monthNum]}_${year}_davomat.xlsx`;
+    
+    // Response headerlarini sozlaymiz
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader('Content-Length', excelBuffer.length);
+    
+    // Excel faylni yuboramiz
+    res.end(excelBuffer);
+    
+  } catch (error) {
+    console.error('Excel export xatoligi:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getGroupsForAttendance: exports.getGroupsForAttendance,
   createLesson: exports.createLesson,
@@ -656,5 +923,6 @@ module.exports = {
   getMonthlyAttendance: exports.getMonthlyAttendance,
   updateStudentMonthlyStatus: exports.updateStudentMonthlyStatus,
   getGroupLessons: exports.getGroupLessons,
-  deleteLesson: exports.deleteLesson
+  deleteLesson: exports.deleteLesson,
+  exportMonthlyAttendance: exports.exportMonthlyAttendance
 };
