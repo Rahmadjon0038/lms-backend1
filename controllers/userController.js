@@ -353,6 +353,7 @@ const getAllTeachers = async (req, res) => {
             };
         });
 
+        // Statistikalarni hisoblash        
         res.json({
             message: "Teacherlar muvaffaqiyatli olindi",
             teachers: formattedTeachers,
@@ -366,6 +367,168 @@ const getAllTeachers = async (req, res) => {
         console.error('Teacherlarni olishda xatolik:', err);
         res.status(500).json({ 
             error: "Teacherlarni olishda xatolik yuz berdi",
+            details: err.message 
+        });
+    }
+};
+
+// Joriy teacher ingliz tili o'qituvchisimi tekshirish
+const checkIsEnglishTeacher = async (req, res) => {
+    try {
+        const teacherId = req.user.id; // JWT tokendan teacher ID olish
+        
+        const teacherSubjects = await pool.query(`
+            SELECT s.name 
+            FROM teacher_subjects ts
+            JOIN subjects s ON ts.subject_id = s.id
+            WHERE ts.teacher_id = $1
+        `, [teacherId]);
+
+        const subjects = teacherSubjects.rows;
+        const isEnglishTeacher = subjects.some(s => 
+            s.name.toLowerCase().includes('ingliz') || 
+            s.name.toLowerCase().includes('english') ||
+            s.name.toLowerCase().includes('ingiliz') ||
+            s.name.toLowerCase().includes('inglis')
+        );
+
+        res.json({
+            message: "Teacher turi tekshirildi",
+            isEnglishTeacher: isEnglishTeacher,
+            teacherId: teacherId
+        });
+    } catch (err) {
+        console.error('Teacher turini tekshirishda xatolik:', err);
+        res.status(500).json({ 
+            error: "Teacher turini tekshirishda xatolik yuz berdi",
+            details: err.message 
+        });
+    }
+};
+
+// Ingliz tili o'qituvchilarini alohida olish
+const getEnglishTeachers = async (req, res) => {
+    try {
+        const { status } = req.query;
+        
+        // Status filter uchun params
+        let statusCondition = '';
+        let params = [];
+        
+        if (status) {
+            statusCondition = 'AND u.status = $1';
+            params.push(status);
+        }
+
+        const teachers = await pool.query(`
+            SELECT 
+                u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date, 
+                u.termination_date, u.registration_date, u.certificate, u.age, u.has_experience, 
+                u.experience_years, u.experience_place, u.available_times, u.work_days_hours, 
+                u.created_at,
+                COALESCE(
+                    JSON_AGG(
+                        CASE 
+                            WHEN s.id IS NOT NULL THEN 
+                                JSON_BUILD_OBJECT('id', s.id, 'name', s.name)
+                            ELSE NULL
+                        END
+                    ) FILTER (WHERE s.id IS NOT NULL), '[]'
+                ) AS subjects,
+                COUNT(DISTINCT g.id) as group_count
+            FROM users u
+            LEFT JOIN teacher_subjects ts ON u.id = ts.teacher_id
+            LEFT JOIN subjects s ON ts.subject_id = s.id
+            LEFT JOIN groups g ON u.id = g.teacher_id AND g.status = 'active'
+            WHERE u.role = 'teacher' 
+                AND u.status != 'deleted' 
+                AND EXISTS (
+                    SELECT 1 FROM teacher_subjects ts2 
+                    JOIN subjects s2 ON ts2.subject_id = s2.id 
+                    WHERE ts2.teacher_id = u.id 
+                    AND (LOWER(s2.name) LIKE '%ingliz%' 
+                         OR LOWER(s2.name) LIKE '%english%' 
+                         OR LOWER(s2.name) LIKE '%ingiliz%'
+                         OR LOWER(s2.name) LIKE '%inglis%')
+                )
+                ${statusCondition}
+            GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, 
+                     u.end_date, u.termination_date, u.registration_date, u.certificate, 
+                     u.age, u.has_experience, u.experience_years, u.experience_place, 
+                     u.available_times, u.work_days_hours, u.created_at
+            ORDER BY u.created_at DESC
+        `, params);
+
+        const formattedTeachers = teachers.rows.map(teacher => {
+            const subjects = teacher.subjects || [];
+            const subjectNames = subjects.map(s => s.name).join(', ');
+
+            return {
+                id: teacher.id,
+                name: teacher.name,
+                surname: teacher.surname,
+                subjects: subjects,
+                subjects_list: subjectNames || 'Belgilanmagan',
+                subjects_count: subjects.length,
+                status: teacher.status,
+                isActive: teacher.status === 'active',
+                startDate: teacher.start_date ? teacher.start_date.toISOString().split('T')[0] : null,
+                endDate: teacher.end_date ? teacher.end_date.toISOString().split('T')[0] : null,
+                terminationDate: teacher.termination_date ? teacher.termination_date.toISOString().split('T')[0] : null,
+                registrationDate: teacher.registration_date ? teacher.registration_date.toISOString().split('T')[0] : null,
+                phone: teacher.phone || '',
+                phone2: teacher.phone2 || '',
+                certificate: teacher.certificate || '',
+                age: teacher.age || null,
+                hasExperience: teacher.has_experience || false,
+                experienceYears: teacher.experience_years || null,
+                experiencePlace: teacher.experience_place || '',
+                availableTimes: teacher.available_times || '',
+                workDaysHours: teacher.work_days_hours || '',
+                groupCount: parseInt(teacher.group_count) || 0,
+                
+                // Ingliz tili o'qituvchilari uchun maxsus maydonlar
+                isEnglishTeacher: true,
+                teacherCategory: 'english',
+                specialCapabilities: [
+                    'speaking_clubs',
+                    'ielts_preparation', 
+                    'toefl_preparation',
+                    'business_english',
+                    'online_classes',
+                    'conversation_practice'
+                ],
+                canTeachIELTS: true,
+                canTeachTOEFL: true,
+                canTeachBusinessEnglish: true,
+                canConductSpeakingClubs: true,
+                // Qo'shimcha ingliz tili ma'lumotlari
+                englishLevel: 'advanced', // Keyinroq database'dan olish mumkin
+                certifications: [], // CELTA, TESOL va h.k.
+                speakingClubsCount: 0, // Keyinroq hisoblash
+                onlineClassesEnabled: true
+            };
+        });
+
+        res.json({
+            message: "Ingliz tili o'qituvchilari muvaffaqiyatli olindi",
+            teachers: formattedTeachers,
+            total: formattedTeachers.length,
+            statistics: {
+                total_english_teachers: formattedTeachers.length,
+                active_english_teachers: formattedTeachers.filter(t => t.isActive).length,
+                with_experience: formattedTeachers.filter(t => t.hasExperience).length,
+                certified_teachers: formattedTeachers.filter(t => t.certificate).length
+            },
+            filters_applied: {
+                status: status || null,
+                teacher_type: 'english_only'
+            }
+        });
+    } catch (err) {
+        console.error('Ingliz tili o\'qituvchilarni olishda xatolik:', err);
+        res.status(500).json({ 
+            error: "Ingliz tili o'qituvchilarni olishda xatolik yuz berdi",
             details: err.message 
         });
     }
@@ -919,6 +1082,8 @@ module.exports = {
     getProfile, 
     refreshAccessToken, 
     getAllTeachers,
+    getEnglishTeachers,
+    checkIsEnglishTeacher,
     setTeacherOnLeave,
     terminateTeacher,
     reactivateTeacher,
