@@ -1900,8 +1900,8 @@ exports.getTeacherGroupDetails = async (req, res) => {
                     WHEN sg.status = 'finished' THEN 'Bitirgan'
                     ELSE 'Belgilanmagan'
                 END as group_status_description,
-                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
-                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
                 sg.joined_at
                 
             FROM student_groups sg
@@ -2180,8 +2180,8 @@ exports.getTeacherGroupDetails = async (req, res) => {
                 u.father_name,
                 u.father_phone,
                 sg.status as group_status,
-                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
-                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
                 CASE sg.status 
                     WHEN 'active' THEN 'Faol'
                     WHEN 'stopped' THEN 'To''xtatilgan'

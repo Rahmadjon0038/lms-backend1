@@ -12,13 +12,57 @@ app.use(express.json());
 app.use(cors());
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: API Status va ma'lumotlar
+ *     description: Server holati va yangi tizim haqida ma'lumot
+ *     responses:
+ *       200:
+ *         description: Server ishlayapti
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "LMS API v3.0 - Monthly Snapshot tizimi bilan"
+ *                 currentTime:
+ *                   type: string
+ *                 version:
+ *                   type: string
+ *                   example: "3.0.0"
+ *                 features:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["Monthly Snapshot", "Attendance Integration", "Enhanced Payments"]
+ */
 // Oddiy test yo'nalishi
 app.get('/', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW()');
         res.json({
-            status: "Server ishlayapti",
-            currentTime: result.rows[0].now
+            status: "LMS API v3.0 - Monthly Snapshot tizimi bilan yangilangan",
+            currentTime: result.rows[0].now,
+            version: "3.0.0",
+            features: [
+                "Monthly Snapshot System",
+                "Attendance-Payment Integration", 
+                "Enhanced Monthly Status Management",
+                "Improved Student Management",
+                "Advanced Reporting"
+            ],
+            api_docs: "http://localhost:5001/api-docs",
+            main_endpoints: {
+                payments: "/api/payments/monthly",
+                snapshots: "/api/snapshots",
+                attendance: "/api/attendance",
+                groups: "/api/groups",
+                students: "/api/students"
+            }
         });
     } catch (err) {
         console.error(err.message);
@@ -34,12 +78,15 @@ const subjectRoutes = require('./routes/subjectRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+const snapshotRoutes = require('./routes/snapshotRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
 const { createRoomTable } = require('./models/roomModel');
 const { createLessonsTable, createAttendanceTable } = require('./models/attendanceModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
+const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
+const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -50,6 +97,7 @@ app.use('/api/subjects', subjectRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/snapshots', snapshotRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
@@ -71,7 +119,9 @@ app.listen(PORT, '0.0.0.0', async () => {
         await createTeacherSubjectTables(); // Teacher-Subject many-to-many jadvallari
         await createLessonsTable(); // Lessons jadvali
         await createAttendanceTable(); // Yangi attendance jadvali
+        await createGroupMonthlySettingsTable(); // Group snapshot jadvali
         await createPaymentTables(); // Yangi to'lov tizimi jadvallari
+        await createMonthlySnapshotTable(); // Monthly snapshot jadvali
     } catch (error) {
         console.error("Dastlabki sozlashda xatolik:", error);
     }

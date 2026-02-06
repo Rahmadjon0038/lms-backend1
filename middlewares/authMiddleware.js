@@ -9,6 +9,13 @@ const protect = (req, res, next) => {
             // Tokenni ajratib olish
             token = req.headers.authorization.split(' ')[1];
 
+            console.log("--- TOKEN DEBUG ---");
+            console.log("Raw Authorization Header:", req.headers.authorization);
+            console.log("Extracted Token:", token);
+            console.log("Token uzunligi:", token ? token.length : 'null');
+            console.log("JWT_SECRET mavjud:", !!process.env.JWT_SECRET);
+            console.log("-------------------");
+
             // 2. Access Tokenni tekshirish (JWT_SECRET orqali)
             // .env faylingdagi JWT_SECRET=maxfiy_kalit_123@ ishlatiladi
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -18,10 +25,15 @@ const protect = (req, res, next) => {
 
             next(); // Hamma narsa joyida, keyingi funksiyaga ruxsat
         } catch (error) {
-            console.log("--- TOKEN DEBUG ---");
+            console.log("--- TOKEN ERROR DEBUG ---");
             console.log("Xato xabari:", error.message);
-            console.log("Ishlatilgan Secret:", process.env.JWT_SECRET);
-            console.log("-------------------");
+            console.log("Xato turi:", error.name);
+            console.log("Raw Authorization:", req.headers.authorization);
+            console.log("Ajratilgan token:", token);
+            console.log("Token mavjudmi:", !!token);
+            console.log("Secret mavjudmi:", !!process.env.JWT_SECRET);
+            console.log("Secret qiymati:", process.env.JWT_SECRET);
+            console.log("-------------------------");
 
             return res.status(401).json({
                 message: "Token xatosi: " + error.message,
