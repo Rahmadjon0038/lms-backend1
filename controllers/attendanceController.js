@@ -133,12 +133,14 @@ exports.createLesson = async (req, res) => {
     const lesson_id = newLesson.rows[0].id;
     const month = date.substring(0, 7); // YYYY-MM
 
-    // Guruhdagi barcha studentlarni olish (student_groups.status ga qaramasdan)
+    // Guruhdagi barcha studentlarni olish (faqat dars sanasida guruhda bo'lganlar)
     const students = await pool.query(
-      `SELECT student_id 
-       FROM student_groups 
-       WHERE group_id = $1`,
-      [group_id]
+      `SELECT sg.student_id 
+       FROM student_groups sg 
+       WHERE sg.group_id = $1 
+         AND sg.status = 'active'
+         AND DATE(sg.joined_at) <= $2::date`,
+      [group_id, date]
     );
 
     // Har bir student uchun attendance yaratish
@@ -423,6 +425,31 @@ exports.getMonthlyAttendance = async (req, res) => {
   try {
     const selectedMonth = month || new Date().toISOString().slice(0, 7);
 
+    // Avval guruh va teacher ma'lumotlarini olamiz
+    const groupInfo = await pool.query(
+      `SELECT 
+         g.name as group_name,
+         g.price as group_price,
+         s.name as subject_name,
+         CONCAT(t.name, ' ', t.surname) as teacher_name,
+         t.name as teacher_first_name,
+         t.surname as teacher_last_name
+       FROM groups g
+       JOIN subjects s ON g.subject_id = s.id  
+       LEFT JOIN users t ON g.teacher_id = t.id
+       WHERE g.id = $1`,
+      [group_id]
+    );
+
+    if (groupInfo.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+
+    const group = groupInfo.rows[0];
+
     // Oyning barcha darslarini olish
     const lessons = await pool.query(
       `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day
@@ -482,6 +509,15 @@ exports.getMonthlyAttendance = async (req, res) => {
       success: true,
       data: {
         month: selectedMonth,
+        group: {
+          group_id: parseInt(group_id),
+          group_name: group.group_name,
+          group_price: group.group_price,
+          subject_name: group.subject_name,
+          teacher_name: group.teacher_name,
+          teacher_first_name: group.teacher_first_name,
+          teacher_last_name: group.teacher_last_name
+        },
         lessons: lessons.rows,
         students: studentsWithStats
       }
@@ -566,6 +602,155 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
       });
     }
 
+    // YANGI: Payment jadvalini ham yangilash
+    // Agar talaba stopped/finished bo'lsa, payment statusini ham yangilaymiz
+    if (monthly_status === 'stopped' || monthly_status === 'finished') {
+      try {
+        let paymentUpdateQuery;
+        let paymentParams;
+        
+        if (from_month) {
+          // Shu oydan keyingi barcha oylar uchun
+          paymentUpdateQuery = `
+            UPDATE student_payments 
+            SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month >= $3
+          `;
+          paymentParams = [student_id, group_id, from_month];
+        } else if (months && Array.isArray(months) && months.length > 0) {
+          // Bir necha oylar uchun
+          const paymentMonthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
+          paymentUpdateQuery = `
+            UPDATE student_payments 
+            SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month IN (${paymentMonthPlaceholders})
+          `;
+          paymentParams = [student_id, group_id, ...months];
+        } else if (month) {
+          // Faqat bitta oy uchun
+          paymentUpdateQuery = `
+            UPDATE student_payments 
+            SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month = $3
+          `;
+          paymentParams = [student_id, group_id, month];
+        }
+        
+        if (paymentUpdateQuery) {
+          const paymentResult = await pool.query(paymentUpdateQuery, paymentParams);
+          console.log(`🔄 Payment status yangilandi: ${paymentResult.rowCount} ta yozuv`);
+        }
+      } catch (paymentError) {
+        console.error('Payment statusini yangilashda xatolik:', paymentError);
+        // Payment xatosi attendance yangilashiga ta'sir qilmasin
+      }
+    } else if (monthly_status === 'active') {
+      // Agar talaba qayta active bo'lsa, payment statusini ham active qilamiz
+      try {
+        let paymentReactivateQuery;
+        let paymentParams;
+        
+        if (from_month) {
+          paymentReactivateQuery = `
+            UPDATE student_payments 
+            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month >= $3 AND status = 'inactive'
+          `;
+          paymentParams = [student_id, group_id, from_month];
+        } else if (months && Array.isArray(months) && months.length > 0) {
+          const paymentMonthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
+          paymentReactivateQuery = `
+            UPDATE student_payments 
+            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month IN (${paymentMonthPlaceholders}) AND status = 'inactive'
+          `;
+          paymentParams = [student_id, group_id, ...months];
+        } else if (month) {
+          paymentReactivateQuery = `
+            UPDATE student_payments 
+            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = $1 AND group_id = $2 AND month = $3 AND status = 'inactive'
+          `;
+          paymentParams = [student_id, group_id, month];
+        }
+        
+        if (paymentReactivateQuery) {
+          const paymentResult = await pool.query(paymentReactivateQuery, paymentParams);
+          console.log(`🔄 Payment qayta faollashtirildi: ${paymentResult.rowCount} ta yozuv`);
+        }
+      } catch (paymentError) {
+        console.error('Payment statusini faollashtrishda xatolik:', paymentError);
+      }
+    }
+
+    // YANGI: Mavjud snapshot'larni ham yangilaymiz
+    try {
+      let snapshotUpdateQuery;
+      let snapshotParams;
+      
+      if (from_month) {
+        snapshotUpdateQuery = `
+          UPDATE monthly_snapshots 
+          SET monthly_status = $1::varchar, 
+              payment_status = CASE 
+                WHEN $1::varchar = 'active' THEN 
+                  CASE 
+                    WHEN paid_amount >= required_amount THEN 'paid'::varchar
+                    WHEN paid_amount > 0 THEN 'partial'::varchar
+                    ELSE 'unpaid'::varchar
+                  END
+                ELSE 'inactive'::varchar
+              END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE student_id = $2 AND group_id = $3 AND month >= $4::varchar
+        `;
+        snapshotParams = [monthly_status, student_id, group_id, from_month];
+      } else if (months && Array.isArray(months) && months.length > 0) {
+        const snapshotMonthPlaceholders = months.map((_, i) => `$${i + 4}::varchar`).join(', ');
+        snapshotUpdateQuery = `
+          UPDATE monthly_snapshots 
+          SET monthly_status = $1::varchar, 
+              payment_status = CASE 
+                WHEN $1::varchar = 'active' THEN 
+                  CASE 
+                    WHEN paid_amount >= required_amount THEN 'paid'::varchar
+                    WHEN paid_amount > 0 THEN 'partial'::varchar
+                    ELSE 'unpaid'::varchar
+                  END
+                ELSE 'inactive'::varchar
+              END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE student_id = $2 AND group_id = $3 AND month IN (${snapshotMonthPlaceholders})
+        `;
+        snapshotParams = [monthly_status, student_id, group_id, ...months];
+      } else if (month) {
+        snapshotUpdateQuery = `
+          UPDATE monthly_snapshots 
+          SET monthly_status = $1::varchar, 
+              payment_status = CASE 
+                WHEN $1::varchar = 'active' THEN 
+                  CASE 
+                    WHEN paid_amount >= required_amount THEN 'paid'::varchar
+                    WHEN paid_amount > 0 THEN 'partial'::varchar
+                    ELSE 'unpaid'::varchar
+                  END
+                ELSE 'inactive'::varchar
+              END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE student_id = $2 AND group_id = $3 AND month = $4::varchar
+        `;
+        snapshotParams = [monthly_status, student_id, group_id, month];
+      }
+      
+      if (snapshotUpdateQuery) {
+        const snapshotResult = await pool.query(snapshotUpdateQuery, snapshotParams);
+        console.log(`📸 Snapshot yangilandi: ${snapshotResult.rowCount} ta yozuv`);
+      }
+    } catch (snapshotError) {
+      console.error('Snapshot yangilashda xatolik:', snapshotError);
+      // Snapshot xatosi attendance yangilashiga ta'sir qilmasin
+    }
+
     // Yangilangan oylarning xulasasi
     const summary = await pool.query(
       `SELECT month, COUNT(*) as lesson_count
@@ -612,6 +797,33 @@ exports.getGroupLessons = async (req, res) => {
   try {
     const selectedMonth = month || new Date().toISOString().slice(0, 7);
 
+    // Avval guruh ma'lumotlarini olamiz
+    const groupInfo = await pool.query(
+      `SELECT 
+         g.id,
+         g.name as group_name,
+         g.price as group_price,
+         s.name as subject_name,
+         CONCAT(t.name, ' ', t.surname) as teacher_name,
+         t.name as teacher_first_name,
+         t.surname as teacher_last_name,
+         t.id as teacher_id
+       FROM groups g
+       JOIN subjects s ON g.subject_id = s.id  
+       LEFT JOIN users t ON g.teacher_id = t.id
+       WHERE g.id = $1`,
+      [group_id]
+    );
+
+    if (groupInfo.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+
+    const group = groupInfo.rows[0];
+
     const lessons = await pool.query(
       `SELECT 
          l.id,
@@ -631,7 +843,20 @@ exports.getGroupLessons = async (req, res) => {
 
     res.json({
       success: true,
-      data: lessons.rows
+      data: {
+        month: selectedMonth,
+        group: {
+          group_id: parseInt(group_id),
+          group_name: group.group_name,
+          group_price: group.group_price,
+          subject_name: group.subject_name,
+          teacher_name: group.teacher_name,
+          teacher_first_name: group.teacher_first_name,
+          teacher_last_name: group.teacher_last_name,
+          teacher_id: group.teacher_id
+        },
+        lessons: lessons.rows
+      }
     });
 
   } catch (error) {

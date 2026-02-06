@@ -7,10 +7,12 @@ const pool = require('../config/db');
 const createPaymentTables = async () => {
   try {
     // 1. STUDENT_PAYMENTS - oylik to'lovlar jadvali
+    // YANGI: group_id qo'shildi, UNIQUE constraint (student_id, group_id, month)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS student_payments (
         id SERIAL PRIMARY KEY,
         student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
         month VARCHAR(7) NOT NULL, -- YYYY-MM format
         required_amount DECIMAL(10,2) DEFAULT 0, -- Kerakli summa
         paid_amount DECIMAL(10,2) DEFAULT 0, -- To'langan summa
@@ -21,17 +23,19 @@ const createPaymentTables = async () => {
         created_by INTEGER REFERENCES users(id),
         updated_by INTEGER REFERENCES users(id),
         
-        -- Bir talaba uchun bir oyda bitta yozuv bo'lishi uchun
-        UNIQUE(student_id, month)
+        -- YANGI: Bir talaba bir guruhda bir oyda bitta yozuv
+        UNIQUE(student_id, group_id, month)
       )
     `);
     console.log('✅ student_payments jadvali yaratildi');
 
     // 2. PAYMENT_TRANSACTIONS - to'lov tranzaksiyalari
+    // YANGI: group_id qo'shildi
     await pool.query(`
       CREATE TABLE IF NOT EXISTS payment_transactions (
         id SERIAL PRIMARY KEY,
         student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
         month VARCHAR(7) NOT NULL, -- YYYY-MM format
         amount DECIMAL(10,2) NOT NULL, -- To'lov summasi
         payment_method VARCHAR(50) DEFAULT 'cash', -- naqd, karta, o'tkazma
@@ -64,11 +68,15 @@ const createPaymentTables = async () => {
       )
     `);
     console.log('✅ student_discounts jadvali yaratildi');
-
-    // 4. Indekslar yaratish (tezlik uchun)
+// YANGI: group_id qo'shilgan indekslar
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_student_payments_month 
-      ON student_payments(student_id, month)
+      CREATE INDEX IF NOT EXISTS idx_student_payments_student_group_month 
+      ON student_payments(student_id, group_id, month)
+    `);
+    
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_payments_group_month 
+      ON student_payments(group_id, month)
     `);
     
     await pool.query(`
@@ -77,8 +85,13 @@ const createPaymentTables = async () => {
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_payment_transactions_student 
-      ON payment_transactions(student_id, month)
+      CREATE INDEX IF NOT EXISTS idx_payment_transactions_student_group 
+      ON payment_transactions(student_id, group_id, month)
+    `);
+    
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_payment_transactions_group_month 
+      ON payment_transactions(group_id, month)
     `);
 
     await pool.query(`
