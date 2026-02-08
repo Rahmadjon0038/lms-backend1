@@ -1176,11 +1176,15 @@ exports.getStudentAttendance = async (req, res) => {
       snapshot = snapshotResult.rows[0];
     }
 
-    // Kunlik davomat ma'lumotlarini olish (faqat guruhga qo'shilgandan keyin)
+    // Kunlik davomat ma'lumotlarini olish (oydagi barcha darslar)
+    // Talaba qo'shilishidan oldingi darslar uchun status = null qaytamiz
     const dailyAttendanceQuery = `
       SELECT 
         l.date as lesson_date,
-        COALESCE(a.status, 'kelmagan') as status,
+        CASE
+          WHEN sg.joined_at IS NOT NULL AND l.date < DATE(sg.joined_at) THEN NULL
+          ELSE COALESCE(a.status, 'kelmagan')
+        END as status,
         TO_CHAR(l.date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY') as formatted_date,
         TO_CHAR(a.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as marked_at
       FROM lessons l
@@ -1188,7 +1192,6 @@ exports.getStudentAttendance = async (req, res) => {
       LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2
       WHERE l.group_id = $2 
         AND TO_CHAR(l.date, 'YYYY-MM') = $3
-        AND l.date >= COALESCE(DATE(sg.joined_at), l.date) -- Faqat qo'shilgandan keyin
       ORDER BY l.date ASC
     `;
 
@@ -1196,7 +1199,8 @@ exports.getStudentAttendance = async (req, res) => {
 
     // Real lessons count (agar snapshot bo'lmasa)
     if (snapshot.id === null && dailyResult.rows.length > 0) {
-      snapshot.total_lessons = dailyResult.rows.length;
+      const eligibleRows = dailyResult.rows.filter((row) => row.status !== null);
+      snapshot.total_lessons = eligibleRows.length;
       snapshot.attended_lessons = dailyResult.rows.filter(row => row.status === 'keldi' || row.status === 'present').length;
       snapshot.attendance_percentage = snapshot.total_lessons > 0 
         ? Math.round((snapshot.attended_lessons / snapshot.total_lessons) * 100) 
@@ -1217,7 +1221,8 @@ exports.getStudentAttendance = async (req, res) => {
       keldi: dailyResult.rows.filter(row => row.status === 'keldi' || row.status === 'present').length,
       kelmadi: dailyResult.rows.filter(row => row.status === 'kelmadi' || row.status === 'absent').length,
       kechikdi: dailyResult.rows.filter(row => row.status === 'kechikdi' || row.status === 'late').length,
-      kelmagan: dailyResult.rows.filter(row => row.status === 'kelmagan').length // Hali belgilanmagan
+      kelmagan: dailyResult.rows.filter(row => row.status === 'kelmagan').length, // Hali belgilanmagan
+      not_joined_yet: dailyResult.rows.filter(row => row.status === null).length // Talaba hali guruhga qo'shilmagan kunlar
     };
 
     console.log(`📊 Davomat so'raldi:`);

@@ -134,12 +134,13 @@ exports.createLesson = async (req, res) => {
     const month = date.substring(0, 7); // YYYY-MM
 
     // Guruhdagi barcha studentlarni olish (faqat dars sanasida guruhda bo'lganlar)
+    // MUHIM: Hozirgi statusga qaramay, dars sanasidagi membership oynasiga qaraymiz.
     const students = await pool.query(
-      `SELECT sg.student_id 
+      `SELECT DISTINCT sg.student_id 
        FROM student_groups sg 
        WHERE sg.group_id = $1 
-         AND sg.status = 'active'
-         AND DATE(sg.joined_at) <= $2::date`,
+         AND DATE(sg.joined_at) <= $2::date
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
       [group_id, date]
     );
 
@@ -224,17 +225,33 @@ exports.getLessonStudents = async (req, res) => {
     );
     const currentLessonDate = lessonDate.rows[0].date;
 
-    // Guruhdagi barcha talabalarni olish - FAQAT HOZIR GURUHDA BO'LGANLAR
-    // MUHIM: left_at NULL bo'lganlar yoki dars sanasidan keyingi left_at
+    // Avval eski/noto'g'ri attendance yozuvlarini tozalaymiz:
+    // student lesson sanasida guruhda bo'lmagan bo'lsa bu lessondan o'chiriladi.
+    await pool.query(
+      `DELETE FROM attendance a
+       USING lessons l
+       WHERE a.lesson_id = l.id
+         AND a.lesson_id = $1
+         AND NOT EXISTS (
+           SELECT 1
+           FROM student_groups sg
+           WHERE sg.student_id = a.student_id
+             AND sg.group_id = l.group_id
+             AND DATE(sg.joined_at) <= l.date
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+         )`,
+      [lesson_id]
+    );
+
+    // Guruhdagi barcha talabalarni olish - faqat shu dars sanasida guruhda bo'lganlar
     const allStudents = await pool.query(
-      `SELECT 
-        student_id, 
-        DATE(joined_at) as joined_date,
-        left_at
-      FROM student_groups 
-      WHERE group_id = $1 
-      AND (left_at IS NULL OR left_at > $2)
-      AND joined_at <= $2`,
+      `SELECT DISTINCT
+        sg.student_id,
+        DATE(sg.joined_at) as joined_date
+      FROM student_groups sg
+      WHERE sg.group_id = $1
+        AND DATE(sg.joined_at) <= $2::date
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
       [group_id, currentLessonDate]
     );
 

@@ -79,11 +79,16 @@ const attendanceRoutes = require('./routes/attendanceRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const snapshotRoutes = require('./routes/snapshotRoutes');
+const teacherGuideRoutes = require('./routes/teacherGuideRoutes');
+const adminGuideRoutes = require('./routes/adminGuideRoutes');
+const expenseRoutes = require('./routes/expenseRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
 const { createRoomTable } = require('./models/roomModel');
 const { createLessonsTable, createAttendanceTable } = require('./models/attendanceModel');
+const { createGuideTables } = require('./models/guideModel');
+const { createExpenseTable } = require('./models/expenseModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -98,6 +103,9 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/snapshots', snapshotRoutes);
+app.use('/api/teacher/guides', teacherGuideRoutes);
+app.use('/api/admin/guides', adminGuideRoutes);
+app.use('/api/expenses', expenseRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
@@ -119,6 +127,8 @@ app.listen(PORT, '0.0.0.0', async () => {
         await createTeacherSubjectTables(); // Teacher-Subject many-to-many jadvallari
         await createLessonsTable(); // Lessons jadvali
         await createAttendanceTable(); // Yangi attendance jadvali
+        await createGuideTables(); // Guide jadvallari
+        await createExpenseTable(); // Rasxodlar jadvali
         await createGroupMonthlySettingsTable(); // Group snapshot jadvali
         await createPaymentTables(); // Yangi to'lov tizimi jadvallari
         await createMonthlySnapshotTable(); // Monthly snapshot jadvali

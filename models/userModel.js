@@ -33,6 +33,9 @@ const createUserTable = async () => {
       course_status VARCHAR(20) DEFAULT 'not_started', -- 'not_started', 'in_progress', 'completed', 'dropped'
       course_start_date TIMESTAMP, -- Kurs boshlangan sana
       course_end_date TIMESTAMP, -- Kurs tugatgan sana
+      password_reset_key_plain VARCHAR(64), -- admin ko'rishi uchun joriy recovery key
+      password_reset_key_hash TEXT, -- one-time reset key hash
+      password_reset_key_rotated_at TIMESTAMP, -- key oxirgi yangilangan vaqt
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -112,6 +115,15 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='course_end_date') THEN
             ALTER TABLE users ADD COLUMN course_end_date TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='password_reset_key_hash') THEN
+            ALTER TABLE users ADD COLUMN password_reset_key_hash TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='password_reset_key_plain') THEN
+            ALTER TABLE users ADD COLUMN password_reset_key_plain VARCHAR(64);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='password_reset_key_rotated_at') THEN
+            ALTER TABLE users ADD COLUMN password_reset_key_rotated_at TIMESTAMP;
           END IF;
         END $$;
       `);
