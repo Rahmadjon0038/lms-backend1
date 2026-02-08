@@ -61,6 +61,8 @@ const options = {
       { name: 'Attendance', description: 'Davomat tizimi - oylik mustaqil monthly_status bilan' },
       { name: 'Payments', description: '✅ YANGI: To\'lovlar tizimi - attendance.monthly_status ga bog\'langan (v3.0)' },
       { name: 'Monthly Snapshots', description: '🆕 Oylik snapshot tizimi - har oy uchun mustaqil ma\'lumotlar boshqaruvi' },
+      { name: 'Teacher Guide', description: 'Admin va Teacher uchun Guide API (level, protected main pdf, lesson)' },
+      { name: 'Expenses', description: 'Admin uchun o\'quv markazi rasxodlari va statistika API' },
       { name: 'Teacher Salary', description: 'O\'qituvchilar maoshi va avans tizimi' },
       { name: 'Subjects', description: 'Fanlar va o\'qituvchi-fan bog\'lanishlari' },
       { name: 'Rooms', description: 'Xonalarni boshqarish' },

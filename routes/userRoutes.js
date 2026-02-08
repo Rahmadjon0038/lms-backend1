@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, getProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -185,6 +185,75 @@ router.post('/register-teacher', protect, roleCheck(['admin', 'super_admin']), r
  *         description: Username yoki parol xato
  */
 router.post('/login', loginStudent);
+
+/**
+ * @swagger
+ * /api/users/forgot-password/reset-with-key:
+ *   post:
+ *     summary: Username + recovery key orqali parolni tiklash
+ *     tags: [Users]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - recovery_key
+ *               - new_password
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: student01
+ *               recovery_key:
+ *                 type: string
+ *                 example: RK-A1B2C3D4
+ *               new_password:
+ *                 type: string
+ *                 example: NewStrongPass123
+ *     responses:
+ *       200:
+ *         description: Parol tiklandi, eski key kuyadi
+ *       401:
+ *         description: Recovery key noto'g'ri
+ */
+router.post('/forgot-password/reset-with-key', resetPasswordWithRecoveryKey);
+
+/**
+ * @swagger
+ * /api/users/change-password:
+ *   post:
+ *     summary: Login qilingan user parolini almashtirish
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - old_password
+ *               - new_password
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: student01
+ *               old_password:
+ *                 type: string
+ *                 example: OldPass123
+ *               new_password:
+ *                 type: string
+ *                 example: NewPass456
+ *     responses:
+ *       200:
+ *         description: Parol muvaffaqiyatli yangilandi
+ *       401:
+ *         description: Eski parol noto'g'ri
+ */
+router.post('/change-password', protect, changePassword);
 
 /**
  * @swagger

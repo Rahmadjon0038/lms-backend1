@@ -1,4 +1,39 @@
 const pool = require('../config/db');
+const crypto = require('crypto');
+
+const generatePlainRecoveryKey = () => {
+    return `RK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+};
+
+const hashRecoveryKey = (username, recoveryKey) => {
+    const pepper = process.env.PASSWORD_RESET_PEPPER || process.env.JWT_SECRET || 'default-pepper';
+    return crypto
+        .createHash('sha256')
+        .update(`${String(username).trim()}::${String(recoveryKey).trim()}::${pepper}`)
+        .digest('hex');
+};
+
+const ensureStudentRecoveryKeys = async () => {
+    const usersResult = await pool.query(
+        `SELECT id, username
+         FROM users
+         WHERE role = 'student'
+           AND (password_reset_key_plain IS NULL OR password_reset_key_hash IS NULL)`
+    );
+
+    for (const user of usersResult.rows) {
+        const recoveryKey = generatePlainRecoveryKey();
+        const recoveryKeyHash = hashRecoveryKey(user.username, recoveryKey);
+        await pool.query(
+            `UPDATE users
+             SET password_reset_key_plain = $1,
+                 password_reset_key_hash = $2,
+                 password_reset_key_rotated_at = CURRENT_TIMESTAMP
+             WHERE id = $3`,
+            [recoveryKey, recoveryKeyHash, user.id]
+        );
+    }
+};
 
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
@@ -237,6 +272,8 @@ exports.getAllStudents = async (req, res) => {
   const { teacher_id, group_id, subject_id, status, group_status, unassigned } = req.query;
   
   try {
+    await ensureStudentRecoveryKeys();
+
     let baseQuery = `
       SELECT DISTINCT
         u.id, 
@@ -253,6 +290,7 @@ exports.getAllStudents = async (req, res) => {
         u.course_status,
         u.course_start_date,
         u.course_end_date,
+        u.password_reset_key_plain as recovery_key,
         TO_CHAR(u.course_end_date, 'DD.MM.YYYY') as formatted_course_end_date,
         u.role
       FROM users u
