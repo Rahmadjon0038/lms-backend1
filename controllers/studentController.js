@@ -557,6 +557,143 @@ exports.getMyGroupInfo = async (req, res) => {
 };
 
 /**
+ * Studentning oylik to'lovlari (faqat o'zi uchun)
+ * Query:
+ *  - month (optional, YYYY-MM) default: joriy oy
+ *  - group_id (optional)
+ */
+exports.getMyMonthlyPayments = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const { month, group_id } = req.query;
+        const targetMonth = month || new Date().toISOString().slice(0, 7);
+
+        if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
+            return res.status(400).json({
+                success: false,
+                message: "month YYYY-MM formatida bo'lishi kerak"
+            });
+        }
+
+        let groupIdFilter = null;
+        if (group_id !== undefined) {
+            groupIdFilter = parseInt(group_id, 10);
+            if (Number.isNaN(groupIdFilter)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "group_id raqam bo'lishi kerak"
+                });
+            }
+        }
+
+        const params = [studentId, targetMonth];
+        let groupClause = '';
+        if (groupIdFilter !== null) {
+            params.push(groupIdFilter);
+            groupClause = ` AND ms.group_id = $${params.length}`;
+        }
+
+        const groupsQuery = `
+            SELECT
+                ms.group_id,
+                ms.group_name,
+                ms.subject_name,
+                COALESCE(ms.teacher_name, 'Biriktirilmagan') as teacher_name,
+                ms.monthly_status as student_group_status,
+                COALESCE(ms.required_amount, g.price, 0) as required_amount,
+                COALESCE(ms.paid_amount, 0) as paid_amount,
+                COALESCE(ms.discount_amount, 0) as discount_amount,
+                COALESCE(ms.debt_amount, 0) as debt_amount,
+                COALESCE(ms.payment_status, 'unpaid') as payment_status,
+                TO_CHAR(ms.last_payment_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as last_payment_date,
+                COALESCE(tx.transactions_count, 0) as transactions_count,
+                COALESCE(tx.transactions_total, 0) as transactions_total
+            FROM monthly_snapshots ms
+            LEFT JOIN groups g ON g.id = ms.group_id
+            LEFT JOIN (
+                SELECT
+                    pt.group_id,
+                    COUNT(*) as transactions_count,
+                    COALESCE(SUM(pt.amount), 0) as transactions_total
+                FROM payment_transactions pt
+                WHERE pt.student_id = $1 AND pt.month = $2
+                GROUP BY pt.group_id
+            ) tx ON tx.group_id = ms.group_id
+            WHERE ms.student_id = $1
+              AND ms.month = $2
+              ${groupClause}
+            ORDER BY ms.group_name
+        `;
+
+        const groupsResult = await pool.query(groupsQuery, params);
+
+        const txParams = [studentId, targetMonth];
+        let txGroupClause = '';
+        if (groupIdFilter !== null) {
+            txParams.push(groupIdFilter);
+            txGroupClause = ` AND pt.group_id = $${txParams.length}`;
+        }
+
+        const transactionsQuery = `
+            SELECT
+                pt.id,
+                pt.group_id,
+                g.name as group_name,
+                pt.amount,
+                pt.payment_method,
+                pt.description,
+                TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as paid_at
+            FROM payment_transactions pt
+            LEFT JOIN groups g ON g.id = pt.group_id
+            WHERE pt.student_id = $1 AND pt.month = $2
+            ${txGroupClause}
+            ORDER BY pt.created_at DESC
+        `;
+
+        const transactionsResult = await pool.query(transactionsQuery, txParams);
+
+        const summary = groupsResult.rows.reduce((acc, row) => {
+            acc.required_amount_total += parseFloat(row.required_amount || 0);
+            acc.paid_amount_total += parseFloat(row.paid_amount || 0);
+            acc.discount_amount_total += parseFloat(row.discount_amount || 0);
+            acc.debt_amount_total += parseFloat(row.debt_amount || 0);
+            acc.transactions_count_total += parseInt(row.transactions_count || 0, 10);
+            return acc;
+        }, {
+            required_amount_total: 0,
+            paid_amount_total: 0,
+            discount_amount_total: 0,
+            debt_amount_total: 0,
+            transactions_count_total: 0
+        });
+
+        const hasRows = groupsResult.rows.length > 0;
+
+        res.json({
+            success: true,
+            message: hasRows
+                ? "Oylik to'lov ma'lumotlari muvaffaqiyatli olindi"
+                : `${targetMonth} oy uchun To'lov jadvali topilmadi`,
+            data: {
+                student_id: studentId,
+                month: targetMonth,
+                summary,
+                groups: groupsResult.rows,
+                transactions: transactionsResult.rows
+            }
+        });
+
+    } catch (error) {
+        console.error("❌ Student oylik to'lovlarini olishda xato:", error);
+        res.status(500).json({
+            success: false,
+            message: "Oylik to'lovlarni olishda xatolik yuz berdi",
+            error: error.message
+        });
+    }
+};
+
+/**
  * Studentning o'zi qo'shilgan guruhlar ro'yxati
  */
 exports.getMyGroups = async (req, res) => {
@@ -579,8 +716,8 @@ exports.getMyGroups = async (req, res) => {
                 
                 -- Student guruh ma'lumotlari
                 sg.status as my_status,
-                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as my_join_date,
-                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as my_leave_date,
+                TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as my_join_date,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as my_leave_date,
                 
                 -- Guruh umumiy ma'lumotlari
                 g.status as group_status,
@@ -597,7 +734,7 @@ exports.getMyGroups = async (req, res) => {
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
             JOIN subjects s ON g.subject_id = s.id
-            JOIN users u ON g.teacher_id = u.id
+            LEFT JOIN users u ON g.teacher_id = u.id
             LEFT JOIN rooms r ON g.room_id = r.id
             
             WHERE sg.student_id = $1
@@ -697,7 +834,7 @@ exports.getMyGroupInfo = async (req, res) => {
                 g.class_status,
                 TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
                 TO_CHAR(g.created_at, 'DD.MM.YYYY') as created_date,
-                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as student_joined_date,
+                TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as student_joined_date,
                 
                 s.name as subject_name,
                 
@@ -706,7 +843,7 @@ exports.getMyGroupInfo = async (req, res) => {
                 
             FROM groups g
             JOIN subjects s ON g.subject_id = s.id
-            JOIN users u ON g.teacher_id = u.id
+            LEFT JOIN users u ON g.teacher_id = u.id
             JOIN student_groups sg ON g.id = sg.group_id AND sg.student_id = $2
             WHERE g.id = $1
         `, [groupId, studentId]);
@@ -726,8 +863,8 @@ exports.getMyGroupInfo = async (req, res) => {
                 u.surname,
                 u.phone,
                 sg.status,
-                TO_CHAR(sg.join_date, 'DD.MM.YYYY') as join_date,
-                TO_CHAR(sg.leave_date, 'DD.MM.YYYY') as leave_date,
+                TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
                 
                 -- Status tavsifi
                 CASE 

@@ -10,6 +10,7 @@ const {
   getMonthlyAttendance,
   updateStudentMonthlyStatus,
   getGroupLessons,
+  updateLessonDate,
   deleteLesson,
   exportMonthlyAttendance
 } = require('../controllers/attendanceController');
@@ -233,6 +234,39 @@ router.put('/student/monthly-status', protect, roleCheck(['admin']), updateStude
  *         description: Darslar ro'yxati
  */
 router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'teacher']), getGroupLessons);
+
+/**
+ * @swagger
+ * /api/attendance/lessons/{lesson_id}/date:
+ *   put:
+ *     summary: Dars sanasini o'zgartirish
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: lesson_id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - date
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-02-20"
+ *     responses:
+ *       200:
+ *         description: Sana muvaffaqiyatli yangilandi
+ */
+router.put('/lessons/:lesson_id/date', protect, roleCheck(['admin', 'teacher']), updateLessonDate);
 
 /**
  * @swagger

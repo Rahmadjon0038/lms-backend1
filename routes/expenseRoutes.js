@@ -43,4 +43,21 @@ router.get('/', expenseController.getExpenses);
  */
 router.get('/summary', expenseController.getExpenseSummary);
 
+/**
+ * @swagger
+ * /api/expenses/{id}:
+ *   put:
+ *     summary: Rasxodni yangilash
+ *     tags: [Expenses]
+ *     security: [{ bearerAuth: [] }]
+ *     responses: { 200: { description: OK } }
+ *   delete:
+ *     summary: Rasxodni o'chirish
+ *     tags: [Expenses]
+ *     security: [{ bearerAuth: [] }]
+ *     responses: { 200: { description: OK } }
+ */
+router.put('/:id', expenseController.updateExpense);
+router.delete('/:id', expenseController.deleteExpense);
+
 module.exports = router;

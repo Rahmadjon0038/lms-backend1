@@ -27,6 +27,10 @@ Tanlangan oy rasxodlari ro'yxati
 
 3. `GET /api/expenses/summary?month=YYYY-MM`  
 Bugungi summa + tanlangan oy summasi
+4. `PUT /api/expenses/:id`  
+Rasxodni yangilash
+5. `DELETE /api/expenses/:id`  
+Rasxodni o'chirish
 
 ---
 
@@ -125,3 +129,51 @@ Response:
 - `amount musbat son bo'lishi kerak`
 - `expense_date formati YYYY-MM-DD bo'lishi kerak`
 - `month formati YYYY-MM bo'lishi kerak`
+
+## 8. Rasxodni yangilash
+
+`PUT /api/expenses/12`
+
+Body (kamida 1 maydon):
+```json
+{
+  "reason": "Internet to'lovi",
+  "amount": 480000,
+  "expense_date": "2026-02-09"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 12,
+    "reason": "Internet to'lovi",
+    "amount": 480000,
+    "expense_date": "2026-02-09",
+    "month": "2026-02",
+    "created_at": "..."
+  }
+}
+```
+
+## 9. Rasxodni o'chirish
+
+`DELETE /api/expenses/12`
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Rasxod o'chirildi",
+  "data": {
+    "id": 12,
+    "reason": "Internet to'lovi",
+    "amount": 480000,
+    "expense_date": "2026-02-09",
+    "month": "2026-02",
+    "created_at": "..."
+  }
+}
+```
