@@ -8,6 +8,194 @@ const XLSX = require('xlsx');
  * - Eski group_status ni ishlatmaymiz
  */
 
+const WEEKDAY_MAP = {
+  monday: 1,
+  dushanba: 1,
+  mon: 1,
+  tuesday: 2,
+  seshanba: 2,
+  tue: 2,
+  wednesday: 3,
+  chorshanba: 3,
+  wed: 3,
+  thursday: 4,
+  payshanba: 4,
+  thu: 4,
+  friday: 5,
+  juma: 5,
+  fri: 5,
+  saturday: 6,
+  shanba: 6,
+  sat: 6,
+  sunday: 0,
+  yakshanba: 0,
+  sun: 0
+};
+
+const normalizeScheduleDaysToWeekdays = (schedule) => {
+  if (!schedule) return [];
+  const rawDays = Array.isArray(schedule.days) ? schedule.days : [];
+  return [...new Set(
+    rawDays
+      .map((d) => String(d || '').trim().toLowerCase())
+      .map((d) => WEEKDAY_MAP[d])
+      .filter((d) => Number.isInteger(d))
+  )];
+};
+
+const getMonthStartEnd = (month) => {
+  const [year, mon] = month.split('-').map(Number);
+  const start = new Date(Date.UTC(year, mon - 1, 1));
+  const end = new Date(Date.UTC(year, mon, 0));
+  return { start, end };
+};
+
+const formatDateUtc = (dateObj) => dateObj.toISOString().slice(0, 10);
+
+const resolveDefaultMonthlyStatus = async (studentId, groupId) => {
+  const lastMonthStatus = await pool.query(
+    `SELECT monthly_status
+     FROM attendance
+     WHERE student_id = $1 AND group_id = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [studentId, groupId]
+  );
+
+  if (lastMonthStatus.rows.length > 0) {
+    const lastStatus = lastMonthStatus.rows[0].monthly_status;
+    if (lastStatus === 'stopped' || lastStatus === 'finished') {
+      return lastStatus;
+    }
+  }
+  return 'active';
+};
+
+const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
+  const month = String(lessonDate).slice(0, 7);
+
+  await pool.query(
+    `DELETE FROM attendance a
+     WHERE a.lesson_id = $1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM student_groups sg
+         WHERE sg.student_id = a.student_id
+           AND sg.group_id = $2
+           AND DATE(sg.joined_at) <= $3::date
+           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $3::date)
+       )`,
+    [lessonId, groupId, lessonDate]
+  );
+
+  const eligibleStudents = await pool.query(
+    `SELECT DISTINCT sg.student_id
+     FROM student_groups sg
+     WHERE sg.group_id = $1
+       AND DATE(sg.joined_at) <= $2::date
+       AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
+    [groupId, lessonDate]
+  );
+
+  let createdCount = 0;
+  for (const student of eligibleStudents.rows) {
+    const exists = await pool.query(
+      `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2`,
+      [lessonId, student.student_id]
+    );
+
+    if (exists.rows.length === 0) {
+      const initialStatus = await resolveDefaultMonthlyStatus(student.student_id, groupId);
+      await pool.query(
+        `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [lessonId, student.student_id, groupId, month, 'kelmadi', initialStatus]
+      );
+      createdCount++;
+    } else {
+      await pool.query(
+        `UPDATE attendance
+         SET month = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE lesson_id = $2 AND student_id = $3`,
+        [month, lessonId, student.student_id]
+      );
+    }
+  }
+
+  return { eligibleCount: eligibleStudents.rows.length, createdCount };
+};
+
+const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy }) => {
+  const groupResult = await pool.query(
+    `SELECT id, schedule, class_start_date, start_date
+     FROM groups
+     WHERE id = $1`,
+    [groupId]
+  );
+
+  if (groupResult.rows.length === 0) {
+    return { generated: 0, skipped: 'group_not_found' };
+  }
+
+  const group = groupResult.rows[0];
+  const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
+  if (weekdays.length === 0) {
+    return { generated: 0, skipped: 'no_schedule_days' };
+  }
+
+  const { start: monthStart, end: monthEnd } = getMonthStartEnd(month);
+  const startBoundary = group.class_start_date || group.start_date;
+  const effectiveStart = startBoundary
+    ? new Date(Date.UTC(
+      new Date(startBoundary).getUTCFullYear(),
+      new Date(startBoundary).getUTCMonth(),
+      new Date(startBoundary).getUTCDate()
+    ))
+    : monthStart;
+  const firstDate = effectiveStart > monthStart ? effectiveStart : monthStart;
+
+  const existingLessons = await pool.query(
+    `SELECT TO_CHAR(date, 'YYYY-MM-DD') as lesson_date
+     FROM lessons
+     WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2`,
+    [groupId, month]
+  );
+  const existingDates = new Set(existingLessons.rows.map((r) => r.lesson_date));
+
+  const monthlyCap = 12;
+  if (existingDates.size >= monthlyCap) {
+    return { generated: 0, skipped: 'cap_reached' };
+  }
+
+  const candidates = [];
+  const cursor = new Date(firstDate);
+  while (cursor <= monthEnd) {
+    if (weekdays.includes(cursor.getUTCDay())) {
+      const d = formatDateUtc(cursor);
+      if (!existingDates.has(d)) {
+        candidates.push(d);
+      }
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  const toCreate = candidates.slice(0, Math.max(monthlyCap - existingDates.size, 0));
+  let generated = 0;
+  for (const lessonDate of toCreate) {
+    const inserted = await pool.query(
+      `INSERT INTO lessons (group_id, date, created_by)
+       VALUES ($1, $2::date, $3)
+       RETURNING id`,
+      [groupId, lessonDate, createdBy]
+    );
+    const lessonId = inserted.rows[0].id;
+    await syncLessonAttendanceForDate(lessonId, groupId, lessonDate);
+    generated++;
+  }
+
+  return { generated, skipped: null };
+};
+
 // ============================================================================
 // 1. GURUHLAR RO'YXATI (Attendance uchun)
 // ============================================================================
@@ -131,49 +319,7 @@ exports.createLesson = async (req, res) => {
       [group_id, date, userId]
     );
     const lesson_id = newLesson.rows[0].id;
-    const month = date.substring(0, 7); // YYYY-MM
-
-    // Guruhdagi barcha studentlarni olish (faqat dars sanasida guruhda bo'lganlar)
-    // MUHIM: Hozirgi statusga qaramay, dars sanasidagi membership oynasiga qaraymiz.
-    const students = await pool.query(
-      `SELECT DISTINCT sg.student_id 
-       FROM student_groups sg 
-       WHERE sg.group_id = $1 
-         AND DATE(sg.joined_at) <= $2::date
-         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
-      [group_id, date]
-    );
-
-    // Har bir student uchun attendance yaratish
-    if (students.rows.length > 0) {
-      for (const student of students.rows) {
-        // Oxirgi oydagi monthly_status ni tekshirish
-        const lastMonthStatus = await pool.query(
-          `SELECT monthly_status 
-           FROM attendance 
-           WHERE student_id = $1 AND group_id = $2 
-           ORDER BY created_at DESC 
-           LIMIT 1`,
-          [student.student_id, group_id]
-        );
-
-        // Agar oxirgi oy stopped yoki finished bo'lsa, yangi oyda ham o'sha status bilan yaratish
-        // Agar ma'lumot bo'lmasa yoki active bo'lsa, default 'active' bo'ladi
-        let initialStatus = 'active';
-        if (lastMonthStatus.rows.length > 0) {
-          const lastStatus = lastMonthStatus.rows[0].monthly_status;
-          if (lastStatus === 'stopped' || lastStatus === 'finished') {
-            initialStatus = lastStatus;
-          }
-        }
-
-        await pool.query(
-          `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status) 
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [lesson_id, student.student_id, group_id, month, 'kelmadi', initialStatus]
-        );
-      }
-    }
+    const syncResult = await syncLessonAttendanceForDate(lesson_id, group_id, date);
 
     res.json({
       success: true,
@@ -182,7 +328,7 @@ exports.createLesson = async (req, res) => {
         lesson_id,
         group_id: parseInt(group_id),
         date: newLesson.rows[0].date,
-        students_count: students.rows.length
+        students_count: syncResult.eligibleCount
       }
     });
 
@@ -810,6 +956,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
 exports.getGroupLessons = async (req, res) => {
   const { group_id } = req.params;
   const { month } = req.query;
+  const { id: userId } = req.user;
   
   try {
     const selectedMonth = month || new Date().toISOString().slice(0, 7);
@@ -840,6 +987,14 @@ exports.getGroupLessons = async (req, res) => {
     }
 
     const group = groupInfo.rows[0];
+
+    // Attendance sahifasiga kirilganda tanlangan oy uchun schedule asosida
+    // darslarni avtomatik yaratamiz (oyiga maksimal 12 ta).
+    const autoGen = await autoGenerateLessonsForMonth({
+      groupId: parseInt(group_id, 10),
+      month: selectedMonth,
+      createdBy: userId
+    });
 
     const lessons = await pool.query(
       `SELECT 
@@ -872,7 +1027,12 @@ exports.getGroupLessons = async (req, res) => {
           teacher_last_name: group.teacher_last_name,
           teacher_id: group.teacher_id
         },
-        lessons: lessons.rows
+        lessons: lessons.rows,
+        auto_generated: {
+          month: selectedMonth,
+          generated_lessons_count: autoGen.generated,
+          mode: 'schedule_based_max_12'
+        }
       }
     });
 
@@ -881,6 +1041,92 @@ exports.getGroupLessons = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server xatoligi'
+    });
+  }
+};
+
+// ============================================================================
+// 8. DARS SANASINI O'ZGARTIRISH
+// ============================================================================
+exports.updateLessonDate = async (req, res) => {
+  const { lesson_id } = req.params;
+  const { date } = req.body;
+  const { role, id: userId } = req.user;
+
+  try {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+
+    const lessonResult = await pool.query(
+      `SELECT l.id, l.group_id, l.date, g.teacher_id
+       FROM lessons l
+       JOIN groups g ON g.id = l.group_id
+       WHERE l.id = $1`,
+      [lesson_id]
+    );
+
+    if (lessonResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Dars topilmadi'
+      });
+    }
+
+    const lesson = lessonResult.rows[0];
+
+    if (role === 'teacher' && String(lesson.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizning guruh darsini o\'zgartira olasiz'
+      });
+    }
+
+    const duplicate = await pool.query(
+      `SELECT id
+       FROM lessons
+       WHERE group_id = $1
+         AND date = $2::date
+         AND id <> $3`,
+      [lesson.group_id, date, lesson_id]
+    );
+
+    if (duplicate.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bu sana uchun dars allaqachon mavjud'
+      });
+    }
+
+    await pool.query(
+      `UPDATE lessons
+       SET date = $1::date
+       WHERE id = $2`,
+      [date, lesson_id]
+    );
+
+    await syncLessonAttendanceForDate(lesson_id, lesson.group_id, date);
+
+    return res.json({
+      success: true,
+      message: "Dars sanasi muvaffaqiyatli o'zgartirildi",
+      data: {
+        lesson_id: Number(lesson_id),
+        group_id: lesson.group_id,
+        old_date: String(lesson.date).slice(0, 10),
+        new_date: date,
+        month: date.slice(0, 7)
+      }
+    });
+  } catch (error) {
+    console.error('Dars sanasini o\'zgartirishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };
@@ -1165,6 +1411,7 @@ module.exports = {
   getMonthlyAttendance: exports.getMonthlyAttendance,
   updateStudentMonthlyStatus: exports.updateStudentMonthlyStatus,
   getGroupLessons: exports.getGroupLessons,
+  updateLessonDate: exports.updateLessonDate,
   deleteLesson: exports.deleteLesson,
   exportMonthlyAttendance: exports.exportMonthlyAttendance
 };

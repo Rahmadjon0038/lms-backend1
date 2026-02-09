@@ -60,38 +60,36 @@ const getAdminDailyStats = async (req, res) => {
        ),
        daily_payments AS (
          SELECT DATE(created_at AT TIME ZONE 'Asia/Tashkent') AS day,
-                COUNT(*)::int AS payments_count,
-                COALESCE(SUM(amount), 0)::numeric AS payments_amount
+                COUNT(*)::int AS payments_count
          FROM payment_transactions
          WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') BETWEEN $1::date AND $2::date
          GROUP BY 1
        ),
        daily_students AS (
-         SELECT DATE(joined_at) AS day,
-                COUNT(DISTINCT student_id)::int AS new_students_count
-         FROM student_groups
-         WHERE DATE(joined_at) BETWEEN $1::date AND $2::date
+         SELECT DATE(created_at AT TIME ZONE 'Asia/Tashkent') AS day,
+                COUNT(*)::int AS new_students_count
+         FROM users
+         WHERE role = 'student'
+           AND DATE(created_at AT TIME ZONE 'Asia/Tashkent') BETWEEN $1::date AND $2::date
          GROUP BY 1
        ),
-       daily_lessons AS (
-         SELECT l.date::date AS day,
-                COUNT(DISTINCT l.id)::int AS lessons_count,
-                COUNT(a.id)::int AS attendance_marks_count
-         FROM lessons l
-         LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE l.date::date BETWEEN $1::date AND $2::date
+       daily_expenses AS (
+         SELECT expense_date::date AS day,
+                COUNT(*)::int AS expenses_count,
+                COALESCE(SUM(amount), 0)::numeric AS expenses_amount
+         FROM center_expenses
+         WHERE expense_date::date BETWEEN $1::date AND $2::date
          GROUP BY 1
        )
        SELECT d.day::text AS date,
               COALESCE(p.payments_count, 0)::int AS payments_count,
-              COALESCE(p.payments_amount, 0)::float AS payments_amount,
               COALESCE(s.new_students_count, 0)::int AS new_students_count,
-              COALESCE(ls.lessons_count, 0)::int AS lessons_count,
-              COALESCE(ls.attendance_marks_count, 0)::int AS attendance_marks_count
+              COALESCE(e.expenses_count, 0)::int AS expenses_count,
+              COALESCE(e.expenses_amount, 0)::float AS expenses_amount
        FROM days d
        LEFT JOIN daily_payments p ON p.day = d.day
        LEFT JOIN daily_students s ON s.day = d.day
-       LEFT JOIN daily_lessons ls ON ls.day = d.day
+       LEFT JOIN daily_expenses e ON e.day = d.day
        ORDER BY d.day ASC`,
       [fromDate, toDate]
     );
@@ -99,26 +97,24 @@ const getAdminDailyStats = async (req, res) => {
     const points = result.rows;
 
     const summary = points.reduce((acc, row) => ({
-      total_payments_count: acc.total_payments_count + row.payments_count,
-      total_payments_amount: acc.total_payments_amount + Number(row.payments_amount || 0),
-      total_new_students: acc.total_new_students + row.new_students_count,
-      total_lessons: acc.total_lessons + row.lessons_count,
-      total_attendance_marks: acc.total_attendance_marks + row.attendance_marks_count,
+      payments_count: acc.payments_count + Number(row.payments_count || 0),
+      new_students_count: acc.new_students_count + Number(row.new_students_count || 0),
+      expenses_count: acc.expenses_count + Number(row.expenses_count || 0),
+      expenses_amount: acc.expenses_amount + Number(row.expenses_amount || 0),
     }), {
-      total_payments_count: 0,
-      total_payments_amount: 0,
-      total_new_students: 0,
-      total_lessons: 0,
-      total_attendance_marks: 0,
+      payments_count: 0,
+      new_students_count: 0,
+      expenses_count: 0,
+      expenses_amount: 0,
     });
 
     const chart = {
       labels: points.map((p) => p.date),
       series: {
-        payments_amount: points.map((p) => Number(p.payments_amount || 0)),
         payments_count: points.map((p) => p.payments_count),
         new_students_count: points.map((p) => p.new_students_count),
-        lessons_count: points.map((p) => p.lessons_count),
+        expenses_count: points.map((p) => p.expenses_count),
+        expenses_amount: points.map((p) => Number(p.expenses_amount || 0)),
       },
     };
 
@@ -185,38 +181,47 @@ const getAdminMonthlyStats = async (req, res) => {
        ),
        monthly_payments AS (
          SELECT month,
-                COUNT(*)::int AS payments_count,
-                COALESCE(SUM(amount), 0)::numeric AS payments_amount
+                COUNT(*)::int AS payments_count
          FROM payment_transactions
          WHERE month BETWEEN $3 AND $4
          GROUP BY 1
        ),
        monthly_students AS (
-         SELECT TO_CHAR(joined_at, 'YYYY-MM') AS month,
-                COUNT(DISTINCT student_id)::int AS new_students_count
-         FROM student_groups
-         WHERE TO_CHAR(joined_at, 'YYYY-MM') BETWEEN $3 AND $4
+         SELECT TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') AS month,
+                COUNT(*)::int AS new_students_count
+         FROM users
+         WHERE role = 'student'
+           AND TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') BETWEEN $3 AND $4
          GROUP BY 1
        ),
-       monthly_lessons AS (
-         SELECT TO_CHAR(l.date, 'YYYY-MM') AS month,
-                COUNT(DISTINCT l.id)::int AS lessons_count,
-                COUNT(a.id)::int AS attendance_marks_count
-         FROM lessons l
-         LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE TO_CHAR(l.date, 'YYYY-MM') BETWEEN $3 AND $4
+       monthly_expenses AS (
+         SELECT month,
+                COUNT(*)::int AS expenses_count,
+                COALESCE(SUM(amount), 0)::numeric AS expenses_amount
+         FROM center_expenses
+         WHERE month BETWEEN $3 AND $4
+         GROUP BY 1
+       ),
+       monthly_debt AS (
+         SELECT month,
+                COUNT(*) FILTER (WHERE debt_amount > 0)::int AS debtors_count,
+                COALESCE(SUM(CASE WHEN debt_amount > 0 THEN debt_amount ELSE 0 END), 0)::numeric AS debt_amount
+         FROM monthly_snapshots
+         WHERE month BETWEEN $3 AND $4
          GROUP BY 1
        )
        SELECT m.month,
               COALESCE(p.payments_count, 0)::int AS payments_count,
-              COALESCE(p.payments_amount, 0)::float AS payments_amount,
               COALESCE(s.new_students_count, 0)::int AS new_students_count,
-              COALESCE(ls.lessons_count, 0)::int AS lessons_count,
-              COALESCE(ls.attendance_marks_count, 0)::int AS attendance_marks_count
+              COALESCE(e.expenses_count, 0)::int AS expenses_count,
+              COALESCE(e.expenses_amount, 0)::float AS expenses_amount,
+              COALESCE(d.debtors_count, 0)::int AS debtors_count,
+              COALESCE(d.debt_amount, 0)::float AS debt_amount
        FROM months m
        LEFT JOIN monthly_payments p ON p.month = m.month
        LEFT JOIN monthly_students s ON s.month = m.month
-       LEFT JOIN monthly_lessons ls ON ls.month = m.month
+       LEFT JOIN monthly_expenses e ON e.month = m.month
+       LEFT JOIN monthly_debt d ON d.month = m.month
        ORDER BY m.month ASC`,
       [fromDate, toDate, fromMonth, toMonth]
     );
@@ -224,26 +229,52 @@ const getAdminMonthlyStats = async (req, res) => {
     const points = result.rows;
 
     const summary = points.reduce((acc, row) => ({
-      total_payments_count: acc.total_payments_count + row.payments_count,
-      total_payments_amount: acc.total_payments_amount + Number(row.payments_amount || 0),
-      total_new_students: acc.total_new_students + row.new_students_count,
-      total_lessons: acc.total_lessons + row.lessons_count,
-      total_attendance_marks: acc.total_attendance_marks + row.attendance_marks_count,
+      payments_count: acc.payments_count + Number(row.payments_count || 0),
+      new_students_count: acc.new_students_count + Number(row.new_students_count || 0),
+      expenses_count: acc.expenses_count + Number(row.expenses_count || 0),
+      expenses_amount: acc.expenses_amount + Number(row.expenses_amount || 0),
+      debtors_count: acc.debtors_count + Number(row.debtors_count || 0),
+      debt_amount: acc.debt_amount + Number(row.debt_amount || 0),
     }), {
-      total_payments_count: 0,
-      total_payments_amount: 0,
-      total_new_students: 0,
-      total_lessons: 0,
-      total_attendance_marks: 0,
+      payments_count: 0,
+      new_students_count: 0,
+      expenses_count: 0,
+      expenses_amount: 0,
+      debtors_count: 0,
+      debt_amount: 0,
     });
+
+    const currentMonthPoint = points.find((p) => p.month === toMonth) || {
+      debtors_count: 0,
+      debt_amount: 0,
+    };
+
+    const statusDistResult = await client.query(
+      `SELECT
+         COUNT(CASE WHEN payment_status = 'paid' THEN 1 END)::int AS paid_count,
+         COUNT(CASE WHEN payment_status = 'partial' THEN 1 END)::int AS partial_count,
+         COUNT(CASE WHEN payment_status = 'unpaid' THEN 1 END)::int AS unpaid_count
+       FROM monthly_snapshots
+       WHERE month = $1`,
+      [toMonth]
+    );
+
+    const statusDist = statusDistResult.rows[0] || {};
+    const paidCount = Number(statusDist.paid_count || 0);
+    const partialCount = Number(statusDist.partial_count || 0);
+    const unpaidCount = Number(statusDist.unpaid_count || 0);
+    const totalTransactions = paidCount + partialCount + unpaidCount;
+    const toPercent = (count) => (totalTransactions > 0 ? Number(((count * 100) / totalTransactions).toFixed(1)) : 0);
 
     const chart = {
       labels: points.map((p) => p.month),
       series: {
-        payments_amount: points.map((p) => Number(p.payments_amount || 0)),
         payments_count: points.map((p) => p.payments_count),
         new_students_count: points.map((p) => p.new_students_count),
-        lessons_count: points.map((p) => p.lessons_count),
+        expenses_count: points.map((p) => p.expenses_count),
+        expenses_amount: points.map((p) => Number(p.expenses_amount || 0)),
+        debtors_count: points.map((p) => Number(p.debtors_count || 0)),
+        debt_amount: points.map((p) => Number(p.debt_amount || 0)),
       },
     };
 
@@ -255,8 +286,33 @@ const getAdminMonthlyStats = async (req, res) => {
           to_month: toMonth,
           months: points.length,
         },
+        current_month: {
+          month: toMonth,
+          payments_count: Number((points.find((p) => p.month === toMonth) || {}).payments_count || 0),
+          new_students_count: Number((points.find((p) => p.month === toMonth) || {}).new_students_count || 0),
+          expenses_count: Number((points.find((p) => p.month === toMonth) || {}).expenses_count || 0),
+          expenses_amount: Number((points.find((p) => p.month === toMonth) || {}).expenses_amount || 0),
+          debtors_count: Number(currentMonthPoint.debtors_count || 0),
+          debt_amount: Number(currentMonthPoint.debt_amount || 0),
+        },
         summary,
         chart,
+        payment_status_distribution: {
+          month: toMonth,
+          total_transactions: totalTransactions,
+          items: [
+            { status: 'paid', label: "To'langan", count: paidCount, percentage: toPercent(paidCount) },
+            { status: 'partial', label: "Qisman to'langan", count: partialCount, percentage: toPercent(partialCount) },
+            { status: 'unpaid', label: "To'lanmagan", count: unpaidCount, percentage: toPercent(unpaidCount) },
+          ],
+          chart: {
+            labels: ['paid', 'partial', 'unpaid'],
+            series: {
+              count: [paidCount, partialCount, unpaidCount],
+              percentage: [toPercent(paidCount), toPercent(partialCount), toPercent(unpaidCount)],
+            },
+          },
+        },
         points,
       },
     });
@@ -265,6 +321,77 @@ const getAdminMonthlyStats = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Oylik statistikani olishda xatolik',
+      errors: { detail: error.message },
+    });
+  } finally {
+    client.release();
+  }
+};
+
+const getAdminOverviewStats = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const currentMonth = getCurrentMonth();
+
+    const [overallResult, admissionsTrendResult] = await Promise.all([
+      client.query(
+        `SELECT
+           (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started')::int AS active_groups_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND status = 'active')::int AS active_teachers_count,
+           (SELECT COUNT(*) FROM subjects)::int AS subjects_count`
+      ),
+      client.query(
+        `WITH months AS (
+           SELECT to_char(m, 'YYYY-MM') AS month
+           FROM generate_series(
+             date_trunc('month', CURRENT_DATE) - interval '11 months',
+             date_trunc('month', CURRENT_DATE),
+             interval '1 month'
+           ) AS m
+         ),
+         admissions AS (
+           SELECT TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') AS month, COUNT(*)::int AS admissions_count
+           FROM users
+           WHERE role = 'student'
+             AND created_at >= date_trunc('month', CURRENT_DATE) - interval '11 months'
+           GROUP BY 1
+         )
+         SELECT m.month, COALESCE(a.admissions_count, 0)::int AS admissions_count
+         FROM months m
+         LEFT JOIN admissions a ON a.month = m.month
+         ORDER BY m.month`
+      ),
+    ]);
+
+    const overall = overallResult.rows[0] || {};
+
+    return res.json({
+      success: true,
+      data: {
+        period: {
+          current_month: currentMonth,
+        },
+        overall: {
+          active_groups_count: Number(overall.active_groups_count || 0),
+          active_teachers_count: Number(overall.active_teachers_count || 0),
+          subjects_count: Number(overall.subjects_count || 0),
+        },
+        charts: {
+          admissions_monthly_last_12: {
+            labels: admissionsTrendResult.rows.map((r) => r.month),
+            series: {
+              admissions_count: admissionsTrendResult.rows.map((r) => Number(r.admissions_count || 0)),
+            },
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error('❌ Admin overview statistika xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Admin overview statistikani olishda xatolik',
       errors: { detail: error.message },
     });
   } finally {
@@ -418,6 +545,7 @@ const getSuperAdminStats = async (req, res) => {
 module.exports = {
   getAdminDailyStats,
   getAdminMonthlyStats,
+  getAdminOverviewStats,
   getDebtorStudents,
   getSuperAdminStats,
 };

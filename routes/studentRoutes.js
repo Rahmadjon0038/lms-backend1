@@ -441,6 +441,35 @@ router.get("/my-groups", protect, studentController.getMyGroups);
 
 /**
  * @swagger
+ * /api/students/my-payments:
+ *   get:
+ *     summary: Student o'zining oylik to'lovlarini olish
+ *     tags: [Students]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Oy (YYYY-MM). Berilmasa joriy oy olinadi.
+ *       - in: query
+ *         name: group_id
+ *         required: false
+ *         schema:
+ *           type: integer
+ *         description: Muayyan guruh bo'yicha filter
+ *     responses:
+ *       200:
+ *         description: Student oylik to'lovlari
+ *       401:
+ *         description: Ruxsat berilmadi (token kerak)
+ */
+router.get("/my-payments", protect, studentController.getMyMonthlyPayments);
+
+/**
+ * @swagger
  * /api/students/{student_id}:
  *   delete:
  *     summary: Studentni butunlay o'chirish (FAQAT ADMIN)

@@ -5,6 +5,7 @@ const { protectSuperAdmin } = require('../middlewares/roleMiddleware');
 const {
   getAdminDailyStats,
   getAdminMonthlyStats,
+  getAdminOverviewStats,
   getDebtorStudents,
   getSuperAdminStats,
 } = require('../controllers/dashboardController');
@@ -62,6 +63,20 @@ router.get('/stats/daily', protect, protectAdmin, getAdminDailyStats);
  *         description: OK
  */
 router.get('/stats/monthly', protect, protectAdmin, getAdminMonthlyStats);
+
+/**
+ * @swagger
+ * /api/dashboard/stats/overview:
+ *   get:
+ *     summary: Admin umumiy overview statistikasi (kunlik+oylik+umumiy+chart)
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get('/stats/overview', protect, protectAdmin, getAdminOverviewStats);
 
 /**
  * @swagger

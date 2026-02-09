@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+wconst pool = require('../config/db');
 
 /**
  * ATTENDANCE JADVALINI OYLIK MUSTAQIL TIZIMGA O'TKAZISH

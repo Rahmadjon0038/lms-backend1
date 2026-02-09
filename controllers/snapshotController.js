@@ -21,7 +21,7 @@ exports.createMonthlySnapshot = async (req, res) => {
     if (role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Faqat admin snapshot yarata oladi'
+        message: 'Faqat admin To\'lov jadvali yarata oladi'
       });
     }
 
@@ -46,7 +46,7 @@ exports.createMonthlySnapshot = async (req, res) => {
     if (existingCount > 0) {
       return res.status(400).json({
         success: false,
-        message: `${month} oy uchun snapshot allaqachon mavjud (${existingCount} ta yozuv). Avval uni o'chiring.`,
+        message: `${month} oy uchun To'lov jadvali allaqachon mavjud (${existingCount} ta yozuv). Avval uni o'chiring.`,
         existing_records: existingCount
       });
     }
@@ -110,7 +110,7 @@ exports.createMonthlySnapshot = async (req, res) => {
       JOIN users u ON sg.student_id = u.id
       JOIN groups g ON sg.group_id = g.id
       JOIN subjects s ON g.subject_id = s.id
-      JOIN users t ON g.teacher_id = t.id
+      LEFT JOIN users t ON g.teacher_id = t.id
       
       -- Attendance ma'lumotlari (eng oxirgi statusni olish)
       LEFT JOIN (
@@ -154,6 +154,36 @@ exports.createMonthlySnapshot = async (req, res) => {
     
     console.log(`✅ ${result.rowCount} ta talaba uchun snapshot yaratildi`);
 
+    // 0 ta yozuv bo'lsa muvaffaqiyat deb qaytarmaymiz
+    if (result.rowCount === 0) {
+      const diagnosticsQuery = `
+        SELECT
+          (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started') AS active_started_groups,
+          (SELECT COUNT(*) FROM student_groups WHERE status = 'active') AS active_student_group_links,
+          (SELECT COUNT(*)
+             FROM student_groups sg
+             JOIN users u ON sg.student_id = u.id
+             JOIN groups g ON sg.group_id = g.id
+            WHERE u.role = 'student'
+              AND sg.status = 'active'
+              AND g.status = 'active'
+              AND g.class_status = 'started'
+              AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1
+          ) AS eligible_records
+      `;
+      const diagnostics = await db.query(diagnosticsQuery, [month]);
+
+      return res.status(400).json({
+        success: false,
+        message: `${month} oy uchun To'lov jadvali yaratilmadi: mos talaba/guruh topilmadi`,
+        data: {
+          month,
+          created_records: 0,
+          diagnostics: diagnostics.rows[0]
+        }
+      });
+    }
+
     // Yaratilgan snapshot statistikasi
     const statsQuery = `
       SELECT 
@@ -176,7 +206,7 @@ exports.createMonthlySnapshot = async (req, res) => {
 
     res.json({
       success: true,
-      message: `${month} oy uchun snapshot muvaffaqiyatli yaratildi`,
+      message: `${month} oy uchun To'lov jadvali muvaffaqiyatli yaratildi`,
       data: {
         month,
         created_records: result.rowCount,
@@ -401,7 +431,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
     if (role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Faqat admin snapshot yangilashi mumkin'
+        message: 'Faqat admin To\'lov jadvalini yangilashi mumkin'
       });
     }
 
@@ -414,7 +444,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
     if (existingSnapshot.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Snapshot topilmadi'
+        message: 'To\'lov jadvali topilmadi'
       });
     }
 
@@ -528,7 +558,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Snapshot va attendance muvaffaqiyatli yangilandi',
+      message: 'To\'lov jadvali va attendance muvaffaqiyatli yangilandi',
       data: result.rows[0]
     });
 
@@ -554,7 +584,7 @@ exports.deleteMonthlySnapshot = async (req, res) => {
     if (role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Faqat admin snapshot o\'chirishi mumkin'
+        message: 'Faqat admin To\'lov jadvalini o\'chirishi mumkin'
       });
     }
 
@@ -623,7 +653,7 @@ exports.deleteMonthlySnapshot = async (req, res) => {
     console.error('Snapshot o\'chirishda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Snapshot o\'chirishda xatolik',
+      message: 'To\'lov jadvalini o\'chirishda xatolik',
       error: error.message
     });
   }
@@ -661,7 +691,7 @@ exports.makeSnapshotPayment = async (req, res) => {
     if (snapshotCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: `${month} oy uchun snapshot mavjud emas. Avval snapshot yarating.`
+        message: `${month} oy uchun To'lov jadvali mavjud emas. Avval To'lov jadvali yarating.`
       });
     }
 
@@ -769,7 +799,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
     if (snapshotCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: `${month} oy uchun snapshot mavjud emas`
+        message: `${month} oy uchun To'lov jadvali mavjud emas`
       });
     }
 
@@ -847,13 +877,13 @@ exports.giveSnapshotDiscount = async (req, res) => {
     if (updateResult.rowCount === 0) {
       return res.status(404).json({
         success: false,
-        message: `${month} oy uchun snapshot topilmadi yoki yangilanmadi`
+        message: `${month} oy uchun To'lov jadvali topilmadi yoki yangilanmadi`
       });
     }
 
     res.json({
       success: true,
-      message: 'Chegirma muvaffaqiyatli berildi va snapshot yangilandi',
+      message: 'Chegirma muvaffaqiyatli berildi va To\'lov jadvali yangilandi',
       data: {
         original_required: originalRequired,
         discount_amount: discountAmount,
@@ -908,7 +938,7 @@ exports.resetStudentPayment = async (req, res) => {
     if (snapshotCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: `${month} oy uchun snapshot topilmadi`
+        message: `${month} oy uchun To'lov jadvali topilmadi`
       });
     }
 
@@ -957,7 +987,7 @@ exports.resetStudentPayment = async (req, res) => {
     if (resetSnapshot.rowCount === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Snapshot tozalanmadi'
+        message: 'To\'lov jadvali tozalanmadi'
       });
     }
 
@@ -1064,12 +1094,13 @@ exports.getStudentAttendance = async (req, res) => {
   try {
     const { student_id, group_id, month } = req.query;
     const { role, id: userId } = req.user;
+    let targetStudentId = student_id;
 
     // Validatsiya
-    if (!student_id || !group_id || !month) {
+    if (!group_id || !month) {
       return res.status(400).json({
         success: false,
-        message: 'student_id, group_id va month parametrlari majburiy'
+        message: 'group_id va month parametrlari majburiy'
       });
     }
 
@@ -1077,6 +1108,24 @@ exports.getStudentAttendance = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Month YYYY-MM formatida bo\'lishi kerak'
+      });
+    }
+
+    // Student faqat o'z davomatini ko'rishi mumkin
+    if (role === 'student') {
+      if (student_id && parseInt(student_id, 10) !== parseInt(userId, 10)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Siz faqat o\'zingizning davomatingizni ko\'rishingiz mumkin'
+        });
+      }
+      targetStudentId = userId;
+    }
+
+    if (!targetStudentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'student_id parametri majburiy'
       });
     }
 
@@ -1118,7 +1167,7 @@ exports.getStudentAttendance = async (req, res) => {
       WHERE ms.student_id = $1 AND ms.group_id = $2 AND ms.month = $3
     `;
 
-    const snapshotResult = await db.query(snapshotQuery, [student_id, group_id, month]);
+    const snapshotResult = await db.query(snapshotQuery, [targetStudentId, group_id, month]);
 
     let snapshot;
     
@@ -1142,7 +1191,7 @@ exports.getStudentAttendance = async (req, res) => {
         WHERE sg.student_id = $1 AND sg.group_id = $2 AND sg.status = 'active'
       `;
       
-      const studentGroupResult = await db.query(studentGroupQuery, [student_id, group_id]);
+      const studentGroupResult = await db.query(studentGroupQuery, [targetStudentId, group_id]);
       
       if (studentGroupResult.rows.length === 0) {
         return res.status(404).json({
@@ -1195,7 +1244,7 @@ exports.getStudentAttendance = async (req, res) => {
       ORDER BY l.date ASC
     `;
 
-    const dailyResult = await db.query(dailyAttendanceQuery, [student_id, group_id, month]);
+    const dailyResult = await db.query(dailyAttendanceQuery, [targetStudentId, group_id, month]);
 
     // Real lessons count (agar snapshot bo'lmasa)
     if (snapshot.id === null && dailyResult.rows.length > 0) {
@@ -1232,7 +1281,7 @@ exports.getStudentAttendance = async (req, res) => {
     console.log(`   Davomat: ${snapshot.attended_lessons}/${snapshot.total_lessons} (${snapshot.attendance_percentage}%)`);
 
     const responseMessage = snapshot.id === null 
-      ? `Talaba hali darslarga qatnashmagan yoki snapshot yaratilmagan (${snapshot.total_lessons} ta dars mavjud)`
+      ? `Talaba hali darslarga qatnashmagan yoki To'lov jadvali yaratilmagan (${snapshot.total_lessons} ta dars mavjud)`
       : 'Davomat ma\'lumotlari muvaffaqiyatli olindi';
 
     res.json({
@@ -1442,7 +1491,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
     if (!snapshotCreatedDate) {
       return res.status(400).json({
         success: false,
-        message: 'Bu oy uchun snapshot yaratilmagan'
+        message: 'Bu oy uchun To\'lov jadvali yaratilmagan'
       });
     }
 
@@ -1612,7 +1661,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
 
     res.json({
       success: true,
-      message: `${newStudentsResult.rows.length} ta yangi talaba uchun snapshot yaratildi`,
+      message: `${newStudentsResult.rows.length} ta yangi talaba uchun To'lov jadvali yaratildi`,
       count: newStudentsResult.rows.length
     });
 
@@ -1655,7 +1704,7 @@ exports.getNewStudentsNotification = async (req, res) => {
     if (!snapshotCreatedDate) {
       return res.status(400).json({
         success: false,
-        message: 'Bu oy uchun snapshot yaratilmagan',
+        message: 'Bu oy uchun To\'lov jadvali yaratilmagan',
         data: {
           month,
           count: 0,
@@ -1674,7 +1723,7 @@ exports.getNewStudentsNotification = async (req, res) => {
         u.phone as student_phone,
         g.name as group_name,
         s.name as subject_name,
-        CONCAT(t.name, ' ', t.surname) as teacher_name,
+        COALESCE(CONCAT(t.name, ' ', t.surname), 'Biriktirilmagan') as teacher_name,
         sg.joined_at,  -- ORDER BY uchun kerak
         TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as joined_at_formatted,
         
@@ -1869,14 +1918,14 @@ exports.exportSnapshotsToExcel = async (req, res) => {
         ms.group_price as "Guruh narxi (so'm)",
         CASE 
           WHEN ms.monthly_status = 'active' THEN 'Faol'
-          WHEN ms.monthly_status = 'stopped' THEN 'To\'xtatilgan'
+          WHEN ms.monthly_status = 'stopped' THEN 'To''xtatilgan'
           WHEN ms.monthly_status = 'finished' THEN 'Tugatilgan'
           ELSE ms.monthly_status
         END as "Oylik holati",
         CASE 
-          WHEN ms.payment_status = 'paid' THEN 'To\'langan'
-          WHEN ms.payment_status = 'partial' THEN 'Qisman to\'langan'
-          WHEN ms.payment_status = 'unpaid' THEN 'To\'lanmagan'
+          WHEN ms.payment_status = 'paid' THEN 'To''langan'
+          WHEN ms.payment_status = 'partial' THEN 'Qisman to''langan'
+          WHEN ms.payment_status = 'unpaid' THEN 'To''lanmagan'
           WHEN ms.payment_status = 'inactive' THEN 'Nofaol'
           ELSE ms.payment_status
         END as "To'lov holati",
@@ -1894,14 +1943,14 @@ exports.exportSnapshotsToExcel = async (req, res) => {
         ) as "Chegirma summasi (so'm)",
         CASE 
           WHEN sd.discount_type = 'percent' THEN sd.discount_value || '%'
-          WHEN sd.discount_type = 'amount' THEN sd.discount_value || ' so\'m'
-          ELSE 'Yo\'q'
+          WHEN sd.discount_type = 'amount' THEN sd.discount_value || ' so''m'
+          ELSE 'Yo''q'
         END as "Chegirma",
         ms.total_lessons as "Jami darslar",
         ms.attended_lessons as "Qatnashgan darslar",
         ms.attendance_percentage || '%' as "Davomat foizi",
         TO_CHAR(ms.last_payment_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as "Oxirgi to'lov vaqti",
-        TO_CHAR(ms.snapshot_created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as "Snapshot yaratilgan vaqt"
+        TO_CHAR(ms.snapshot_created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as "To'lov jadvali yaratilgan vaqt"
         
       FROM monthly_snapshots ms
       LEFT JOIN student_discounts sd ON ms.student_id = sd.student_id 

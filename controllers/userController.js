@@ -285,7 +285,14 @@ const registerTeacher = async (req, res) => {
 
 // 2. Student Login (Access va Refresh token qaytaradi)
 const loginStudent = async (req, res) => {
-    const { username, password } = req.body;
+    const usernameRaw = typeof req.body?.username === 'string' ? req.body.username : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const username = usernameRaw.trim();
+
+    if (!username || !password) {
+        return res.status(400).json({ message: "Username va parol majburiy!" });
+    }
+
     try {
         const result = await pool.query(
             `SELECT u.*, 
@@ -303,7 +310,9 @@ const loginStudent = async (req, res) => {
              LEFT JOIN rooms r ON g.room_id = r.id
              LEFT JOIN subjects s ON g.subject_id = s.id
              LEFT JOIN users t ON g.teacher_id = t.id
-             WHERE u.username = $1`, 
+             WHERE LOWER(BTRIM(u.username)) = LOWER($1)
+             ORDER BY sg.id DESC NULLS LAST
+             LIMIT 1`, 
             [username]
         );
         const user = result.rows[0];
@@ -893,33 +902,53 @@ const reactivateTeacher = async (req, res) => {
 // 9. Teacher'ni butunlay o'chirish (DELETE)
 const deleteTeacher = async (req, res) => {
     const { teacherId } = req.params;
+    const client = await pool.connect();
 
     try {
+        await client.query('BEGIN');
+
         // Teacher mavjudligini tekshirish
-        const teacher = await pool.query(
+        const teacher = await client.query(
             'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
             [teacherId, 'teacher']
         );
 
         if (teacher.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: "Teacher topilmadi" });
         }
 
         // Teacher bilan bog'langan guruhlarni tekshirish
-        const groups = await pool.query(
+        const groups = await client.query(
             'SELECT COUNT(*) as group_count FROM groups WHERE teacher_id = $1',
             [teacherId]
         );
 
         if (parseInt(groups.rows[0].group_count) > 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ 
                 message: "Bu teacher'ga bog'langan guruhlar mavjud. Avval guruhlarni boshqa teacher'ga o'tkazing yoki o'chiring.",
                 groups_count: groups.rows[0].group_count
             });
         }
 
+        // FK xatolarini oldini olish: oylik group snapshotdagi teacher bog'lanishlarini bo'shatish
+        await client.query(
+            `UPDATE group_monthly_settings
+             SET teacher_id_for_month = NULL
+             WHERE teacher_id_for_month = $1`,
+            [teacherId]
+        );
+        await client.query(
+            `UPDATE group_monthly_settings
+             SET created_by = NULL
+             WHERE created_by = $1`,
+            [teacherId]
+        );
+
         // Teacher'ni butunlay o'chirish
-        await pool.query('DELETE FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        await client.query('DELETE FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        await client.query('COMMIT');
 
         res.json({ 
             message: `${teacher.rows[0].name} ${teacher.rows[0].surname} butunlay o'chirildi`,
@@ -927,10 +956,13 @@ const deleteTeacher = async (req, res) => {
         });
 
     } catch (err) {
+        try { await client.query('ROLLBACK'); } catch (rollbackErr) {}
         res.status(500).json({ 
             error: "Teacher'ni o'chirishda xatolik yuz berdi",
             details: err.message 
         });
+    } finally {
+        client.release();
     }
 };
 

@@ -1,23 +1,24 @@
-# Admin Statistics API
+# Admin Statistics API (Yangi)
 
-Bu hujjat yangi admin statistika APIlari uchun frontend qo'llanma.
-Eski `GET /api/dashboard/stats` endpoint olib tashlangan.
+Bu hujjat `admin` (boshqaruvchi) dashboardi uchun minimal va yangilangan statistikalarni tushuntiradi.
+
+Cheklov:
+- Admin `umumiy talabalar soni` ni ko'rmaydi.
+- Admin `umumiy tushum summasi` ni ko'rmaydi.
 
 ## 1. Auth
-Har requestda JWT:
+Har requestda JWT bo'lishi kerak:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-## 2. Yangi endpointlar
+## 2. Endpointlar
 
 1. `GET /api/dashboard/stats/daily`
 2. `GET /api/dashboard/stats/monthly`
-
-Qo'shimcha mavjud:
-- `GET /api/dashboard/debtors`
-- `GET /api/dashboard/super-admin`
+3. `GET /api/dashboard/stats/overview`
+4. `GET /api/dashboard/debtors` (ixtiyoriy, alohida jadval uchun)
 
 ---
 
@@ -30,53 +31,21 @@ Qo'shimcha mavjud:
 - `to` (optional, `YYYY-MM-DD`) - default: bugun
 
 Cheklov:
-- Maksimal interval: `92` kun
+- maksimal `92` kun
 
-### Response
-```json
-{
-  "success": true,
-  "data": {
-    "period": {
-      "from": "2026-02-01",
-      "to": "2026-02-08",
-      "days": 8
-    },
-    "summary": {
-      "total_payments_count": 45,
-      "total_payments_amount": 12450000,
-      "total_new_students": 9,
-      "total_lessons": 18,
-      "total_attendance_marks": 420
-    },
-    "chart": {
-      "labels": ["2026-02-01", "2026-02-02"],
-      "series": {
-        "payments_amount": [1200000, 850000],
-        "payments_count": [4, 3],
-        "new_students_count": [1, 0],
-        "lessons_count": [2, 3]
-      }
-    },
-    "points": [
-      {
-        "date": "2026-02-01",
-        "payments_count": 4,
-        "payments_amount": 1200000,
-        "new_students_count": 1,
-        "lessons_count": 2,
-        "attendance_marks_count": 40
-      }
-    ]
-  }
-}
-```
+### Qaytadigan asosiy ko'rsatkichlar (`data.summary`)
+- `payments_count` (To'lovlar soni)
+- `new_students_count` (Yangi talabalar)
+- `expenses_count` (Rasxodlar soni)
+- `expenses_amount` (Rasxod summasi)
 
-### Frontend ishlatish
-- Chart x-o'qi: `chart.labels`
-- Chart y-series: `chart.series.*`
-- Jadval/list uchun: `points`
-- KPI cardlar uchun: `summary`
+### Chart
+`data.chart`
+- `labels` (kunlar)
+- `series.payments_count`
+- `series.new_students_count`
+- `series.expenses_count`
+- `series.expenses_amount`
 
 ---
 
@@ -85,85 +54,86 @@ Cheklov:
 `GET /api/dashboard/stats/monthly`
 
 ### Query
-- `from_month` (optional, `YYYY-MM`) - default: joriy yil boshidan
+- `from_month` (optional, `YYYY-MM`) - default: joriy yil boshi
 - `to_month` (optional, `YYYY-MM`) - default: joriy oy
 
 Cheklov:
-- Maksimal interval: `24` oy
+- maksimal `24` oy
 
-### Response
-```json
-{
-  "success": true,
-  "data": {
-    "period": {
-      "from_month": "2026-01",
-      "to_month": "2026-06",
-      "months": 6
-    },
-    "summary": {
-      "total_payments_count": 320,
-      "total_payments_amount": 96500000,
-      "total_new_students": 55,
-      "total_lessons": 146,
-      "total_attendance_marks": 3480
-    },
-    "chart": {
-      "labels": ["2026-01", "2026-02"],
-      "series": {
-        "payments_amount": [17500000, 16200000],
-        "payments_count": [60, 54],
-        "new_students_count": [12, 10],
-        "lessons_count": [22, 24]
-      }
-    },
-    "points": [
-      {
-        "month": "2026-01",
-        "payments_count": 60,
-        "payments_amount": 17500000,
-        "new_students_count": 12,
-        "lessons_count": 22,
-        "attendance_marks_count": 510
-      }
-    ]
-  }
-}
-```
+### Qaytadigan asosiy ko'rsatkichlar
 
-### Frontend ishlatish
-- Oylik bar/line chart: `chart.labels + chart.series`
-- Oylik table: `points`
-- Total KPI: `summary`
+`data.current_month`:
+- `payments_count` (To'lovlar soni)
+- `new_students_count` (Yangi talabalar)
+- `expenses_count` (Rasxodlar soni)
+- `expenses_amount` (Rasxod summasi)
+- `debtors_count` (Qarzdorlar soni)
+- `debt_amount` (Joriy oy qarz summasi)
+
+`data.summary` (tanlangan interval yig'indisi):
+- `payments_count`
+- `new_students_count`
+- `expenses_count`
+- `expenses_amount`
+- `debtors_count`
+- `debt_amount`
+
+### Chart
+`data.chart`
+- `labels` (oylar)
+- `series.payments_count`
+- `series.new_students_count`
+- `series.expenses_count`
+- `series.expenses_amount`
+- `series.debtors_count`
+- `series.debt_amount`
+
+### To'lov status taqsimoti (har oy)
+`data.payment_status_distribution`
+- `month` (hisoblangan oy: `to_month`)
+- `total_transactions`
+- `items`:
+  - `status = paid`, `label = To'langan`, `count`, `percentage`
+  - `status = partial`, `label = Qisman to'langan`, `count`, `percentage`
+  - `status = unpaid`, `label = To'lanmagan`, `count`, `percentage`
+- `chart.labels = ['paid', 'partial', 'unpaid']`
+- `chart.series.count`
+- `chart.series.percentage`
 
 ---
 
-## 5. Xatoliklar
+## 5. Umumiy statistika
 
-1. `400` - noto'g'ri filter format
-- `from`/`to` noto'g'ri sana
-- `from_month`/`to_month` noto'g'ri oy
+`GET /api/dashboard/stats/overview`
 
-2. `400` - interval juda katta
-- daily > 92 kun
-- monthly > 24 oy
+Bu endpoint endi faqat quyidagilarni qaytaradi:
 
-3. `500` - server yoki query xatoligi
+### `data.overall`
+- `active_teachers_count` (markazdagi faol teacherlar soni)
+- `active_groups_count` (faol guruhlar soni)
+- `subjects_count` (fanlar soni)
+
+### `data.charts.admissions_monthly_last_12`
+- `labels` (oxirgi 12 oy)
+- `series.admissions_count` (qabul trendi chart uchun)
 
 ---
 
-## 6. Frontend tavsiya
+## 6. Frontend oqimi
 
-1. Dashboard ochilganda default chaqiring:
-- `GET /api/dashboard/stats/daily`
-- `GET /api/dashboard/stats/monthly`
+Dashboard ochilganda:
+1. `GET /api/dashboard/stats/overview`
+2. `GET /api/dashboard/stats/daily`
+3. `GET /api/dashboard/stats/monthly`
 
-2. Sana filter o'zgarsa:
-- faqat `daily` endpointni qayta chaqiring
+Filter o'zgarganda:
+- sana filteri o'zgarsa: `daily`
+- oy filteri o'zgarsa: `monthly`
 
-3. Oy filter o'zgarsa:
-- faqat `monthly` endpointni qayta chaqiring
+---
 
-4. Chart component mapping:
-- `labels = data.chart.labels`
-- `series = data.chart.series`
+## 7. Xatoliklar
+
+- `400` - date/month format noto'g'ri yoki interval juda katta
+- `401/403` - token/role xatosi
+- `500` - server xatoligi
