@@ -158,6 +158,33 @@ app.listen(PORT, '0.0.0.0', async () => {
             }
         }
 
+        // monthly_snapshots uchun eski bazalarni ham avtomatik moslashtirish
+        await pool.query(`
+            ALTER TABLE monthly_snapshots
+              ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0,
+              ADD COLUMN IF NOT EXISTS payment_made_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        `);
+        await pool.query(`
+            UPDATE monthly_snapshots
+            SET discount_amount = 0
+            WHERE discount_amount IS NULL;
+        `);
+
+        // attendance uchun eski bazalarni avtomatik moslashtirish
+        await pool.query(`
+            ALTER TABLE attendance
+              ADD COLUMN IF NOT EXISTS month VARCHAR(7),
+              ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+              ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'kelmadi'
+                CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
+              ADD COLUMN IF NOT EXISTS is_marked BOOLEAN NOT NULL DEFAULT false,
+              ADD COLUMN IF NOT EXISTS monthly_status VARCHAR(20) DEFAULT 'active'
+                CHECK (monthly_status IN ('active', 'stopped', 'finished')),
+              ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        `);
+
         const requiredTables = [
             'rooms',
             'users',

@@ -522,7 +522,8 @@ exports.getLessonStudents = async (req, res) => {
     console.error('Studentlarni olishda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Server xatoligi'
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };
@@ -607,7 +608,8 @@ exports.markAttendance = async (req, res) => {
     console.error('Davomat belgilashda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Server xatoligi'
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };
@@ -749,7 +751,8 @@ exports.getMonthlyAttendance = async (req, res) => {
     console.error('Oylik davomatni olishda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Server xatoligi'
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };
