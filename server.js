@@ -123,6 +123,7 @@ app.listen(PORT, '0.0.0.0', async () => {
 
     // Server yonganda jadvalni tekshirish va yaratish
     try {
+        await pool.waitForDbReady();
         await createRoomTable(); // Rooms jadvali birinchi yaratiladi
         await createUserTable();
         await createGroupTables();

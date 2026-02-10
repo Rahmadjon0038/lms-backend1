@@ -14,8 +14,6 @@ else
 fi
 
 cat > docker-compose.deploy.yml <<'YAML'
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -29,6 +27,12 @@ services:
       - "4000:5432"
     volumes:
       - lms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lms"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   backend:
     build:
@@ -37,7 +41,8 @@ services:
     container_name: lms_backend
     restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       PORT: 3001
       DB_USER: postgres
