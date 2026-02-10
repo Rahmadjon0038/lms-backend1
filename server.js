@@ -124,20 +124,34 @@ app.listen(PORT, '0.0.0.0', async () => {
     // Server yonganda jadvalni tekshirish va yaratish
     try {
         await pool.waitForDbReady();
-        await createRoomTable(); // Rooms jadvali birinchi yaratiladi
-        await createUserTable();
-        await createGroupTables();
-        await createStudentAdditionalTables();
-        await createTeacherSubjectTables(); // Teacher-Subject many-to-many jadvallari
-        await createLessonsTable(); // Lessons jadvali
-        await createAttendanceTable(); // Yangi attendance jadvali
-        await createGuideTables(); // Guide jadvallari
-        await createExpenseTable(); // Rasxodlar jadvali
-        await createGroupMonthlySettingsTable(); // Group snapshot jadvali
-        await createPaymentTables(); // Yangi to'lov tizimi jadvallari
-        await createMonthlySnapshotTable(); // Monthly snapshot jadvali
-        await createTeacherSalaryTables(); // Teacher salary V2 jadvallari
+        const setupSteps = [
+            ['rooms', createRoomTable],
+            ['users', createUserTable],
+            ['groups', createGroupTables],
+            ['students_extra', createStudentAdditionalTables],
+            ['teacher_subjects', createTeacherSubjectTables],
+            ['lessons', createLessonsTable],
+            ['attendance', createAttendanceTable],
+            ['guides', createGuideTables],
+            ['center_expenses', createExpenseTable],
+            ['group_monthly_settings', createGroupMonthlySettingsTable],
+            ['payments', createPaymentTables],
+            ['monthly_snapshots', createMonthlySnapshotTable],
+            ['teacher_salary_v2', createTeacherSalaryTables]
+        ];
+
+        for (const [stepName, setupFn] of setupSteps) {
+            try {
+                await setupFn();
+            } catch (stepError) {
+                stepError.message = `[setup:${stepName}] ${stepError.message}`;
+                throw stepError;
+            }
+        }
+
+        console.log("✅ Dastlabki DB sozlash bosqichlari muvaffaqiyatli yakunlandi.");
     } catch (error) {
-        console.error("Dastlabki sozlashda xatolik:", error);
+        console.error("❌ Dastlabki sozlashda xatolik:", error.message);
+        process.exit(1);
     }
 });
