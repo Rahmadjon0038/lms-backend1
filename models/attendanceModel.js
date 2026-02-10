@@ -93,6 +93,30 @@ const createAttendanceTable = async () => {
     `);
 
     if (hasLessonIdCol.rows[0]?.exists) {
+      // Eski sxemadagi unique constraintlar yangi lesson-level attendance ga to'sqinlik qiladi.
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'attendance'
+              AND constraint_name = 'attendance_student_id_month_name_key'
+              AND constraint_type = 'UNIQUE'
+          ) THEN
+            ALTER TABLE attendance DROP CONSTRAINT attendance_student_id_month_name_key;
+          END IF;
+
+          IF EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'attendance'
+              AND constraint_name = 'attendance_student_id_group_id_month_name_key'
+              AND constraint_type = 'UNIQUE'
+          ) THEN
+            ALTER TABLE attendance DROP CONSTRAINT attendance_student_id_group_id_month_name_key;
+          END IF;
+        END $$;
+      `);
+
       await pool.query(`
         UPDATE attendance
         SET month = COALESCE(month, month_name),
@@ -110,6 +134,21 @@ const createAttendanceTable = async () => {
         END
         FROM lessons l
         WHERE a.lesson_id = l.id;
+      `);
+
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'attendance_lesson_id_student_id_key'
+              AND contype = 'u'
+          ) THEN
+            ALTER TABLE attendance
+            ADD CONSTRAINT attendance_lesson_id_student_id_key UNIQUE (lesson_id, student_id);
+          END IF;
+        END $$;
       `);
     }
     
