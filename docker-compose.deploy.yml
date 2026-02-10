@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: lms_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: lsm123
+      POSTGRES_DB: lms
+    ports:
+      - "4000:5432"
+    volumes:
+      - lms_pgdata:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lms_backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PORT: 3001
+      DB_USER: postgres
+      DB_PASSWORD: lsm123
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: lms
+      JWT_SECRET: maxfiy_kalit_123@
+      REFRESH_TOKEN_SECRET: refresh_uchun_maxfiy_kalit_456!
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./private_uploads:/app/private_uploads
+
+volumes:
+  lms_pgdata:
