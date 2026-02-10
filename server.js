@@ -124,6 +124,15 @@ app.listen(PORT, '0.0.0.0', async () => {
     // Server yonganda jadvalni tekshirish va yaratish
     try {
         await pool.waitForDbReady();
+        const dbIdentity = await pool.query(`
+            SELECT
+                current_database() AS database_name,
+                current_user AS db_user,
+                inet_server_addr()::text AS server_addr,
+                inet_server_port() AS server_port
+        `);
+        console.log("🧭 DB ulanish ma'lumoti:", dbIdentity.rows[0]);
+
         const setupSteps = [
             ['rooms', createRoomTable],
             ['users', createUserTable],
@@ -147,6 +156,32 @@ app.listen(PORT, '0.0.0.0', async () => {
                 stepError.message = `[setup:${stepName}] ${stepError.message}`;
                 throw stepError;
             }
+        }
+
+        const requiredTables = [
+            'rooms',
+            'users',
+            'groups',
+            'student_groups',
+            'subjects',
+            'teacher_subjects',
+            'lessons',
+            'attendance',
+            'center_expenses',
+            'group_monthly_settings',
+            'monthly_snapshots'
+        ];
+
+        const existingTableRows = await pool.query(`
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+        `);
+        const existingTables = new Set(existingTableRows.rows.map(r => r.table_name));
+        const missingTables = requiredTables.filter(t => !existingTables.has(t));
+
+        if (missingTables.length > 0) {
+            throw new Error(`Majburiy jadvallar topilmadi: ${missingTables.join(', ')}`);
         }
 
         console.log("✅ Dastlabki DB sozlash bosqichlari muvaffaqiyatli yakunlandi.");
