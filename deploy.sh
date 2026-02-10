@@ -23,8 +23,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: lsm123
       POSTGRES_DB: lms
-    ports:
-      - "4000:5432"
     volumes:
       - lms_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -69,4 +67,4 @@ echo ""
 echo "Tayyor:"
 echo "  Backend:  http://localhost:3001"
 echo "  Swagger:  http://localhost:3001/api-docs"
-echo "  Postgres: localhost:4000 (user: postgres, db: lms)"
+echo "  Postgres: docker ichida lms_postgres:5432 (host port ochilmagan)"

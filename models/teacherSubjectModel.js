@@ -44,6 +44,13 @@ const createTeacherSubjectTables = async () => {
 
   try {
     await pool.query(queryText);
+
+    // Eski bazalarda users.subject_id bo'lmasligi mumkin.
+    // Bu yerda subjects allaqachon mavjud bo'lgani uchun xavfsiz qo'shamiz.
+    await pool.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id);
+    `);
     
     // Migration funksiyasini ishga tushirish
     await pool.query('SELECT migrate_teacher_subjects()');

@@ -1,0 +1,40 @@
+-- 1) Bcrypt hash uchun extension
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 2) Default admin
+INSERT INTO users (name, surname, username, password, role, status)
+VALUES (
+  'Default',
+  'Admin',
+  'admin',
+  crypt('Admin123!', gen_salt('bf', 10)),
+  'admin',
+  'active'
+)
+ON CONFLICT (username) DO UPDATE
+SET
+  password = EXCLUDED.password,
+  role = 'admin',
+  status = 'active';
+
+-- 3) Default oddiy user (student)
+INSERT INTO users (name, surname, username, password, role, status)
+VALUES (
+  'Default',
+  'User',
+  'user',
+  crypt('User123!', gen_salt('bf', 10)),
+  'student',
+  'active'
+)
+ON CONFLICT (username) DO UPDATE
+SET
+  password = EXCLUDED.password,
+  role = 'student',
+  status = 'active';
+
+-- 4) Tekshirish
+SELECT id, username, role, status, created_at
+FROM users
+WHERE username IN ('admin', 'user')
+ORDER BY id;
