@@ -10,7 +10,12 @@ const pool = new Pool({
   options: '-c timezone=Asia/Tashkent',
 });
 
-const connectWithRetry = async () => {
+let readyPromise = null;
+
+const waitForDbReady = async () => {
+  if (readyPromise) return readyPromise;
+
+  readyPromise = (async () => {
   while (true) {
     try {
       const client = await pool.connect();
@@ -27,8 +32,12 @@ const connectWithRetry = async () => {
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
+  })();
+
+  return readyPromise;
 };
 
-connectWithRetry();
+waitForDbReady();
 
 module.exports = pool;
+module.exports.waitForDbReady = waitForDbReady;
