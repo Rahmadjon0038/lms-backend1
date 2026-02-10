@@ -176,6 +176,7 @@ app.listen(PORT, '0.0.0.0', async () => {
         await pool.query(`
             ALTER TABLE attendance
               ADD COLUMN IF NOT EXISTS month VARCHAR(7),
+              ADD COLUMN IF NOT EXISTS month_name VARCHAR(7),
               ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
               ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'kelmadi'
                 CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
@@ -183,6 +184,12 @@ app.listen(PORT, '0.0.0.0', async () => {
               ADD COLUMN IF NOT EXISTS monthly_status VARCHAR(20) DEFAULT 'active'
                 CHECK (monthly_status IN ('active', 'stopped', 'finished')),
               ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        `);
+        await pool.query(`
+            UPDATE attendance
+            SET month = COALESCE(month, month_name),
+                month_name = COALESCE(month_name, month)
+            WHERE month IS NULL OR month_name IS NULL;
         `);
 
         const requiredTables = [

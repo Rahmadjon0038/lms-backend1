@@ -109,15 +109,15 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
     if (exists.rows.length === 0) {
       const initialStatus = await resolveDefaultMonthlyStatus(student.student_id, groupId);
       await pool.query(
-      `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status, is_marked)
-         VALUES ($1, $2, $3, $4, $5, $6, false)`,
+      `INSERT INTO attendance (lesson_id, student_id, group_id, month, month_name, status, monthly_status, is_marked)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, false)`,
         [lessonId, student.student_id, groupId, month, 'kelmadi', initialStatus]
       );
       createdCount++;
     } else {
       await pool.query(
         `UPDATE attendance
-         SET month = $1, updated_at = CURRENT_TIMESTAMP
+         SET month = $1, month_name = $1, updated_at = CURRENT_TIMESTAMP
          WHERE lesson_id = $2 AND student_id = $3`,
         [month, lessonId, student.student_id]
       );
@@ -481,8 +481,8 @@ exports.getLessonStudents = async (req, res) => {
 
         // Attendance yaratish
         await pool.query(
-          `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status, is_marked) 
-           VALUES ($1, $2, $3, $4, $5, $6, false)`,
+          `INSERT INTO attendance (lesson_id, student_id, group_id, month, month_name, status, monthly_status, is_marked) 
+           VALUES ($1, $2, $3, $4, $4, $5, $6, false)`,
           [lesson_id, student.student_id, group_id, month, 'kelmadi', initialStatus]
         );
       }
@@ -704,7 +704,7 @@ exports.getMonthlyAttendance = async (req, res) => {
        FROM attendance a
        JOIN users u ON a.student_id = u.id
        JOIN lessons l ON a.lesson_id = l.id
-       WHERE a.group_id = $1 AND a.month = $2
+       WHERE a.group_id = $1 AND COALESCE(a.month, a.month_name) = $2
        GROUP BY a.student_id, u.name, u.surname, u.phone, a.monthly_status
        ORDER BY a.monthly_status, u.name`,
       [group_id, selectedMonth]

@@ -56,6 +56,7 @@ const createAttendanceTable = async () => {
           student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
           group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
           month VARCHAR(7) NOT NULL,
+          month_name VARCHAR(7),
           status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
           is_marked BOOLEAN NOT NULL DEFAULT false,
           monthly_status VARCHAR(20) DEFAULT 'active' CHECK (monthly_status IN ('active', 'stopped', 'finished')),
@@ -70,6 +71,7 @@ const createAttendanceTable = async () => {
         ALTER TABLE attendance 
         ADD COLUMN IF NOT EXISTS lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE,
         ADD COLUMN IF NOT EXISTS month VARCHAR(7),
+        ADD COLUMN IF NOT EXISTS month_name VARCHAR(7),
         ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
         ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
         ADD COLUMN IF NOT EXISTS is_marked BOOLEAN NOT NULL DEFAULT false,
@@ -91,6 +93,13 @@ const createAttendanceTable = async () => {
     `);
 
     if (hasLessonIdCol.rows[0]?.exists) {
+      await pool.query(`
+        UPDATE attendance
+        SET month = COALESCE(month, month_name),
+            month_name = COALESCE(month_name, month)
+        WHERE month IS NULL OR month_name IS NULL;
+      `);
+
       await pool.query(`
         UPDATE attendance a
         SET is_marked = CASE
