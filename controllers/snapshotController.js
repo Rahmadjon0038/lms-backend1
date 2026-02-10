@@ -531,7 +531,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
       // Attendance jadvalida mavjud yozuv bormi tekshirish
       const existingAttendance = await db.query(`
         SELECT id FROM attendance 
-        WHERE student_id = $1 AND group_id = $2 AND month = $3
+        WHERE student_id = $1 AND group_id = $2 AND COALESCE(month, month_name) = $3
       `, [current.student_id, current.group_id, current.month]);
 
       if (existingAttendance.rows.length > 0) {
@@ -539,15 +539,15 @@ exports.updateMonthlySnapshot = async (req, res) => {
         await db.query(`
           UPDATE attendance 
           SET monthly_status = $1, updated_at = NOW()
-          WHERE student_id = $2 AND group_id = $3 AND month = $4
+          WHERE student_id = $2 AND group_id = $3 AND COALESCE(month, month_name) = $4
         `, [newMonthlyStatus, current.student_id, current.group_id, current.month]);
         
         console.log(`✅ Attendance yangilandi`);
       } else {
         // Yangi attendance yozuv yaratish
         await db.query(`
-          INSERT INTO attendance (student_id, group_id, month, monthly_status, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, NOW(), NOW())
+          INSERT INTO attendance (student_id, group_id, month, month_name, monthly_status, created_at, updated_at)
+          VALUES ($1, $2, $3, $3, $4, NOW(), NOW())
         `, [current.student_id, current.group_id, current.month, newMonthlyStatus]);
         
         console.log(`✅ Yangi attendance yozuv yaratildi`);
