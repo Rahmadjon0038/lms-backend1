@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -379,6 +379,61 @@ router.post('/refresh', refreshAccessToken);
  *         description: Avtorizatsiya xatosi (Access Token yo'q, xato yoki muddati o'tgan)
  */
 router.get('/profile', protect, getProfile);
+
+/**
+ * @swagger
+ * /api/users/profile:
+ *   patch:
+ *     summary: Foydalanuvchi o'z profilini yangilash
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *               name:
+ *                 type: string
+ *               surname:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               phone2:
+ *                 type: string
+ *               father_name:
+ *                 type: string
+ *               father_phone:
+ *                 type: string
+ *               address:
+ *                 type: string
+ *               age:
+ *                 type: integer
+ *               certificate:
+ *                 type: string
+ *               has_experience:
+ *                 type: boolean
+ *               experience_years:
+ *                 type: integer
+ *               experience_place:
+ *                 type: string
+ *               available_times:
+ *                 type: string
+ *               work_days_hours:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Profil ma'lumotlari yangilandi
+ *       400:
+ *         description: Noto'g'ri maydon yoki qiymat
+ *       401:
+ *         description: Avtorizatsiya xatosi
+ */
+router.patch('/profile', protect, updateProfile);
 
 /**
  * @swagger

@@ -408,6 +408,157 @@ const getProfile = async (req, res) => {
     }
 };
 
+// 4.1. Profil ma'lumotlarini yangilash (faqat o'z profili)
+const updateProfile = async (req, res) => {
+    const allowedFields = [
+        'username',
+        'name',
+        'surname',
+        'phone',
+        'phone2',
+        'father_name',
+        'father_phone',
+        'address',
+        'age',
+        'certificate',
+        'has_experience',
+        'experience_years',
+        'experience_place',
+        'available_times',
+        'work_days_hours'
+    ];
+
+    const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+    const incomingKeys = Object.keys(incoming);
+
+    if (incomingKeys.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Yangilanishi kerak bo'lgan maydonlar yuborilmadi"
+        });
+    }
+
+    const invalidFields = incomingKeys.filter((key) => !allowedFields.includes(key));
+    if (invalidFields.length > 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Ba'zi maydonlarni yangilashga ruxsat yo'q",
+            invalid_fields: invalidFields
+        });
+    }
+
+    if (incoming.age !== undefined && incoming.age !== null && !Number.isInteger(incoming.age)) {
+        return res.status(400).json({
+            success: false,
+            message: "age butun son bo'lishi kerak"
+        });
+    }
+
+    if (
+        incoming.experience_years !== undefined &&
+        incoming.experience_years !== null &&
+        !Number.isInteger(incoming.experience_years)
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "experience_years butun son bo'lishi kerak"
+        });
+    }
+
+    if (
+        incoming.has_experience !== undefined &&
+        incoming.has_experience !== null &&
+        typeof incoming.has_experience !== 'boolean'
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "has_experience boolean bo'lishi kerak"
+        });
+    }
+
+    if (incoming.username !== undefined) {
+        const username = String(incoming.username).trim();
+        if (!username) {
+            return res.status(400).json({
+                success: false,
+                message: "username bo'sh bo'lmasligi kerak"
+            });
+        }
+
+        incoming.username = username;
+    }
+
+    const setClauses = [];
+    const values = [];
+    let index = 1;
+
+    for (const key of incomingKeys) {
+        if (incoming[key] === undefined) continue;
+        setClauses.push(`${key} = $${index}`);
+        values.push(incoming[key]);
+        index += 1;
+    }
+
+    if (setClauses.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Yangilanishi kerak bo'lgan maydonlar yuborilmadi"
+        });
+    }
+
+    values.push(req.user.id);
+
+    try {
+        if (incoming.username !== undefined) {
+            const usernameExists = await pool.query(
+                `SELECT id
+                 FROM users
+                 WHERE LOWER(BTRIM(username)) = LOWER($1)
+                   AND id <> $2
+                 LIMIT 1`,
+                [incoming.username, req.user.id]
+            );
+
+            if (usernameExists.rows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Bu username allaqachon band"
+                });
+            }
+        }
+
+        const updated = await pool.query(
+            `UPDATE users
+             SET ${setClauses.join(', ')}
+             WHERE id = $${index}
+             RETURNING id, name, surname, username, role, status, phone, phone2, father_name, father_phone, address, age,
+                       certificate, has_experience, experience_years, experience_place, available_times, work_days_hours, created_at`
+            ,
+            values
+        );
+
+        if (updated.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Foydalanuvchi topilmadi"
+            });
+        }
+
+        return res.json({
+            success: true,
+            message: "Profil ma'lumotlari yangilandi",
+            updated_fields: setClauses.map((part) => part.split(' = ')[0]),
+            user: updated.rows[0]
+        });
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: "Profil ma'lumotlarini yangilashda xatolik",
+            error: err.message
+        });
+    }
+};
+
 // 5. Barcha teacherlarni olish (Subject filter bilan)
 const getAllTeachers = async (req, res) => {
     const { subject_id, status } = req.query;
@@ -1266,6 +1417,7 @@ module.exports = {
     resetPasswordWithRecoveryKey,
     changePassword,
     getProfile, 
+    updateProfile,
     refreshAccessToken, 
     getAllTeachers,
     getEnglishTeachers,
