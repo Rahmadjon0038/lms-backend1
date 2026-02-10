@@ -128,12 +128,27 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
 };
 
 const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate = null }) => {
-  const groupResult = await pool.query(
-    `SELECT id, schedule, class_start_date, start_date, schedule_effective_from
-     FROM groups
-     WHERE id = $1`,
-    [groupId]
-  );
+  let groupResult;
+  try {
+    groupResult = await pool.query(
+      `SELECT id, schedule, class_start_date, start_date, schedule_effective_from
+       FROM groups
+       WHERE id = $1`,
+      [groupId]
+    );
+  } catch (error) {
+    // Eski sxemada schedule_effective_from bo'lmasa ham davom etamiz.
+    if (error?.code === '42703') {
+      groupResult = await pool.query(
+        `SELECT id, schedule, class_start_date, start_date
+         FROM groups
+         WHERE id = $1`,
+        [groupId]
+      );
+    } else {
+      throw error;
+    }
+  }
 
   if (groupResult.rows.length === 0) {
     return { generated: 0, skipped: 'group_not_found' };
@@ -1084,7 +1099,8 @@ exports.getGroupLessons = async (req, res) => {
     console.error('Darslarni olishda xatolik:', error);
     res.status(500).json({
       success: false,
-      message: 'Server xatoligi'
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };

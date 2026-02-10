@@ -58,6 +58,23 @@ const createMonthlySnapshotTable = async () => {
     await db.query(createSnapshotTable);
     console.log('✅ monthly_snapshots jadvali yaratildi');
 
+    // 1.1 Orqaga moslik uchun yetishmayotgan ustunlarni qo'shish
+    // Eski bazalarda bu ustunlar bo'lmasligi mumkin.
+    await db.query(`
+      ALTER TABLE monthly_snapshots
+        ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS payment_made_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+    `);
+
+    await db.query(`
+      UPDATE monthly_snapshots
+      SET discount_amount = 0
+      WHERE discount_amount IS NULL;
+    `);
+    console.log('✅ monthly_snapshots eski sxema bilan moslashtirildi');
+
     // 2. Indekslar
     const createIndexes = [
       'CREATE INDEX IF NOT EXISTS idx_monthly_snapshots_month ON monthly_snapshots(month)',
@@ -78,6 +95,7 @@ const createMonthlySnapshotTable = async () => {
       RETURNS TRIGGER AS $$
       BEGIN
         NEW.snapshot_updated_at = CURRENT_TIMESTAMP;
+        NEW.updated_at = CURRENT_TIMESTAMP;
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql;
