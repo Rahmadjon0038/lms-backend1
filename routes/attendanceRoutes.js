@@ -10,6 +10,7 @@ const {
   getMonthlyAttendance,
   updateStudentMonthlyStatus,
   getGroupLessons,
+  regenerateGroupLessons,
   updateLessonDate,
   deleteLesson,
   exportMonthlyAttendance
@@ -234,6 +235,7 @@ router.put('/student/monthly-status', protect, roleCheck(['admin']), updateStude
  *         description: Darslar ro'yxati
  */
 router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'teacher']), getGroupLessons);
+router.post('/groups/:group_id/lessons/regenerate', protect, roleCheck(['admin', 'teacher']), regenerateGroupLessons);
 
 /**
  * @swagger

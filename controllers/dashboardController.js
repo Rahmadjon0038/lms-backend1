@@ -26,6 +26,14 @@ const countMonthsInclusive = (fromMonth, toMonth) => {
   return (ty - fy) * 12 + (tm - fm) + 1;
 };
 
+const shiftMonth = (monthStr, delta) => {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return d.toISOString().slice(0, 7);
+};
+
+const toNumber = (v) => Number(v || 0);
+
 const getAdminDailyStats = async (req, res) => {
   const client = await pool.connect();
 
@@ -491,43 +499,143 @@ const getSuperAdminStats = async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    const qMonth = req.query.month;
+    const currentMonth = qMonth && isValidMonth(qMonth) ? qMonth : getCurrentMonth();
+    const [monthlyResult, subjectsResult, overallResult] = await Promise.all([
+      client.query(
+        `WITH monthly_revenue AS (
+           SELECT COALESCE(SUM(amount), 0)::numeric AS total_revenue
+           FROM payment_transactions
+           WHERE month = $1
+         ),
+         monthly_expenses AS (
+           SELECT COALESCE(SUM(amount), 0)::numeric AS total_expenses
+           FROM center_expenses
+           WHERE month = $1
+         ),
+         monthly_new_students AS (
+           SELECT COUNT(*)::int AS new_students_count
+           FROM users
+           WHERE role = 'student'
+             AND TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $1
+         ),
+         monthly_discounts AS (
+           SELECT COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN discount_amount ELSE 0 END), 0)::numeric AS total_discounts
+           FROM monthly_snapshots
+           WHERE month = $1
+         ),
+         teacher_base AS (
+           SELECT
+             u.id AS teacher_id,
+             COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
+           FROM users u
+           LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
+           WHERE u.role = 'teacher' AND u.status = 'active'
+         ),
+         teacher_revenue AS (
+           SELECT
+             g.teacher_id,
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
+           FROM monthly_snapshots ms
+           JOIN groups g ON g.id = ms.group_id
+           WHERE ms.month = $1
+             AND COALESCE(ms.monthly_status, 'active') = 'active'
+           GROUP BY g.teacher_id
+         ),
+         teacher_salary_calc AS (
+           SELECT
+             tb.teacher_id,
+             (COALESCE(tr.total_collected, 0) * tb.salary_percentage / 100.0)::numeric AS expected_salary
+           FROM teacher_base tb
+           LEFT JOIN teacher_revenue tr ON tr.teacher_id = tb.teacher_id
+         ),
+         teacher_salary_monthly AS (
+           SELECT COALESCE(SUM(expected_salary), 0)::numeric AS total_teacher_salary
+           FROM teacher_salary_calc
+         )
+         SELECT
+           (SELECT total_revenue FROM monthly_revenue)::float AS total_revenue,
+           (SELECT total_teacher_salary FROM teacher_salary_monthly)::float AS total_teacher_salary,
+           (SELECT total_expenses FROM monthly_expenses)::float AS total_expenses,
+           (SELECT new_students_count FROM monthly_new_students)::int AS new_students_count,
+           (SELECT total_discounts FROM monthly_discounts)::float AS total_discounts`,
+        [currentMonth]
+      ),
+      client.query(
+        `WITH students_by_subject AS (
+           SELECT
+             g.subject_id,
+             COUNT(DISTINCT sg.student_id)::int AS total_students_count
+           FROM groups g
+           LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
+           WHERE g.status = 'active'
+             AND g.class_status = 'started'
+           GROUP BY g.subject_id
+         ),
+         revenue_by_subject AS (
+           SELECT
+             g.subject_id,
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+           FROM monthly_snapshots ms
+           JOIN groups g ON g.id = ms.group_id
+           WHERE ms.month = $1
+             AND COALESCE(ms.monthly_status, 'active') = 'active'
+           GROUP BY g.subject_id
+         )
+         SELECT
+           s.id AS subject_id,
+           s.name AS subject_name,
+           COALESCE(sb.total_students_count, 0)::int AS total_students_count,
+           COALESCE(rb.total_revenue, 0)::float AS total_revenue
+         FROM subjects s
+         LEFT JOIN students_by_subject sb ON sb.subject_id = s.id
+         LEFT JOIN revenue_by_subject rb ON rb.subject_id = s.id
+         ORDER BY total_revenue DESC, total_students_count DESC, s.name ASC`,
+        [currentMonth]
+      ),
+      client.query(
+        `SELECT
+           (SELECT COUNT(*) FROM users WHERE role = 'student')::int AS total_students_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'finished')::int AS finished_students_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished'))::int AS inactive_students_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'teacher')::int AS total_teachers_count`
+      ),
+    ]);
 
-    const monthlyPayments = await client.query(
-      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_amount
-       FROM payment_transactions
-       WHERE month = $1`,
-      [currentMonth]
-    );
+    const monthly = monthlyResult.rows[0] || {};
+    const subjects = subjectsResult.rows || [];
+    const overall = overallResult.rows[0] || {};
 
-    const activeStudents = await client.query(
-      `SELECT COUNT(DISTINCT sg.student_id) as count
-       FROM student_groups sg
-       JOIN groups g ON sg.group_id = g.id
-       WHERE sg.status = 'active' AND g.status = 'active' AND g.class_status = 'started'`
-    );
-
-    const activeGroups = await client.query(
-      `SELECT COUNT(*) as count
-       FROM groups
-       WHERE status = 'active' AND class_status = 'started'`
-    );
-
-    const activeTeachers = await client.query(
-      `SELECT COUNT(DISTINCT teacher_id) as count
-       FROM groups
-       WHERE status = 'active' AND class_status = 'started'`
-    );
+    const totalRevenue = toNumber(monthly.total_revenue);
+    const totalTeacherSalary = toNumber(monthly.total_teacher_salary);
+    const totalExpenses = toNumber(monthly.total_expenses);
+    const totalDiscounts = toNumber(monthly.total_discounts);
+    const netProfit = totalRevenue - totalTeacherSalary - totalExpenses - totalDiscounts;
 
     return res.json({
       success: true,
       data: {
-        current_month: currentMonth,
-        monthly_revenue: parseFloat(monthlyPayments.rows[0].total_amount),
-        monthly_payments_count: parseInt(monthlyPayments.rows[0].count, 10),
-        active_students: parseInt(activeStudents.rows[0].count, 10),
-        active_groups: parseInt(activeGroups.rows[0].count, 10),
-        active_teachers: parseInt(activeTeachers.rows[0].count, 10),
+        monthly: {
+          current_month: currentMonth,
+          total_revenue: totalRevenue,
+          total_teacher_salary: totalTeacherSalary,
+          total_expenses: totalExpenses,
+          new_students_count: toNumber(monthly.new_students_count),
+          total_discounts: totalDiscounts,
+          net_profit: netProfit,
+        },
+        subjects: subjects.map((row) => ({
+          subject_id: row.subject_id,
+          subject_name: row.subject_name,
+          total_students_count: toNumber(row.total_students_count),
+          total_revenue: toNumber(row.total_revenue),
+        })),
+        overall: {
+          total_students_count: toNumber(overall.total_students_count),
+          finished_students_count: toNumber(overall.finished_students_count),
+          inactive_students_count: toNumber(overall.inactive_students_count),
+          total_teachers_count: toNumber(overall.total_teachers_count),
+        },
       },
     });
   } catch (error) {
