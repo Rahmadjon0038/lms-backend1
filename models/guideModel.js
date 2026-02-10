@@ -6,6 +6,10 @@ const createGuideTables = async () => {
       id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       description TEXT NOT NULL,
+      banner_path TEXT,
+      banner_file_name VARCHAR(255),
+      banner_file_size_bytes BIGINT,
+      banner_mime_type VARCHAR(100),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -17,6 +21,10 @@ const createGuideTables = async () => {
       file_name VARCHAR(255) NOT NULL,
       file_size_bytes BIGINT NOT NULL,
       mime_type VARCHAR(100) NOT NULL,
+      banner_path TEXT,
+      banner_file_name VARCHAR(255),
+      banner_file_size_bytes BIGINT,
+      banner_mime_type VARCHAR(100),
       uploaded_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -51,6 +59,10 @@ const createGuideTables = async () => {
       file_name VARCHAR(255) NOT NULL,
       file_size_bytes BIGINT NOT NULL,
       mime_type VARCHAR(100) NOT NULL,
+      banner_path TEXT,
+      banner_file_name VARCHAR(255),
+      banner_file_size_bytes BIGINT,
+      banner_mime_type VARCHAR(100),
       created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -84,6 +96,10 @@ const createGuideTables = async () => {
       file_name VARCHAR(255) NOT NULL,
       file_size_bytes BIGINT NOT NULL,
       mime_type VARCHAR(100) NOT NULL,
+      banner_path TEXT,
+      banner_file_name VARCHAR(255),
+      banner_file_size_bytes BIGINT,
+      banner_mime_type VARCHAR(100),
       created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -286,7 +302,33 @@ const createGuideTables = async () => {
 
         ALTER TABLE guide_lessons
         ALTER COLUMN order_index SET NOT NULL;
+
+        ALTER TABLE guide_levels
+          ADD COLUMN IF NOT EXISTS banner_path TEXT,
+          ADD COLUMN IF NOT EXISTS banner_file_name VARCHAR(255),
+          ADD COLUMN IF NOT EXISTS banner_file_size_bytes BIGINT,
+          ADD COLUMN IF NOT EXISTS banner_mime_type VARCHAR(100);
       END $$;
+    `);
+
+    await pool.query(`
+      ALTER TABLE guide_level_main_pdfs
+        ADD COLUMN IF NOT EXISTS banner_path TEXT,
+        ADD COLUMN IF NOT EXISTS banner_file_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS banner_file_size_bytes BIGINT,
+        ADD COLUMN IF NOT EXISTS banner_mime_type VARCHAR(100);
+
+      ALTER TABLE guide_lesson_pdfs
+        ADD COLUMN IF NOT EXISTS banner_path TEXT,
+        ADD COLUMN IF NOT EXISTS banner_file_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS banner_file_size_bytes BIGINT,
+        ADD COLUMN IF NOT EXISTS banner_mime_type VARCHAR(100);
+
+      ALTER TABLE guide_lesson_vocabulary_pdfs
+        ADD COLUMN IF NOT EXISTS banner_path TEXT,
+        ADD COLUMN IF NOT EXISTS banner_file_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS banner_file_size_bytes BIGINT,
+        ADD COLUMN IF NOT EXISTS banner_mime_type VARCHAR(100);
     `);
 
     await pool.query(`

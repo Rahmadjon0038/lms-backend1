@@ -82,6 +82,7 @@ const snapshotRoutes = require('./routes/snapshotRoutes');
 const teacherGuideRoutes = require('./routes/teacherGuideRoutes');
 const adminGuideRoutes = require('./routes/adminGuideRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
+const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
@@ -89,6 +90,7 @@ const { createRoomTable } = require('./models/roomModel');
 const { createLessonsTable, createAttendanceTable } = require('./models/attendanceModel');
 const { createGuideTables } = require('./models/guideModel');
 const { createExpenseTable } = require('./models/expenseModel');
+const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -106,6 +108,7 @@ app.use('/api/snapshots', snapshotRoutes);
 app.use('/api/teacher/guides', teacherGuideRoutes);
 app.use('/api/admin/guides', adminGuideRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/teacher-salary', teacherSalaryRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
@@ -132,6 +135,7 @@ app.listen(PORT, '0.0.0.0', async () => {
         await createGroupMonthlySettingsTable(); // Group snapshot jadvali
         await createPaymentTables(); // Yangi to'lov tizimi jadvallari
         await createMonthlySnapshotTable(); // Monthly snapshot jadvali
+        await createTeacherSalaryTables(); // Teacher salary V2 jadvallari
     } catch (error) {
         console.error("Dastlabki sozlashda xatolik:", error);
     }

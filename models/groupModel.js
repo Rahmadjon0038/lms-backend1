@@ -12,6 +12,7 @@ const createGroupTables = async () => {
       unique_code VARCHAR(20) UNIQUE NOT NULL,
       start_date DATE,
       schedule JSONB,
+      schedule_effective_from DATE,
       price DECIMAL(10,2),
       status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'blocked')),
       class_start_date DATE, -- Darslar boshlangan sana
@@ -51,6 +52,9 @@ const createGroupTables = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='room_id') THEN
             ALTER TABLE groups ADD COLUMN room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='schedule_effective_from') THEN
+            ALTER TABLE groups ADD COLUMN schedule_effective_from DATE;
           END IF;
         END $$;
       `);

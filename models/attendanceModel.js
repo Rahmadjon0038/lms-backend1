@@ -57,6 +57,7 @@ const createAttendanceTable = async () => {
           group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
           month VARCHAR(7) NOT NULL,
           status VARCHAR(20) NOT NULL DEFAULT 'kelmadi' CHECK (status IN ('keldi', 'kelmadi', 'kechikdi')),
+          is_marked BOOLEAN NOT NULL DEFAULT false,
           monthly_status VARCHAR(20) DEFAULT 'active' CHECK (monthly_status IN ('active', 'stopped', 'finished')),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -69,10 +70,26 @@ const createAttendanceTable = async () => {
         ALTER TABLE attendance 
         ADD COLUMN IF NOT EXISTS month VARCHAR(7),
         ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        ADD COLUMN IF NOT EXISTS is_marked BOOLEAN NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS monthly_status VARCHAR(20) DEFAULT 'active' 
           CHECK (monthly_status IN ('active', 'stopped', 'finished'));
       `);
     }
+
+    // Orqaga moslik:
+    // - Ilgari mavjud yozuvlar uchun taxminiy mark holatini tiklaymiz.
+    // - O'tgan kunlar (yoki keldi/kechikdi) -> marked, kelajak -> unmarked.
+    await pool.query(`
+      UPDATE attendance a
+      SET is_marked = CASE
+        WHEN a.is_marked = true THEN true
+        WHEN a.status IN ('keldi', 'kechikdi') THEN true
+        WHEN l.date < CURRENT_DATE THEN true
+        ELSE false
+      END
+      FROM lessons l
+      WHERE a.lesson_id = l.id;
+    `);
     
     // Index'larni yaratish
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);`);

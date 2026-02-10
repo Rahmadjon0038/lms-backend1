@@ -62,6 +62,17 @@ const isDaysOverlap = (days1, days2) => {
     return days1.some(day => days2.includes(day));
 };
 
+const normalizeScheduleForCompare = (schedule) => {
+    if (!schedule || typeof schedule !== 'object') return null;
+    const days = Array.isArray(schedule.days)
+        ? schedule.days.map((d) => String(d).trim().toLowerCase()).sort()
+        : [];
+    const time = schedule.time ? String(schedule.time).trim() : null;
+    return JSON.stringify({ days, time });
+};
+
+const todayAsDateString = () => new Date().toISOString().slice(0, 10);
+
 // Teacher schedule conflict tekshirish
 const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId = null) => {
     if (!teacherId || !schedule || !schedule.days || !schedule.time) {
@@ -295,24 +306,53 @@ exports.createGroup = async (req, res) => {
 // 2. Guruhni tahrirlash (Teacher-subject va schedule conflict validation bilan)
 exports.updateGroup = async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, teacher_id, is_active, schedule, start_date, price, subject_id, room_id } = req.body;
+    const { name, teacher_id, is_active, schedule, start_date, price, subject_id, room_id, schedule_effective_from } = req.body;
+    let transactionStarted = false;
     
     try {
+        const currentGroupResult = await pool.query(
+            `SELECT id, teacher_id, room_id, subject_id, schedule
+             FROM groups
+             WHERE id = $1`,
+            [id]
+        );
+        if (currentGroupResult.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        const currentGroup = currentGroupResult.rows[0];
+
         // Bo'sh string va 0 qiymatlarni null ga o'zgartirish
         const processedTeacherId = (teacher_id === 0 || teacher_id === "" || teacher_id === null) ? null : teacher_id;
         const processedSubjectId = (subject_id === 0 || subject_id === "" || subject_id === null) ? null : subject_id;
         const processedStartDate = (start_date === "" || start_date === null) ? null : start_date;
         const processedRoomId = (room_id === 0 || room_id === "" || room_id === null) ? null : room_id;
+        const finalTeacherId = processedTeacherId === undefined ? currentGroup.teacher_id : processedTeacherId;
+        const finalSubjectId = processedSubjectId === undefined ? currentGroup.subject_id : processedSubjectId;
+        const finalRoomId = processedRoomId === undefined ? currentGroup.room_id : processedRoomId;
+        const teacherForValidation = processedTeacherId !== undefined ? processedTeacherId : currentGroup.teacher_id;
+        const roomForValidation = processedRoomId !== undefined ? processedRoomId : currentGroup.room_id;
+        const scheduleChanged = schedule !== undefined
+            && normalizeScheduleForCompare(schedule) !== normalizeScheduleForCompare(currentGroup.schedule);
+        if (scheduleChanged && schedule_effective_from && !/^\d{4}-\d{2}-\d{2}$/.test(String(schedule_effective_from))) {
+            return res.status(400).json({
+                message: "schedule_effective_from YYYY-MM-DD formatida bo'lishi kerak"
+            });
+        }
+        const effectiveFrom = scheduleChanged
+            ? (schedule_effective_from && /^\d{4}-\d{2}-\d{2}$/.test(String(schedule_effective_from))
+                ? schedule_effective_from
+                : todayAsDateString())
+            : null;
         
         // Teacher va subject validation - agar ikkalasi ham berilgan bo'lsa
-        if (processedTeacherId && processedSubjectId) {
-            const teacherSubjects = await getTeacherSubjects(processedTeacherId);
+        if (teacherForValidation && processedSubjectId) {
+            const teacherSubjects = await getTeacherSubjects(teacherForValidation);
             const canTeachSubject = teacherSubjects.some(sub => sub.id === processedSubjectId);
             
             if (!canTeachSubject) {
                 return res.status(400).json({ 
                     message: "Bu teacher tanlangan fanni o'qitmaydi",
-                    teacher_id: processedTeacherId,
+                    teacher_id: teacherForValidation,
                     subject_id: processedSubjectId,
                     teacher_subjects: teacherSubjects.map(s => ({ id: s.id, name: s.name }))
                 });
@@ -320,12 +360,12 @@ exports.updateGroup = async (req, res) => {
         }
         
         // Teacher schedule conflict tekshirish (faqat teacher_id yoki schedule o'zgarsa)
-        if (processedTeacherId && schedule) {
-            const conflict = await checkTeacherScheduleConflict(processedTeacherId, schedule, id);
+        if (teacherForValidation && schedule) {
+            const conflict = await checkTeacherScheduleConflict(teacherForValidation, schedule, id);
             if (conflict.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacher tanlangan kun va vaqtda boshqa guruhda dars bor!",
-                    teacher_id: processedTeacherId,
+                    teacher_id: teacherForValidation,
                     conflict_group: conflict.conflictGroup,
                     new_schedule: schedule,
                     suggestion: "Boshqa vaqt yoki kun tanlang, yoki mavjud guruhning vaqtini o'zgartiring"
@@ -334,8 +374,8 @@ exports.updateGroup = async (req, res) => {
         }
 
         // Schedule conflict tekshiruvi - faqat teacher va schedule o'zgartirish paytida
-        if (processedTeacherId && schedule) {
-            const conflictCheck = await checkScheduleConflict(processedTeacherId, schedule, id);
+        if (teacherForValidation && schedule) {
+            const conflictCheck = await checkScheduleConflict(teacherForValidation, schedule, id);
             if (conflictCheck.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacherning ko'rsatilgan kunda va vaqtda boshqa guruhida darsi bor!",
@@ -354,19 +394,22 @@ exports.updateGroup = async (req, res) => {
         }
 
         // Xona conflict tekshirish
-        if (processedRoomId && schedule) {
-            const roomCheck = await checkRoomAvailability(processedRoomId, schedule, id);
+        if (roomForValidation && schedule) {
+            const roomCheck = await checkRoomAvailability(roomForValidation, schedule, id);
             if (!roomCheck.isAvailable) {
                 return res.status(400).json({
                     message: "Bu xona tanlangan kun va vaqtda band!",
-                    room_id: processedRoomId,
+                    room_id: roomForValidation,
                     conflict_group: roomCheck.conflictGroup,
                     new_schedule: schedule,
                     suggestion: "Boshqa xona yoki vaqt tanlang"
                 });
             }
         }
-        
+
+        await pool.query('BEGIN');
+        transactionStarted = true;
+
         const result = await pool.query(
             `UPDATE groups SET 
                 name = COALESCE($1, name), 
@@ -376,13 +419,61 @@ exports.updateGroup = async (req, res) => {
                 start_date = COALESCE($5, start_date),
                 price = COALESCE($6, price),
                 subject_id = $7,
-                room_id = $8
-             WHERE id = $9 RETURNING *`,
-            [name, processedTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, processedSubjectId, processedRoomId, id]
+                room_id = $8,
+                schedule_effective_from = CASE
+                  WHEN $9::date IS NOT NULL THEN $9::date
+                  ELSE schedule_effective_from
+                END
+             WHERE id = $10 RETURNING *`,
+            [name, finalTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, finalSubjectId, finalRoomId, effectiveFrom, id]
         );
-        if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
-        res.json({ success: true, group: result.rows[0] });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (result.rows.length === 0) {
+            await pool.query('ROLLBACK');
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        let deletedLessonsCount = 0;
+        let deletedAttendanceCount = 0;
+        if (scheduleChanged && effectiveFrom) {
+            const deletedAttendance = await pool.query(
+                `DELETE FROM attendance a
+                 USING lessons l
+                 WHERE a.lesson_id = l.id
+                   AND l.group_id = $1
+                   AND l.date >= $2::date`,
+                [id, effectiveFrom]
+            );
+            const deletedLessons = await pool.query(
+                `DELETE FROM lessons
+                 WHERE group_id = $1
+                   AND date >= $2::date`,
+                [id, effectiveFrom]
+            );
+            deletedLessonsCount = deletedLessons.rowCount;
+            deletedAttendanceCount = deletedAttendance.rowCount;
+        }
+
+        await pool.query('COMMIT');
+        transactionStarted = false;
+
+        return res.json({
+            success: true,
+            group: result.rows[0],
+            ...(scheduleChanged ? {
+                schedule_change: {
+                    effective_from: effectiveFrom,
+                    deleted_future_lessons_count: deletedLessonsCount,
+                    deleted_future_attendance_count: deletedAttendanceCount,
+                    note: 'Bu sanadan oldingi lessonlar saqlanib qoldi'
+                }
+            } : {})
+        });
+    } catch (err) {
+        if (transactionStarted) {
+            await pool.query('ROLLBACK');
+        }
+        return res.status(500).json({ error: err.message });
+    }
 };
 
 // 2.1. Guruh statusini o'zgartirish (draft -> active -> blocked)

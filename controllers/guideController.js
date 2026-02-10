@@ -8,9 +8,13 @@ const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const levelPdfDir = path.join(__dirname, '..', 'private_uploads', 'guide_levels');
 const lessonPdfDir = path.join(__dirname, '..', 'private_uploads', 'guide_lessons');
 const vocabularyImageDir = path.join(__dirname, '..', 'private_uploads', 'guide_vocabulary_images');
+const pdfBannerDir = path.join(__dirname, '..', 'private_uploads', 'guide_pdf_banners');
+const levelBannerDir = path.join(__dirname, '..', 'private_uploads', 'guide_level_banners');
 if (!fs.existsSync(levelPdfDir)) fs.mkdirSync(levelPdfDir, { recursive: true });
 if (!fs.existsSync(lessonPdfDir)) fs.mkdirSync(lessonPdfDir, { recursive: true });
 if (!fs.existsSync(vocabularyImageDir)) fs.mkdirSync(vocabularyImageDir, { recursive: true });
+if (!fs.existsSync(pdfBannerDir)) fs.mkdirSync(pdfBannerDir, { recursive: true });
+if (!fs.existsSync(levelBannerDir)) fs.mkdirSync(levelBannerDir, { recursive: true });
 
 const createPdfUpload = (destination) => multer({
   storage: multer.diskStorage({
@@ -42,9 +46,33 @@ const createImageUpload = (destination) => multer({
   },
 });
 
+const createPdfWithOptionalBannerUpload = (pdfDestination) => multer({
+  storage: multer.diskStorage({
+    destination: (_req, file, cb) => {
+      if (file.fieldname === 'file') return cb(null, pdfDestination);
+      if (file.fieldname === 'banner') return cb(null, pdfBannerDir);
+      return cb(new Error('Unexpected upload field'));
+    },
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: MAX_PDF_SIZE },
+  fileFilter: (_req, file, cb) => {
+    if (file.fieldname === 'file') {
+      if (file.mimetype !== 'application/pdf') return cb(new Error('Only PDF files are allowed for file'));
+      return cb(null, true);
+    }
+    if (file.fieldname === 'banner') {
+      if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed for banner'));
+      return cb(null, true);
+    }
+    return cb(new Error('Unexpected upload field'));
+  },
+});
+
 const uploadMainPdf = createPdfUpload(levelPdfDir);
 const uploadLessonPdf = createPdfUpload(lessonPdfDir);
 const uploadVocabularyImage = createImageUpload(vocabularyImageDir);
+const uploadLevelBanner = createImageUpload(levelBannerDir);
 
 const ALLOWED_NOTE_COLORS = new Set(['blue', 'green', 'orange', 'red', 'purple', 'pink']);
 const DEFAULT_SPEECH_RATE = 1.0;
@@ -58,6 +86,16 @@ const sendError = (res, message, status = 400, errors = {}) =>
 const parseId = (v) => {
   const n = Number(v);
   return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const getUploadedPdfAndBanner = (req) => ({
+  pdfFile: req?.files?.file?.[0] || req?.file || null,
+  bannerFile: req?.files?.banner?.[0] || null,
+});
+
+const cleanupUploadedPdfAndBanner = async ({ pdfFile, bannerFile }) => {
+  if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
+  if (bannerFile?.path) await removeFileIfExists(bannerFile.path);
 };
 
 const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
@@ -180,7 +218,13 @@ const getSpeechSettingsForUser = async (userId) => {
 };
 
 const findLevel = async (levelId) => {
-  const result = await pool.query('SELECT id, title, description, created_at, updated_at FROM guide_levels WHERE id = $1', [levelId]);
+  const result = await pool.query(
+    `SELECT id, title, description, created_at, updated_at,
+            banner_file_name, banner_file_size_bytes, banner_mime_type
+     FROM guide_levels
+     WHERE id = $1`,
+    [levelId]
+  );
   return result.rows[0] || null;
 };
 
@@ -207,21 +251,27 @@ const removeFileIfExists = async (filePath) => {
 
 // Level CRUD
 const createLevel = async (req, res) => {
-  const { title, description } = req.body;
-  if (!hasText(title) || !hasText(description)) {
-    return sendError(res, 'title and description are required');
+  if (!req.file) {
+    return sendError(res, 'banner image is required');
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO guide_levels (title, description)
-       VALUES ($1, $2)
-       RETURNING id, title, description, created_at, updated_at`,
-      [title.trim(), description.trim()]
+      `INSERT INTO guide_levels (
+         title, description, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
+       )
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, title, description, created_at, updated_at,
+                 banner_file_name, banner_file_size_bytes, banner_mime_type`,
+      ['Untitled Level', '', req.file.path, req.file.originalname, req.file.size, req.file.mimetype]
     );
 
-    return sendSuccess(res, result.rows[0], 201);
+    return sendSuccess(res, {
+      ...result.rows[0],
+      protected_banner_url: `/api/admin/guides/levels/${result.rows[0].id}/banner`,
+    }, 201);
   } catch (error) {
+    if (req.file?.path) await removeFileIfExists(req.file.path);
     return sendError(res, 'Failed to create level', 500, { detail: error.message });
   }
 };
@@ -229,7 +279,8 @@ const createLevel = async (req, res) => {
 const getLevels = async (_req, res) => {
   try {
     const result = await pool.query(
-      `SELECT l.id, l.title, l.description, l.created_at, l.updated_at,
+      `SELECT l.id, l.created_at, l.updated_at,
+              l.banner_file_name, l.banner_file_size_bytes, l.banner_mime_type,
               COUNT(gl.id)::int AS lesson_count,
               CASE WHEN mp.id IS NOT NULL THEN true ELSE false END AS has_main_pdf
        FROM guide_levels l
@@ -238,8 +289,13 @@ const getLevels = async (_req, res) => {
        GROUP BY l.id, mp.id
        ORDER BY l.id DESC`
     );
-
-    return sendSuccess(res, result.rows);
+    const rolePrefix = _req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
+    return sendSuccess(res, result.rows.map((row) => ({
+      ...row,
+      protected_banner_url: row.banner_file_name
+        ? `${rolePrefix}/guides/levels/${row.id}/banner`
+        : null,
+    })));
   } catch (error) {
     return sendError(res, 'Failed to fetch levels', 500, { detail: error.message });
   }
@@ -252,9 +308,11 @@ const getLevelById = async (req, res) => {
   try {
     const level = await findLevel(levelId);
     if (!level) return sendError(res, 'Level not found', 404);
+    const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
 
     const mainPdfResult = await pool.query(
-      `SELECT id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at
+      `SELECT id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at,
+              banner_file_name, banner_file_size_bytes, banner_mime_type
        FROM guide_level_main_pdfs
        WHERE level_id = $1`,
       [levelId]
@@ -269,11 +327,21 @@ const getLevelById = async (req, res) => {
     );
 
     return sendSuccess(res, {
-      level,
+      level: {
+        id: level.id,
+        created_at: level.created_at,
+        updated_at: level.updated_at,
+        banner_file_name: level.banner_file_name,
+        banner_file_size_bytes: level.banner_file_size_bytes,
+        banner_mime_type: level.banner_mime_type,
+        protected_banner_url: level.banner_file_name
+          ? `${rolePrefix}/guides/levels/${levelId}/banner`
+          : null,
+      },
       main_pdf: mainPdfResult.rows[0]
         ? {
             ...mainPdfResult.rows[0],
-            protected_file_url: `/api/teacher/guides/levels/${levelId}/main-pdf/file`,
+            protected_file_url: `${rolePrefix}/guides/levels/${levelId}/main-pdf/file`,
           }
         : null,
       lessons: lessonsResult.rows.map(mapLessonRow),
@@ -286,27 +354,31 @@ const getLevelById = async (req, res) => {
 const updateLevel = async (req, res) => {
   const levelId = parseId(req.params.levelId);
   if (!levelId) return sendError(res, 'Invalid levelId');
+  return sendError(res, 'Level title/description update disabled. Level only has banner.', 400);
+};
 
-  const { title, description } = req.body;
-  if (!hasText(title) || !hasText(description)) {
-    return sendError(res, 'title and description are required');
-  }
+const streamLevelBanner = async (req, res) => {
+  const levelId = parseId(req.params.levelId);
+  if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
     const result = await pool.query(
-      `UPDATE guide_levels
-       SET title = $1,
-           description = $2,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3
-       RETURNING id, title, description, created_at, updated_at`,
-      [title.trim(), description.trim(), levelId]
+      `SELECT banner_path, banner_file_name, banner_mime_type
+       FROM guide_levels
+       WHERE id = $1`,
+      [levelId]
     );
 
-    if (result.rows.length === 0) return sendError(res, 'Level not found', 404);
-    return sendSuccess(res, result.rows[0]);
+    if (result.rows.length === 0 || !result.rows[0].banner_path) return sendError(res, 'Level banner not found', 404);
+    const banner = result.rows[0];
+    if (!fs.existsSync(banner.banner_path)) return sendError(res, 'Banner file not found', 404);
+
+    res.setHeader('Content-Type', banner.banner_mime_type || 'image/jpeg');
+    res.setHeader('Content-Disposition', `inline; filename="${banner.banner_file_name || 'level-banner'}"`);
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    return res.sendFile(path.resolve(banner.banner_path));
   } catch (error) {
-    return sendError(res, 'Failed to update level', 500, { detail: error.message });
+    return sendError(res, 'Failed to open level banner', 500, { detail: error.message });
   }
 };
 
@@ -315,12 +387,15 @@ const deleteLevel = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
-    const pdf = await pool.query('SELECT file_path FROM guide_level_main_pdfs WHERE level_id = $1', [levelId]);
+    const pdf = await pool.query('SELECT file_path, banner_path FROM guide_level_main_pdfs WHERE level_id = $1', [levelId]);
 
+    const levelBanner = await pool.query('SELECT banner_path FROM guide_levels WHERE id = $1', [levelId]);
     const result = await pool.query('DELETE FROM guide_levels WHERE id = $1 RETURNING id', [levelId]);
     if (result.rows.length === 0) return sendError(res, 'Level not found', 404);
 
     if (pdf.rows[0]?.file_path) await removeFileIfExists(pdf.rows[0].file_path);
+    if (pdf.rows[0]?.banner_path) await removeFileIfExists(pdf.rows[0].banner_path);
+    if (levelBanner.rows[0]?.banner_path) await removeFileIfExists(levelBanner.rows[0].banner_path);
 
     return sendSuccess(res, { id: result.rows[0].id, deleted: true });
   } catch (error) {
@@ -330,18 +405,21 @@ const deleteLevel = async (req, res) => {
 
 // Main PDF (one per level)
 const uploadLevelMainPdf = async (req, res) => {
+  const pdfFile = req.file;
   const levelId = parseId(req.params.levelId);
   if (!levelId) {
-    if (req.file?.path) await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Invalid levelId');
   }
 
-  if (!req.file) return sendError(res, 'PDF file is required');
+  if (!pdfFile) {
+    return sendError(res, 'PDF file is required');
+  }
 
   try {
     const level = await findLevel(levelId);
     if (!level) {
-      await removeFileIfExists(req.file.path);
+      await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Level not found', 404);
     }
 
@@ -359,7 +437,7 @@ const uploadLevelMainPdf = async (req, res) => {
              uploaded_at = CURRENT_TIMESTAMP
          WHERE level_id = $6
          RETURNING id, level_id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at`,
-        [req.file.path, req.file.originalname, req.file.size, req.file.mimetype, req.user.id, levelId]
+        [pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id, levelId]
       );
       await removeFileIfExists(old.rows[0].file_path);
     } else {
@@ -368,7 +446,7 @@ const uploadLevelMainPdf = async (req, res) => {
           level_id, file_path, file_name, file_size_bytes, mime_type, uploaded_by
         ) VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id, level_id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at`,
-        [levelId, req.file.path, req.file.originalname, req.file.size, req.file.mimetype, req.user.id]
+        [levelId, pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id]
       );
     }
 
@@ -381,7 +459,7 @@ const uploadLevelMainPdf = async (req, res) => {
       201
     );
   } catch (error) {
-    await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Failed to upload main PDF', 500, { detail: error.message });
   }
 };
@@ -447,12 +525,13 @@ const deleteLevelMainPdf = async (req, res) => {
     const result = await pool.query(
       `DELETE FROM guide_level_main_pdfs
        WHERE level_id = $1
-       RETURNING id, file_path`,
+       RETURNING id, file_path, banner_path`,
       [levelId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Main PDF not found', 404);
     await removeFileIfExists(result.rows[0].file_path);
+    await removeFileIfExists(result.rows[0].banner_path);
 
     return sendSuccess(res, { id: result.rows[0].id, deleted: true });
   } catch (error) {
@@ -733,24 +812,27 @@ const deleteLessonNote = async (req, res) => {
 };
 
 const uploadLessonPdfItem = async (req, res) => {
+  const pdfFile = req.file;
   const lessonId = parseId(req.params.lessonId);
   if (!lessonId) {
-    if (req.file?.path) await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Invalid lessonId');
   }
 
   const { title } = req.body;
   if (!hasText(title)) {
-    if (req.file?.path) await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'title is required');
   }
 
-  if (!req.file) return sendError(res, 'PDF file is required');
+  if (!pdfFile) {
+    return sendError(res, 'PDF file is required');
+  }
 
   try {
     const lesson = await findLesson(lessonId);
     if (!lesson) {
-      await removeFileIfExists(req.file.path);
+      await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Lesson not found', 404);
     }
 
@@ -763,11 +845,11 @@ const uploadLessonPdfItem = async (req, res) => {
         lessonId,
         title.trim(),
         '',
-        req.file.path,
-        req.file.originalname,
-        req.file.size,
-        req.file.mimetype,
-        req.user.id,
+        pdfFile.path,
+        pdfFile.originalname,
+        pdfFile.size,
+        pdfFile.mimetype,
+        req.user.id
       ]
     );
 
@@ -776,7 +858,7 @@ const uploadLessonPdfItem = async (req, res) => {
       protected_file_url: `/api/admin/guides/lessons/${lessonId}/pdfs/${result.rows[0].id}/file`,
     }, 201);
   } catch (error) {
-    await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Failed to upload lesson PDF', 500, { detail: error.message });
   }
 };
@@ -984,23 +1066,26 @@ const deleteVocabulary = async (req, res) => {
 };
 
 const uploadVocabularyPdf = async (req, res) => {
+  const pdfFile = req.file;
   const lessonId = parseId(req.params.lessonId);
   if (!lessonId) {
-    if (req.file?.path) await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Invalid lessonId');
   }
 
   const { title } = req.body;
   if (!hasText(title)) {
-    if (req.file?.path) await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'title is required');
   }
-  if (!req.file) return sendError(res, 'PDF file is required');
+  if (!pdfFile) {
+    return sendError(res, 'PDF file is required');
+  }
 
   try {
     const lesson = await findLesson(lessonId);
     if (!lesson) {
-      await removeFileIfExists(req.file.path);
+      await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Lesson not found', 404);
     }
 
@@ -1009,7 +1094,15 @@ const uploadVocabularyPdf = async (req, res) => {
          lesson_id, title, file_path, file_name, file_size_bytes, mime_type, created_by
        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at`,
-      [lessonId, title.trim(), req.file.path, req.file.originalname, req.file.size, req.file.mimetype, req.user.id]
+      [
+        lessonId,
+        title.trim(),
+        pdfFile.path,
+        pdfFile.originalname,
+        pdfFile.size,
+        pdfFile.mimetype,
+        req.user.id
+      ]
     );
 
     return sendSuccess(res, {
@@ -1017,7 +1110,7 @@ const uploadVocabularyPdf = async (req, res) => {
       protected_file_url: `/api/admin/guides/lessons/${lessonId}/vocabulary-pdfs/${result.rows[0].id}/file`,
     }, 201);
   } catch (error) {
-    await removeFileIfExists(req.file.path);
+    if (pdfFile?.path) await removeFileIfExists(pdfFile.path);
     return sendError(res, 'Failed to upload vocabulary PDF', 500, { detail: error.message });
   }
 };
@@ -1577,9 +1670,11 @@ module.exports = {
   uploadMainPdf,
   uploadLessonPdf,
   uploadVocabularyImage,
+  uploadLevelBanner,
   createLevel,
   getLevels,
   getLevelById,
+  streamLevelBanner,
   updateLevel,
   deleteLevel,
   uploadLevelMainPdf,

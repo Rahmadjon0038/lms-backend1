@@ -36,6 +36,7 @@ router.get('/levels', guideController.getLevels);
  *     responses: { 200: { description: OK } }
  */
 router.get('/levels/:levelId', guideController.getLevelById);
+router.get('/levels/:levelId/banner', guideController.streamLevelBanner);
 
 /**
  * @swagger

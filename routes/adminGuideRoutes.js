@@ -25,9 +25,31 @@ const handleUploadError = (uploader, fieldName, tooLargeMessage = 'File size exc
   });
 };
 
+const handlePdfWithOptionalBannerUpload = (uploader, tooLargeMessage = 'File size must not exceed 20MB') => (req, res, next) => {
+  uploader.fields([{ name: 'file', maxCount: 1 }, { name: 'banner', maxCount: 1 }])(req, res, (err) => {
+    if (!err) return next();
+
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        message: tooLargeMessage,
+        errors: { file: 'max_size_limit' },
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: err.message || 'File upload failed',
+      errors: {},
+    });
+  });
+};
+
 const handleMainPdfUpload = handleUploadError(guideController.uploadMainPdf, 'file', 'PDF size must not exceed 20MB');
 const handleLessonPdfUpload = handleUploadError(guideController.uploadLessonPdf, 'file', 'PDF size must not exceed 20MB');
+const handleVocabularyPdfUpload = handleUploadError(guideController.uploadLessonPdf, 'file', 'PDF size must not exceed 20MB');
 const handleVocabularyImageUpload = handleUploadError(guideController.uploadVocabularyImage, 'file', 'Image size must not exceed 10MB');
+const handleLevelBannerUpload = handleUploadError(guideController.uploadLevelBanner, 'banner', 'Image size must not exceed 10MB');
 
 router.use(protect);
 router.use(roleCheck(['admin', 'super_admin']));
@@ -47,7 +69,7 @@ router.use(roleCheck(['admin', 'super_admin']));
  *     responses: { 201: { description: Created } }
  */
 router.get('/levels', guideController.getLevels);
-router.post('/levels', guideController.createLevel);
+router.post('/levels', handleLevelBannerUpload, guideController.createLevel);
 
 /**
  * @swagger
@@ -69,6 +91,7 @@ router.post('/levels', guideController.createLevel);
  *     responses: { 200: { description: OK } }
  */
 router.get('/levels/:levelId', guideController.getLevelById);
+router.get('/levels/:levelId/banner', guideController.streamLevelBanner);
 router.patch('/levels/:levelId', guideController.updateLevel);
 router.delete('/levels/:levelId', guideController.deleteLevel);
 
@@ -312,7 +335,7 @@ router.delete('/lessons/:lessonId/vocabulary/:vocabId', guideController.deleteVo
  *     responses: { 200: { description: OK } }
  */
 router.get('/lessons/:lessonId/vocabulary-pdfs', guideController.listVocabularyPdfs);
-router.post('/lessons/:lessonId/vocabulary-pdfs', handleLessonPdfUpload, guideController.uploadVocabularyPdf);
+router.post('/lessons/:lessonId/vocabulary-pdfs', handleVocabularyPdfUpload, guideController.uploadVocabularyPdf);
 router.get('/lessons/:lessonId/vocabulary-pdfs/:pdfId/file', guideController.streamVocabularyPdfFile);
 router.delete('/lessons/:lessonId/vocabulary-pdfs/:pdfId', guideController.deleteVocabularyPdf);
 

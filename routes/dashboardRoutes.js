@@ -100,6 +100,25 @@ router.get('/debtors', protect, protectAdmin, getDebtorStudents);
  *     tags: [Dashboard]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2026-02"
+ *         description: KPI uchun asosiy oy (YYYY-MM). Default joriy oy
+ *       - in: query
+ *         name: from_month
+ *         schema:
+ *           type: string
+ *           example: "2025-03"
+ *         description: Trend boshlanish oyi (YYYY-MM). Default month dan 11 oy oldin
+ *       - in: query
+ *         name: to_month
+ *         schema:
+ *           type: string
+ *           example: "2026-02"
+ *         description: Trend tugash oyi (YYYY-MM). Default month
  *     responses:
  *       200:
  *         description: OK

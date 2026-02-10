@@ -51,6 +51,8 @@ const getMonthStartEnd = (month) => {
 };
 
 const formatDateUtc = (dateObj) => dateObj.toISOString().slice(0, 10);
+const isValidMonth = (value) => /^\d{4}-\d{2}$/.test(String(value || ''));
+const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 
 const resolveDefaultMonthlyStatus = async (studentId, groupId) => {
   const lastMonthStatus = await pool.query(
@@ -107,8 +109,8 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
     if (exists.rows.length === 0) {
       const initialStatus = await resolveDefaultMonthlyStatus(student.student_id, groupId);
       await pool.query(
-        `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status, is_marked)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
         [lessonId, student.student_id, groupId, month, 'kelmadi', initialStatus]
       );
       createdCount++;
@@ -125,9 +127,9 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
   return { eligibleCount: eligibleStudents.rows.length, createdCount };
 };
 
-const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy }) => {
+const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate = null }) => {
   const groupResult = await pool.query(
-    `SELECT id, schedule, class_start_date, start_date
+    `SELECT id, schedule, class_start_date, start_date, schedule_effective_from
      FROM groups
      WHERE id = $1`,
     [groupId]
@@ -145,6 +147,13 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy }) => {
 
   const { start: monthStart, end: monthEnd } = getMonthStartEnd(month);
   const startBoundary = group.class_start_date || group.start_date;
+  const scheduleEffectiveFrom = group.schedule_effective_from
+    ? new Date(Date.UTC(
+      new Date(group.schedule_effective_from).getUTCFullYear(),
+      new Date(group.schedule_effective_from).getUTCMonth(),
+      new Date(group.schedule_effective_from).getUTCDate()
+    ))
+    : null;
   const effectiveStart = startBoundary
     ? new Date(Date.UTC(
       new Date(startBoundary).getUTCFullYear(),
@@ -152,7 +161,16 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy }) => {
       new Date(startBoundary).getUTCDate()
     ))
     : monthStart;
-  const firstDate = effectiveStart > monthStart ? effectiveStart : monthStart;
+  let firstDate = effectiveStart > monthStart ? effectiveStart : monthStart;
+  if (scheduleEffectiveFrom && scheduleEffectiveFrom > firstDate) {
+    firstDate = scheduleEffectiveFrom;
+  }
+  if (fromDate && isValidDate(fromDate)) {
+    const fromDateObj = new Date(`${fromDate}T00:00:00.000Z`);
+    if (!Number.isNaN(fromDateObj.getTime()) && fromDateObj > firstDate) {
+      firstDate = fromDateObj;
+    }
+  }
 
   const existingLessons = await pool.query(
     `SELECT TO_CHAR(date, 'YYYY-MM-DD') as lesson_date
@@ -448,8 +466,8 @@ exports.getLessonStudents = async (req, res) => {
 
         // Attendance yaratish
         await pool.query(
-          `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status) 
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `INSERT INTO attendance (lesson_id, student_id, group_id, month, status, monthly_status, is_marked) 
+           VALUES ($1, $2, $3, $4, $5, $6, false)`,
           [lesson_id, student.student_id, group_id, month, 'kelmadi', initialStatus]
         );
       }
@@ -463,7 +481,8 @@ exports.getLessonStudents = async (req, res) => {
          a.student_id,
          u.name || ' ' || u.surname as student_name,
          u.phone,
-         a.status,
+         CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END as status,
+         COALESCE(a.is_marked, false) as is_marked,
          a.monthly_status,
          CASE 
            WHEN a.monthly_status = 'active' THEN 'Faol'
@@ -529,7 +548,7 @@ exports.markAttendance = async (req, res) => {
       // XAVFSIZLIK: lesson_id ham tekshiriladi + faqat active talabalar
       const result = await pool.query(
         `UPDATE attendance 
-         SET status = $1, updated_at = CURRENT_TIMESTAMP 
+         SET status = $1, is_marked = true, updated_at = CURRENT_TIMESTAMP 
          WHERE id = $2 AND lesson_id = $3 AND monthly_status = 'active'
          RETURNING student_id`,
         [record.status, record.attendance_id, lesson_id]
@@ -622,6 +641,29 @@ exports.getMonthlyAttendance = async (req, res) => {
       [group_id, selectedMonth]
     );
 
+    // Talabaning guruhdagi davrlari (bir necha marta kirib-chiqqan bo'lishi mumkin)
+    const membershipPeriodsResult = await pool.query(
+      `SELECT 
+         sg.student_id,
+         TO_CHAR(DATE(sg.joined_at), 'YYYY-MM-DD') as joined_at,
+         TO_CHAR(DATE(sg.left_at), 'YYYY-MM-DD') as left_at
+       FROM student_groups sg
+       WHERE sg.group_id = $1
+       ORDER BY sg.student_id, sg.joined_at`,
+      [group_id]
+    );
+
+    const membershipPeriodsMap = new Map();
+    membershipPeriodsResult.rows.forEach((row) => {
+      if (!membershipPeriodsMap.has(row.student_id)) {
+        membershipPeriodsMap.set(row.student_id, []);
+      }
+      membershipPeriodsMap.get(row.student_id).push({
+        joined_at: row.joined_at,
+        left_at: row.left_at
+      });
+    });
+
     // Shu oydagi barcha attendance yozuvlari - student chiqib ketgan bo'lsa ham ko'rinsin
     const attendance = await pool.query(
       `SELECT 
@@ -633,14 +675,15 @@ exports.getMonthlyAttendance = async (req, res) => {
            json_build_object(
              'lesson_id', l.id,
              'date', TO_CHAR(l.date, 'YYYY-MM-DD'),
-             'status', a.status
+             'status', CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END,
+             'is_marked', COALESCE(a.is_marked, false)
            ) ORDER BY l.date
          ) as attendance_records,
          -- Statistika hisoblash (barcha mavjud attendance yozuvlari uchun)
-         COUNT(CASE WHEN a.status = 'keldi' THEN 1 END) as total_present,
-         COUNT(CASE WHEN a.status = 'kelmadi' THEN 1 END) as total_absent,
-         COUNT(CASE WHEN a.status = 'kechikdi' THEN 1 END) as total_late,
-         COUNT(CASE WHEN a.status IN ('keldi', 'kelmadi', 'kechikdi') THEN 1 END) as total_lessons
+         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_present,
+         COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_absent,
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_late,
+         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as total_lessons
        FROM attendance a
        JOIN users u ON a.student_id = u.id
        JOIN lessons l ON a.lesson_id = l.id
@@ -658,6 +701,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       
       return {
         ...student,
+        membership_periods: membershipPeriodsMap.get(student.student_id) || [],
         statistics: {
           total_attended: totalAttended,      // Nechta darsga qatnashdi (keldi + kechikdi)
           total_missed: parseInt(student.total_absent),        // Nechta darsni qoldirdi
@@ -1001,10 +1045,10 @@ exports.getGroupLessons = async (req, res) => {
          l.id,
          TO_CHAR(l.date, 'YYYY-MM-DD') as date,
          TO_CHAR(l.date, 'DD.MM.YYYY') as formatted_date,
-         COUNT(CASE WHEN a.monthly_status = 'active' OR a.status IN ('keldi', 'kechikdi') THEN 1 END) as total_students,
-         COUNT(CASE WHEN a.status = 'keldi' THEN 1 END) as present_count,
-         COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' THEN 1 END) as absent_count,
-         COUNT(CASE WHEN a.status = 'kechikdi' THEN 1 END) as late_count
+         COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END) as total_students,
+         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as present_count,
+         COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as absent_count,
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count
        FROM lessons l
        LEFT JOIN attendance a ON l.id = a.lesson_id
        WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
@@ -1041,6 +1085,131 @@ exports.getGroupLessons = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server xatoligi'
+    });
+  }
+};
+
+// ============================================================================
+// 7.1 GURUH LESSONLARINI O'CHIRIB QAYTA GENERATE QILISH
+// ============================================================================
+exports.regenerateGroupLessons = async (req, res) => {
+  const { group_id } = req.params;
+  const { month, from_date } = req.body || {};
+  const { role, id: userId } = req.user;
+
+  let transactionStarted = false;
+  try {
+    const selectedMonth = month || new Date().toISOString().slice(0, 7);
+    if (!isValidMonth(selectedMonth)) {
+      return res.status(400).json({
+        success: false,
+        message: 'month YYYY-MM formatida bo\'lishi kerak'
+      });
+    }
+
+    if (from_date && !isValidDate(from_date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    if (from_date && !String(from_date).startsWith(`${selectedMonth}-`)) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_date tanlangan month ichida bo\'lishi kerak'
+      });
+    }
+
+    const groupCheck = await pool.query(
+      `SELECT id, teacher_id
+       FROM groups
+       WHERE id = $1`,
+      [group_id]
+    );
+
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+
+    const group = groupCheck.rows[0];
+    if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizning guruhingizni regenerate qila olasiz'
+      });
+    }
+
+    const { start: monthStartObj, end: monthEndObj } = getMonthStartEnd(selectedMonth);
+    const deleteStart = from_date || formatDateUtc(monthStartObj);
+    const deleteEnd = formatDateUtc(monthEndObj);
+
+    await pool.query('BEGIN');
+    transactionStarted = true;
+
+    const deletedAttendance = await pool.query(
+      `DELETE FROM attendance a
+       USING lessons l
+       WHERE a.lesson_id = l.id
+         AND l.group_id = $1
+         AND l.date BETWEEN $2::date AND $3::date`,
+      [group_id, deleteStart, deleteEnd]
+    );
+
+    const deletedLessons = await pool.query(
+      `DELETE FROM lessons
+       WHERE group_id = $1
+         AND date BETWEEN $2::date AND $3::date`,
+      [group_id, deleteStart, deleteEnd]
+    );
+
+    await pool.query('COMMIT');
+    transactionStarted = false;
+
+    const autoGen = await autoGenerateLessonsForMonth({
+      groupId: Number(group_id),
+      month: selectedMonth,
+      createdBy: userId,
+      fromDate: deleteStart
+    });
+
+    const lessonsAfter = await pool.query(
+      `SELECT COUNT(*)::int as lesson_count
+       FROM lessons
+       WHERE group_id = $1
+         AND TO_CHAR(date, 'YYYY-MM') = $2`,
+      [group_id, selectedMonth]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Davomat lessonlari qayta yaratildi',
+      data: {
+        group_id: Number(group_id),
+        month: selectedMonth,
+        delete_range: {
+          from: deleteStart,
+          to: deleteEnd
+        },
+        deleted_lessons_count: deletedLessons.rowCount,
+        deleted_attendance_count: deletedAttendance.rowCount,
+        generated_lessons_count: autoGen.generated,
+        current_month_lessons_count: lessonsAfter.rows[0].lesson_count,
+        mode: 'delete_then_schedule_regenerate_max_12'
+      }
+    });
+  } catch (error) {
+    if (transactionStarted) {
+      await pool.query('ROLLBACK');
+    }
+    console.error('Lesson regenerate qilishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
     });
   }
 };
@@ -1411,6 +1580,7 @@ module.exports = {
   getMonthlyAttendance: exports.getMonthlyAttendance,
   updateStudentMonthlyStatus: exports.updateStudentMonthlyStatus,
   getGroupLessons: exports.getGroupLessons,
+  regenerateGroupLessons: exports.regenerateGroupLessons,
   updateLessonDate: exports.updateLessonDate,
   deleteLesson: exports.deleteLesson,
   exportMonthlyAttendance: exports.exportMonthlyAttendance
