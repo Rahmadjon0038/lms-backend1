@@ -53,6 +53,61 @@ const getMonthStartEnd = (month) => {
 const formatDateUtc = (dateObj) => dateObj.toISOString().slice(0, 10);
 const isValidMonth = (value) => /^\d{4}-\d{2}$/.test(String(value || ''));
 const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+const isValidTime = (value) => /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(value || ''));
+
+const normalizeTimeValue = (value, fallback = '00:00:00') => {
+  if (!value) return fallback;
+  const raw = String(value).trim();
+  if (!isValidTime(raw)) return fallback;
+  return raw.length === 5 ? `${raw}:00` : raw;
+};
+
+const parseScheduleTimeRange = (schedule) => {
+  const raw = String(schedule?.time || '').trim();
+  if (!raw) {
+    return { start_time: '00:00:00', end_time: null };
+  }
+
+  // Qo'llab-quvvatlanadi:
+  // - 10:00-12:00
+  // - 10:00 - 12:00
+  // - 10.00-12.00
+  // - 10:00 (faqat boshlanish vaqti)
+  const normalized = raw
+    .replace(/[–—]/g, '-')
+    .replace(/\./g, ':')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const rangeMatch = normalized.match(/^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)$/);
+  if (rangeMatch) {
+    return {
+      start_time: `${rangeMatch[1]}:${rangeMatch[2]}:00`,
+      end_time: `${rangeMatch[3]}:${rangeMatch[4]}:00`
+    };
+  }
+
+  const singleMatch = normalized.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (singleMatch) {
+    return {
+      start_time: `${singleMatch[1]}:${singleMatch[2]}:00`,
+      end_time: null
+    };
+  }
+
+  return { start_time: '00:00:00', end_time: null };
+};
+
+const getDefaultLessonStatusForDate = (dateStr) => {
+  const today = new Date().toISOString().slice(0, 10);
+  return String(dateStr) > today ? 'not_started' : 'open';
+};
+
+const getShiftFromTime = (timeValue) => {
+  const normalized = normalizeTimeValue(timeValue);
+  const hour = parseInt(normalized.slice(0, 2), 10);
+  return Number.isNaN(hour) ? 'morning' : (hour < 13 ? 'morning' : 'evening');
+};
 
 const resolveDefaultMonthlyStatus = async (studentId, groupId) => {
   const lastMonthStatus = await pool.query(
@@ -131,7 +186,7 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   let groupResult;
   try {
     groupResult = await pool.query(
-      `SELECT id, schedule, class_start_date, start_date, schedule_effective_from
+      `SELECT id, schedule, class_start_date, start_date, schedule_effective_from, teacher_id, subject_id, room_id
        FROM groups
        WHERE id = $1`,
       [groupId]
@@ -140,7 +195,7 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
     // Eski sxemada schedule_effective_from bo'lmasa ham davom etamiz.
     if (error?.code === '42703') {
       groupResult = await pool.query(
-        `SELECT id, schedule, class_start_date, start_date
+        `SELECT id, schedule, class_start_date, start_date, teacher_id, subject_id, room_id
          FROM groups
          WHERE id = $1`,
         [groupId]
@@ -156,6 +211,7 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
 
   const group = groupResult.rows[0];
   const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
+  const slot = parseScheduleTimeRange(group.schedule);
   if (weekdays.length === 0) {
     return { generated: 0, skipped: 'no_schedule_days' };
   }
@@ -188,15 +244,15 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   }
 
   const existingLessons = await pool.query(
-    `SELECT TO_CHAR(date, 'YYYY-MM-DD') as lesson_date
+    `SELECT TO_CHAR(date, 'YYYY-MM-DD') as lesson_date, TO_CHAR(start_time, 'HH24:MI:SS') as start_time
      FROM lessons
      WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2`,
     [groupId, month]
   );
-  const existingDates = new Set(existingLessons.rows.map((r) => r.lesson_date));
+  const existingSlots = new Set(existingLessons.rows.map((r) => `${r.lesson_date}|${normalizeTimeValue(r.start_time)}`));
 
   const monthlyCap = 12;
-  if (existingDates.size >= monthlyCap) {
+  if (existingLessons.rows.length >= monthlyCap) {
     return { generated: 0, skipped: 'cap_reached' };
   }
 
@@ -205,22 +261,40 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   while (cursor <= monthEnd) {
     if (weekdays.includes(cursor.getUTCDay())) {
       const d = formatDateUtc(cursor);
-      if (!existingDates.has(d)) {
+      const key = `${d}|${slot.start_time}`;
+      if (!existingSlots.has(key)) {
         candidates.push(d);
       }
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
-  const toCreate = candidates.slice(0, Math.max(monthlyCap - existingDates.size, 0));
+  const toCreate = candidates.slice(0, Math.max(monthlyCap - existingLessons.rows.length, 0));
   let generated = 0;
   for (const lessonDate of toCreate) {
     const inserted = await pool.query(
-      `INSERT INTO lessons (group_id, date, created_by)
-       VALUES ($1, $2::date, $3)
+      `INSERT INTO lessons (group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by)
+       VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
+       ON CONFLICT (group_id, date, start_time) DO NOTHING
        RETURNING id`,
-      [groupId, lessonDate, createdBy]
+      [
+        groupId,
+        group.teacher_id || createdBy,
+        group.subject_id || null,
+        group.room_id || null,
+        lessonDate,
+        slot.start_time,
+        slot.end_time,
+        getDefaultLessonStatusForDate(lessonDate),
+        createdBy
+      ]
     );
+
+    // Parallel so'rov bo'lsa, conflict normal holat - shunchaki o'tamiz.
+    if (inserted.rows.length === 0) {
+      continue;
+    }
+
     const lessonId = inserted.rows[0].id;
     await syncLessonAttendanceForDate(lessonId, groupId, lessonDate);
     generated++;
@@ -229,14 +303,270 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   return { generated, skipped: null };
 };
 
+const ensureGeneratedLessonsForScope = async ({ month, createdBy, teacherId = null }) => {
+  const params = [];
+  let teacherFilter = '';
+  if (teacherId) {
+    teacherFilter = ` AND g.teacher_id = $1`;
+    params.push(teacherId);
+  }
+
+  const groupsResult = await pool.query(
+    `SELECT g.id
+     FROM groups g
+     WHERE g.class_status = 'started'
+       AND g.status IN ('active', 'blocked')
+       AND g.teacher_id IS NOT NULL
+       ${teacherFilter}`,
+    params
+  );
+
+  let generated = 0;
+  for (const row of groupsResult.rows) {
+    const auto = await autoGenerateLessonsForMonth({
+      groupId: row.id,
+      month,
+      createdBy
+    });
+    generated += auto.generated || 0;
+  }
+
+  return { groups_count: groupsResult.rows.length, generated_lessons: generated };
+};
+
+const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, afterData }) => {
+  try {
+    await pool.query(
+      `INSERT INTO lesson_audit_logs (lesson_id, changed_by, action, before_data, after_data)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+      [lessonId, changedBy, action, JSON.stringify(beforeData || {}), JSON.stringify(afterData || {})]
+    );
+  } catch (error) {
+    console.error('Lesson audit log yozishda xatolik:', error.message);
+  }
+};
+
 // ============================================================================
 // 1. GURUHLAR RO'YXATI (Attendance uchun)
 // ============================================================================
+exports.getTeachersAttendanceList = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         u.id as teacher_id,
+         u.name,
+         u.surname,
+         CONCAT(u.name, ' ', u.surname) as full_name,
+         COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.name), NULL), ARRAY[]::text[]) as subjects,
+         COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT r.room_number::text), NULL), ARRAY[]::text[]) as room_numbers,
+         COUNT(DISTINCT g.id) as groups_count
+       FROM users u
+       LEFT JOIN groups g ON g.teacher_id = u.id
+         AND g.class_status = 'started'
+         AND g.status IN ('active', 'blocked')
+       LEFT JOIN subjects s ON s.id = g.subject_id
+       LEFT JOIN rooms r ON r.id = g.room_id
+       WHERE u.role = 'teacher'
+       GROUP BY u.id, u.name, u.surname
+       HAVING COUNT(DISTINCT g.id) > 0
+       ORDER BY u.name, u.surname`
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('Teacher ro\'yxatini olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 2. TEACHER BO'YICHA GURUHLAR RO'YXATI
+// ============================================================================
+exports.getTeacherGroupsForAttendance = async (req, res) => {
+  const { teacher_id } = req.params;
+  const { date, day, shift } = req.query;
+
+  try {
+    const teacherIdNum = Number(teacher_id);
+    if (!Number.isInteger(teacherIdNum) || teacherIdNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'teacher_id noto\'g\'ri'
+      });
+    }
+
+    const teacherResult = await pool.query(
+      `SELECT id, name, surname
+       FROM users
+       WHERE id = $1 AND role = 'teacher'`,
+      [teacherIdNum]
+    );
+
+    if (teacherResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher topilmadi'
+      });
+    }
+
+    const groupsResult = await pool.query(
+      `SELECT
+         g.id as group_id,
+         g.name as group_name,
+         g.status,
+         g.class_status,
+         g.price,
+         TO_CHAR(g.class_start_date, 'YYYY-MM-DD') as class_start_date,
+         g.schedule,
+         s.id as subject_id,
+         s.name as subject_name,
+         r.id as room_id,
+         r.room_number,
+         COUNT(DISTINCT sg.student_id) as students_count
+       FROM groups g
+       LEFT JOIN subjects s ON s.id = g.subject_id
+       LEFT JOIN rooms r ON r.id = g.room_id
+       LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
+       WHERE g.teacher_id = $1
+         AND g.class_status = 'started'
+         AND g.status IN ('active', 'blocked')
+       GROUP BY g.id, s.id, s.name, r.id, r.room_number
+       ORDER BY g.name`,
+      [teacherIdNum]
+    );
+
+    let targetWeekday = null;
+    if (date) {
+      if (!isValidDate(date)) {
+        return res.status(400).json({
+          success: false,
+          message: "date YYYY-MM-DD formatida bo'lishi kerak"
+        });
+      }
+      targetWeekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+    } else if (day) {
+      const normalizedDay = String(day).trim().toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(WEEKDAY_MAP, normalizedDay)) {
+        return res.status(400).json({
+          success: false,
+          message: "day noto'g'ri (masalan: dushanba/chorshanba yoki monday/wednesday)"
+        });
+      }
+      targetWeekday = WEEKDAY_MAP[normalizedDay];
+    }
+
+    let normalizedShift = null;
+    if (shift) {
+      const shiftRaw = String(shift).trim().toLowerCase();
+      if (shiftRaw === 'morning' || shiftRaw === 'kunduzgi') {
+        normalizedShift = 'morning';
+      } else if (shiftRaw === 'evening' || shiftRaw === 'kechki') {
+        normalizedShift = 'evening';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "shift faqat kunduzgi/kechki (yoki morning/evening) bo'lishi mumkin"
+        });
+      }
+    }
+
+    const filteredGroups = groupsResult.rows.filter((group) => {
+      let dayOk = true;
+      let shiftOk = true;
+
+      if (targetWeekday !== null) {
+        const rawDays = Array.isArray(group.schedule?.days) ? group.schedule.days : [];
+        const groupWeekdays = rawDays
+          .map((d) => String(d || '').trim().toLowerCase())
+          .map((d) => WEEKDAY_MAP[d])
+          .filter((d) => Number.isInteger(d));
+        dayOk = groupWeekdays.includes(targetWeekday);
+      }
+
+      if (normalizedShift) {
+        const slot = parseScheduleTimeRange(group.schedule);
+        const groupShift = getShiftFromTime(slot.start_time);
+        shiftOk = groupShift === normalizedShift;
+      }
+
+      return dayOk && shiftOk;
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        teacher: {
+          teacher_id: teacherResult.rows[0].id,
+          full_name: `${teacherResult.rows[0].name} ${teacherResult.rows[0].surname}`
+        },
+        filters: {
+          date: date || null,
+          day: day || null,
+          shift: normalizedShift || null
+        },
+        groups: filteredGroups
+      }
+    });
+  } catch (error) {
+    console.error('Teacher guruhlarini olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 3. GURUHLAR RO'YXATI (Attendance uchun)
+// ============================================================================
 exports.getGroupsForAttendance = async (req, res) => {
   const { role, id: userId } = req.user;
-  const { teacher_id, subject_id, status_filter = 'all' } = req.query;
+  const { teacher_id, subject_id, status_filter = 'all', date, day, shift } = req.query;
   
   try {
+    let targetWeekday = null;
+    if (date) {
+      if (!isValidDate(date)) {
+        return res.status(400).json({
+          success: false,
+          message: "date YYYY-MM-DD formatida bo'lishi kerak"
+        });
+      }
+      targetWeekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+    } else if (day) {
+      const normalizedDay = String(day).trim().toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(WEEKDAY_MAP, normalizedDay)) {
+        return res.status(400).json({
+          success: false,
+          message: "day noto'g'ri (masalan: dushanba/chorshanba yoki monday/wednesday)"
+        });
+      }
+      targetWeekday = WEEKDAY_MAP[normalizedDay];
+    }
+
+    let normalizedShift = null;
+    if (shift) {
+      const shiftRaw = String(shift).trim().toLowerCase();
+      if (shiftRaw === 'morning' || shiftRaw === 'kunduzgi') {
+        normalizedShift = 'morning';
+      } else if (shiftRaw === 'evening' || shiftRaw === 'kechki') {
+        normalizedShift = 'evening';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "shift faqat kunduzgi/kechki (yoki morning/evening) bo'lishi mumkin"
+        });
+      }
+    }
+
     let query = `
       SELECT 
         g.id,
@@ -277,7 +607,7 @@ exports.getGroupsForAttendance = async (req, res) => {
     }
     
     // Admin uchun teacher filter
-    if (teacher_id && role === 'admin') {
+    if (teacher_id && (role === 'admin' || role === 'super_admin')) {
       query += ` AND g.teacher_id = $${paramIndex}`;
       params.push(teacher_id);
       paramIndex++;
@@ -295,10 +625,37 @@ exports.getGroupsForAttendance = async (req, res) => {
                ORDER BY g.name`;
     
     const result = await pool.query(query, params);
+
+    const filteredGroups = result.rows.filter((group) => {
+      let dayOk = true;
+      let shiftOk = true;
+
+      if (targetWeekday !== null) {
+        const rawDays = Array.isArray(group.schedule?.days) ? group.schedule.days : [];
+        const groupWeekdays = rawDays
+          .map((d) => String(d || '').trim().toLowerCase())
+          .map((d) => WEEKDAY_MAP[d])
+          .filter((d) => Number.isInteger(d));
+        dayOk = groupWeekdays.includes(targetWeekday);
+      }
+
+      if (normalizedShift) {
+        const slot = parseScheduleTimeRange(group.schedule);
+        const groupShift = getShiftFromTime(slot.start_time);
+        shiftOk = groupShift === normalizedShift;
+      }
+
+      return dayOk && shiftOk;
+    });
     
     res.json({
       success: true,
-      data: result.rows
+      data: filteredGroups,
+      filters: {
+        date: date || null,
+        day: day || null,
+        shift: normalizedShift || null
+      }
     });
     
   } catch (error) {
@@ -315,8 +672,8 @@ exports.getGroupsForAttendance = async (req, res) => {
 // 2. DARS YARATISH (OXIRGI OY STATUSINI TEKSHIRISH BILAN)
 // ============================================================================
 exports.createLesson = async (req, res) => {
-  const { group_id, date } = req.body;
-  const { id: userId } = req.user;
+  const { group_id, date, teacher_id, subject_id, room_id, start_time, end_time, status } = req.body;
+  const { id: userId, role } = req.user;
   
   try {
     if (!group_id || !date) {
@@ -333,23 +690,76 @@ exports.createLesson = async (req, res) => {
       });
     }
 
-    // Shu sana uchun dars borligini tekshirish
+    const requestedStartTime = normalizeTimeValue(start_time);
+    const requestedEndTime = end_time ? normalizeTimeValue(end_time, null) : null;
+    const allowedLessonStatuses = ['not_started', 'open', 'closed'];
+    const lessonStatus = status && allowedLessonStatuses.includes(status)
+      ? status
+      : getDefaultLessonStatusForDate(date);
+
+    const groupResult = await pool.query(
+      `SELECT id, teacher_id, subject_id, room_id
+       FROM groups
+       WHERE id = $1`,
+      [group_id]
+    );
+
+    if (groupResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+
+    const group = groupResult.rows[0];
+    if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan guruhga lesson yarata olasiz'
+      });
+    }
+
+    const finalTeacherId = teacher_id || group.teacher_id || userId;
+    const finalSubjectId = subject_id || group.subject_id || null;
+    const finalRoomId = room_id || group.room_id || null;
+
+    if (role === 'teacher' && String(finalTeacherId || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Teacher faqat o\'ziga tegishli lesson yaratishi mumkin'
+      });
+    }
+
+    // Shu sana + vaqt uchun dars borligini tekshirish
     const existingLesson = await pool.query(
-      'SELECT id FROM lessons WHERE group_id = $1 AND date = $2',
-      [group_id, date]
+      'SELECT id FROM lessons WHERE group_id = $1 AND date = $2 AND start_time = $3::time',
+      [group_id, date, requestedStartTime]
     );
 
     if (existingLesson.rows.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Shu sana uchun dars allaqachon yaratilgan'
+        message: 'Shu sana/vaqt uchun dars allaqachon yaratilgan'
       });
     }
 
     // Yangi dars yaratish
     const newLesson = await pool.query(
-      'INSERT INTO lessons (group_id, date, created_by) VALUES ($1, $2::date, $3) RETURNING id, date',
-      [group_id, date, userId]
+      `INSERT INTO lessons (
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
+       RETURNING id, date, teacher_id, subject_id, room_id, start_time, end_time, status`,
+      [
+        group_id,
+        finalTeacherId,
+        finalSubjectId,
+        finalRoomId,
+        date,
+        requestedStartTime,
+        requestedEndTime,
+        lessonStatus,
+        userId
+      ]
     );
     const lesson_id = newLesson.rows[0].id;
     const syncResult = await syncLessonAttendanceForDate(lesson_id, group_id, date);
@@ -361,6 +771,12 @@ exports.createLesson = async (req, res) => {
         lesson_id,
         group_id: parseInt(group_id),
         date: newLesson.rows[0].date,
+        teacher_id: newLesson.rows[0].teacher_id,
+        subject_id: newLesson.rows[0].subject_id,
+        room_id: newLesson.rows[0].room_id,
+        start_time: newLesson.rows[0].start_time,
+        end_time: newLesson.rows[0].end_time,
+        status: newLesson.rows[0].status,
         students_count: syncResult.eligibleCount
       }
     });
@@ -380,11 +796,15 @@ exports.createLesson = async (req, res) => {
 // ============================================================================
 exports.getLessonStudents = async (req, res) => {
   const { lesson_id } = req.params;
+  const { role, id: userId } = req.user;
   
   try {
     // Dars ma'lumotlarini olish
     const lessonInfo = await pool.query(
-      `SELECT group_id, TO_CHAR(date, 'YYYY-MM') as month FROM lessons WHERE id = $1`,
+      `SELECT l.group_id, TO_CHAR(l.date, 'YYYY-MM') as month, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
+       FROM lessons l
+       LEFT JOIN groups g ON g.id = l.group_id
+       WHERE l.id = $1`,
       [lesson_id]
     );
 
@@ -395,7 +815,14 @@ exports.getLessonStudents = async (req, res) => {
       });
     }
 
-    const { group_id, month } = lessonInfo.rows[0];
+    const { group_id, month, teacher_id } = lessonInfo.rows[0];
+
+    if (role === 'teacher' && String(teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan lessonni ko\'ra olasiz'
+      });
+    }
 
     // Dars sanasini olish (birinchi bo'lib)
     const lessonDate = await pool.query(
@@ -411,6 +838,9 @@ exports.getLessonStudents = async (req, res) => {
        USING lessons l
        WHERE a.lesson_id = l.id
          AND a.lesson_id = $1
+         AND l.status IN ('not_started', 'open')
+         AND COALESCE(a.is_marked, false) = false
+         AND a.updated_at = a.created_at
          AND NOT EXISTS (
            SELECT 1
            FROM student_groups sg
@@ -494,6 +924,8 @@ exports.getLessonStudents = async (req, res) => {
       `SELECT 
          a.id as attendance_id,
          a.student_id,
+         u.name,
+         u.surname,
          u.name || ' ' || u.surname as student_name,
          u.phone,
          CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END as status,
@@ -534,12 +966,43 @@ exports.getLessonStudents = async (req, res) => {
 exports.markAttendance = async (req, res) => {
   const { lesson_id } = req.params;
   const { attendance_records } = req.body; // [{attendance_id, status}]
+  const { role, id: userId } = req.user;
   
   try {
     if (!Array.isArray(attendance_records) || attendance_records.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'attendance_records majburiy'
+      });
+    }
+
+    const lessonAccess = await pool.query(
+      `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id, l.status
+       FROM lessons l
+       LEFT JOIN groups g ON g.id = l.group_id
+       WHERE l.id = $1`,
+      [lesson_id]
+    );
+
+    if (lessonAccess.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Dars topilmadi'
+      });
+    }
+
+    const lesson = lessonAccess.rows[0];
+    if (role === 'teacher' && String(lesson.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan lesson davomatini belgilay olasiz'
+      });
+    }
+
+    if (role === 'teacher' && lesson.status === 'closed') {
+      return res.status(409).json({
+        success: false,
+        message: 'Yopilgan (closed) lesson uchun teacher davomatni o\'zgartira olmaydi'
       });
     }
 
@@ -620,6 +1083,7 @@ exports.markAttendance = async (req, res) => {
 exports.getMonthlyAttendance = async (req, res) => {
   const { group_id } = req.params;
   const { month } = req.query; // YYYY-MM
+  const { role, id: userId } = req.user;
   
   try {
     const selectedMonth = month || new Date().toISOString().slice(0, 7);
@@ -629,6 +1093,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       `SELECT 
          g.name as group_name,
          g.price as group_price,
+         g.teacher_id,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
          t.name as teacher_first_name,
@@ -648,6 +1113,12 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     const group = groupInfo.rows[0];
+    if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizning guruhingiz davomati ko\'ra olasiz'
+      });
+    }
 
     // Oyning barcha darslarini olish
     const lessons = await pool.query(
@@ -825,6 +1296,64 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
         success: false,
         message: 'Hech qanday attendance topilmadi'
       });
+    }
+
+    // Monthly status o'zgartirilganda ayrim eski yozuvlarda kelmadi + is_marked=true
+    // holati qolib ketishi mumkin. Open/not_started lessonlar uchun buni tozalaymiz.
+    try {
+      let normalizeQuery;
+      let normalizeParams;
+
+      if (from_month) {
+        normalizeQuery = `
+          UPDATE attendance a
+          SET is_marked = false
+          FROM lessons l
+          WHERE a.lesson_id = l.id
+            AND a.student_id = $1
+            AND a.group_id = $2
+            AND a.month >= $3
+            AND a.status = 'kelmadi'
+            AND a.is_marked = true
+            AND l.status IN ('not_started', 'open')
+        `;
+        normalizeParams = [student_id, group_id, from_month];
+      } else if (months && Array.isArray(months) && months.length > 0) {
+        const monthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
+        normalizeQuery = `
+          UPDATE attendance a
+          SET is_marked = false
+          FROM lessons l
+          WHERE a.lesson_id = l.id
+            AND a.student_id = $1
+            AND a.group_id = $2
+            AND a.month IN (${monthPlaceholders})
+            AND a.status = 'kelmadi'
+            AND a.is_marked = true
+            AND l.status IN ('not_started', 'open')
+        `;
+        normalizeParams = [student_id, group_id, ...months];
+      } else if (month) {
+        normalizeQuery = `
+          UPDATE attendance a
+          SET is_marked = false
+          FROM lessons l
+          WHERE a.lesson_id = l.id
+            AND a.student_id = $1
+            AND a.group_id = $2
+            AND a.month = $3
+            AND a.status = 'kelmadi'
+            AND a.is_marked = true
+            AND l.status IN ('not_started', 'open')
+        `;
+        normalizeParams = [student_id, group_id, month];
+      }
+
+      if (normalizeQuery) {
+        await pool.query(normalizeQuery, normalizeParams);
+      }
+    } catch (normalizeError) {
+      console.error('Attendance normalize xatoligi:', normalizeError);
     }
 
     // YANGI: Payment jadvalini ham yangilash
@@ -1018,9 +1547,16 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
 exports.getGroupLessons = async (req, res) => {
   const { group_id } = req.params;
   const { month } = req.query;
-  const { id: userId } = req.user;
+  const { role, id: userId } = req.user;
   
   try {
+    if (month && !isValidMonth(month)) {
+      return res.status(400).json({
+        success: false,
+        message: "month YYYY-MM formatida bo'lishi kerak"
+      });
+    }
+
     const selectedMonth = month || new Date().toISOString().slice(0, 7);
 
     // Avval guruh ma'lumotlarini olamiz
@@ -1029,6 +1565,7 @@ exports.getGroupLessons = async (req, res) => {
          g.id,
          g.name as group_name,
          g.price as group_price,
+         g.schedule,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
          t.name as teacher_first_name,
@@ -1049,6 +1586,12 @@ exports.getGroupLessons = async (req, res) => {
     }
 
     const group = groupInfo.rows[0];
+    if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizning guruhingiz lessonlarini ko\'ra olasiz'
+      });
+    }
 
     // Attendance sahifasiga kirilganda tanlangan oy uchun schedule asosida
     // darslarni avtomatik yaratamiz (oyiga maksimal 12 ta).
@@ -1058,20 +1601,84 @@ exports.getGroupLessons = async (req, res) => {
       createdBy: userId
     });
 
+    // Auto-yaratilgan, lekin noto'g'ri "marked" bo'lib qolgan yozuvlarni tozalash:
+    // faqat qo'lda o'zgartirilmagan (updated_at = created_at) va "kelmadi" holatlar.
+    await pool.query(
+      `UPDATE attendance a
+       SET is_marked = false
+       FROM lessons l
+       WHERE a.lesson_id = l.id
+         AND l.group_id = $1
+         AND TO_CHAR(l.date, 'YYYY-MM') = $2
+         AND l.status IN ('not_started', 'open')
+         AND a.is_marked = true
+         AND a.status = 'kelmadi'
+         AND a.updated_at = a.created_at`,
+      [group_id, selectedMonth]
+    );
+
+    // Eski darslar 00:00 bo'lib qolgan bo'lsa, guruh schedule vaqti bilan to'ldiramiz.
+    const slot = parseScheduleTimeRange(group.schedule);
+    if (slot.start_time !== '00:00:00') {
+      await pool.query(
+        `UPDATE lessons l
+         SET start_time = $1::time,
+             end_time = COALESCE(end_time, $2::time)
+         WHERE l.group_id = $3
+           AND TO_CHAR(l.date, 'YYYY-MM') = $4
+           AND l.start_time = '00:00:00'::time
+           AND NOT EXISTS (
+             SELECT 1
+             FROM lessons l2
+             WHERE l2.group_id = l.group_id
+               AND l2.date = l.date
+               AND l2.start_time = $1::time
+               AND l2.id <> l.id
+           )`,
+        [slot.start_time, slot.end_time, group_id, selectedMonth]
+      );
+    }
+
     const lessons = await pool.query(
       `SELECT 
          l.id,
          TO_CHAR(l.date, 'YYYY-MM-DD') as date,
          TO_CHAR(l.date, 'DD.MM.YYYY') as formatted_date,
+         TO_CHAR(l.start_time, 'HH24:MI') as start_time,
+         CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
+         l.status as lesson_status,
+         l.teacher_id,
+         l.subject_id,
+         l.room_id,
+         s2.name as lesson_subject_name,
+         r2.room_number as lesson_room_number,
          COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END) as total_students,
+         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
+         COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
          COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as present_count,
          COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as absent_count,
-         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count,
+         CASE
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN 'not_marked'
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) = 0 THEN 'not_marked'
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+                < COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN 'partial'
+           WHEN l.status = 'closed' THEN 'completed'
+           ELSE 'marked'
+         END as attendance_state,
+         CASE
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+                = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
+           ELSE false
+         END as attendance_completed
        FROM lessons l
        LEFT JOIN attendance a ON l.id = a.lesson_id
+       LEFT JOIN subjects s2 ON l.subject_id = s2.id
+       LEFT JOIN rooms r2 ON l.room_id = r2.id
        WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
-       GROUP BY l.id, l.date
-       ORDER BY l.date DESC`,
+       GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number
+       ORDER BY l.date DESC, l.start_time ASC`,
       [group_id, selectedMonth]
     );
 
@@ -1101,6 +1708,288 @@ exports.getGroupLessons = async (req, res) => {
   } catch (error) {
     console.error('Darslarni olishda xatolik:', error);
     res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 7.0 TEACHER: FAQAT O'Z LESSONLARI (kunlik/oylik)
+// ============================================================================
+exports.getMyLessons = async (req, res) => {
+  const { role, id: userId } = req.user;
+  const { date, month } = req.query;
+
+  try {
+    if (role !== 'teacher') {
+      return res.status(403).json({
+        success: false,
+        message: 'Bu endpoint faqat teacher uchun'
+      });
+    }
+
+    if (date && !isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+    if (month && !isValidMonth(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'month YYYY-MM formatida bo\'lishi kerak'
+      });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const selectedDate = month ? null : (date || today);
+    const selectedMonth = month || selectedDate.slice(0, 7);
+
+    const autoGen = await ensureGeneratedLessonsForScope({
+      month: selectedMonth,
+      createdBy: userId,
+      teacherId: userId
+    });
+
+    const params = [userId];
+    let filterQuery = '';
+    if (selectedDate) {
+      filterQuery = ` AND l.date = $2::date`;
+      params.push(selectedDate);
+    } else {
+      filterQuery = ` AND TO_CHAR(l.date, 'YYYY-MM') = $2`;
+      params.push(selectedMonth);
+    }
+
+    const lessonsResult = await pool.query(
+      `SELECT
+         l.id as lesson_id,
+         l.group_id,
+         g.name as group_name,
+         l.teacher_id,
+         l.subject_id,
+         COALESCE(s.name, gs.name) as subject_name,
+         l.room_id,
+         r.room_number,
+         TO_CHAR(l.date, 'YYYY-MM-DD') as date,
+         TO_CHAR(l.start_time, 'HH24:MI') as start_time,
+         CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
+         l.status as lesson_status,
+         COUNT(a.id) as attendance_rows,
+         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students,
+         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as marked_students
+       FROM lessons l
+       JOIN groups g ON g.id = l.group_id
+       LEFT JOIN subjects s ON s.id = l.subject_id
+       LEFT JOIN subjects gs ON gs.id = g.subject_id
+       LEFT JOIN rooms r ON r.id = l.room_id
+       LEFT JOIN attendance a ON a.lesson_id = l.id
+       WHERE l.teacher_id = $1
+         ${filterQuery}
+       GROUP BY l.id, g.name, s.name, gs.name, r.room_number
+       ORDER BY l.date ASC, l.start_time ASC`,
+      params
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        teacher_id: userId,
+        ...(selectedDate ? { date: selectedDate } : { month: selectedMonth }),
+        lessons: lessonsResult.rows,
+        auto_generated: autoGen
+      }
+    });
+  } catch (error) {
+    console.error('My lessons olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 7.A ADMIN: KUNLIK TEACHERLAR RO'YXATI (date + shift)
+// ============================================================================
+exports.getAdminTeachersAttendance = async (req, res) => {
+  const { id: userId } = req.user;
+  const { date, shift } = req.query;
+
+  try {
+    const selectedDate = date || new Date().toISOString().slice(0, 10);
+    if (!isValidDate(selectedDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    const allowedShifts = ['morning', 'evening'];
+    let selectedShift = shift;
+    if (!selectedShift) {
+      const now = new Date();
+      const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
+      selectedShift = getShiftFromTime(nowTime);
+    }
+    if (!allowedShifts.includes(selectedShift)) {
+      return res.status(400).json({
+        success: false,
+        message: 'shift faqat morning yoki evening bo\'lishi mumkin'
+      });
+    }
+
+    await ensureGeneratedLessonsForScope({
+      month: selectedDate.slice(0, 7),
+      createdBy: userId
+    });
+
+    const shiftSql = selectedShift === 'morning'
+      ? `AND l.start_time < '13:00:00'::time`
+      : `AND l.start_time >= '13:00:00'::time`;
+
+    const teachers = await pool.query(
+      `SELECT
+         u.id as teacher_id,
+         CONCAT(u.name, ' ', u.surname) as full_name,
+         COALESCE(
+           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(s.name, gs.name)), NULL),
+           ARRAY[]::text[]
+         ) as subjects_taught,
+         COUNT(l.id) as lessons_count,
+         COUNT(CASE WHEN l.status = 'not_started' THEN 1 END) as not_started_count,
+         COUNT(CASE WHEN l.status = 'open' THEN 1 END) as open_count,
+         COUNT(CASE WHEN l.status = 'closed' THEN 1 END) as closed_count
+       FROM users u
+       LEFT JOIN lessons l ON l.teacher_id = u.id
+         AND l.date = $1::date
+         ${shiftSql}
+       LEFT JOIN groups g ON g.id = l.group_id
+       LEFT JOIN subjects s ON s.id = l.subject_id
+       LEFT JOIN subjects gs ON gs.id = g.subject_id
+       WHERE u.role = 'teacher'
+       GROUP BY u.id, u.name, u.surname
+       HAVING COUNT(l.id) > 0
+       ORDER BY full_name`,
+      [selectedDate]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        date: selectedDate,
+        shift: selectedShift,
+        teachers: teachers.rows
+      }
+    });
+  } catch (error) {
+    console.error('Admin teacherlar attendance ro\'yxati xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 7.B ADMIN: TANLANGAN TEACHER LESSONLARI (date + shift)
+// ============================================================================
+exports.getAdminTeacherLessons = async (req, res) => {
+  const { id: userId } = req.user;
+  const { teacher_id } = req.params;
+  const { date, shift } = req.query;
+
+  try {
+    const teacherIdNum = Number(teacher_id);
+    if (!Number.isInteger(teacherIdNum) || teacherIdNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'teacher_id noto\'g\'ri'
+      });
+    }
+
+    const selectedDate = date || new Date().toISOString().slice(0, 10);
+    if (!isValidDate(selectedDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    const allowedShifts = ['morning', 'evening'];
+    let selectedShift = shift;
+    if (!selectedShift) {
+      const now = new Date();
+      const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
+      selectedShift = getShiftFromTime(nowTime);
+    }
+    if (!allowedShifts.includes(selectedShift)) {
+      return res.status(400).json({
+        success: false,
+        message: 'shift faqat morning yoki evening bo\'lishi mumkin'
+      });
+    }
+
+    await ensureGeneratedLessonsForScope({
+      month: selectedDate.slice(0, 7),
+      createdBy: userId,
+      teacherId: teacherIdNum
+    });
+
+    const shiftSql = selectedShift === 'morning'
+      ? `AND l.start_time < '13:00:00'::time`
+      : `AND l.start_time >= '13:00:00'::time`;
+
+    const lessons = await pool.query(
+      `SELECT
+         l.id as lesson_id,
+         l.group_id,
+         g.name as group_name,
+         l.teacher_id,
+         CONCAT(t.name, ' ', t.surname) as teacher_name,
+         l.subject_id,
+         COALESCE(s.name, gs.name) as subject_name,
+         l.room_id,
+         r.room_number,
+         TO_CHAR(l.date, 'YYYY-MM-DD') as date,
+         TO_CHAR(l.start_time, 'HH24:MI') as start_time,
+         CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
+         l.status as lesson_status,
+         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students,
+         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as present_count,
+         COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) THEN 1 END) as absent_count,
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count
+       FROM lessons l
+       JOIN users t ON t.id = l.teacher_id
+       JOIN groups g ON g.id = l.group_id
+       LEFT JOIN subjects s ON s.id = l.subject_id
+       LEFT JOIN subjects gs ON gs.id = g.subject_id
+       LEFT JOIN rooms r ON r.id = l.room_id
+       LEFT JOIN attendance a ON a.lesson_id = l.id
+       WHERE l.teacher_id = $1
+         AND l.date = $2::date
+         ${shiftSql}
+       GROUP BY l.id, g.name, t.name, t.surname, s.name, gs.name, r.room_number
+       ORDER BY l.start_time ASC, l.id ASC`,
+      [teacherIdNum, selectedDate]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        teacher_id: teacherIdNum,
+        date: selectedDate,
+        shift: selectedShift,
+        lessons: lessons.rows
+      }
+    });
+  } catch (error) {
+    console.error('Admin teacher lessonlari xatoligi:', error);
+    return res.status(500).json({
       success: false,
       message: 'Server xatoligi',
       error: error.message
@@ -1250,7 +2139,7 @@ exports.updateLessonDate = async (req, res) => {
     }
 
     const lessonResult = await pool.query(
-      `SELECT l.id, l.group_id, l.date, g.teacher_id
+      `SELECT l.id, l.group_id, l.date, l.start_time, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
        FROM lessons l
        JOIN groups g ON g.id = l.group_id
        WHERE l.id = $1`,
@@ -1278,8 +2167,9 @@ exports.updateLessonDate = async (req, res) => {
        FROM lessons
        WHERE group_id = $1
          AND date = $2::date
+         AND start_time = $4::time
          AND id <> $3`,
-      [lesson.group_id, date, lesson_id]
+      [lesson.group_id, date, lesson_id, lesson.start_time]
     );
 
     if (duplicate.rows.length > 0) {
@@ -1320,12 +2210,333 @@ exports.updateLessonDate = async (req, res) => {
 };
 
 // ============================================================================
-// 8. DARSNI O'CHIRISH
+// 8.1 QO'LDA LESSON/SESSION YARATISH
+// ============================================================================
+exports.createManualLesson = async (req, res) => {
+  const {
+    group_id,
+    teacher_id,
+    subject_id,
+    room_id,
+    date,
+    start_time,
+    end_time,
+    status
+  } = req.body || {};
+  const { role, id: userId } = req.user;
+
+  try {
+    if (!group_id || !date || !start_time) {
+      return res.status(400).json({
+        success: false,
+        message: 'group_id, date, start_time majburiy'
+      });
+    }
+    if (!isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+    if (!isValidTime(start_time)) {
+      return res.status(400).json({
+        success: false,
+        message: "start_time HH:MM yoki HH:MM:SS formatida bo'lishi kerak"
+      });
+    }
+    if (end_time && !isValidTime(end_time)) {
+      return res.status(400).json({
+        success: false,
+        message: "end_time HH:MM yoki HH:MM:SS formatida bo'lishi kerak"
+      });
+    }
+
+    const groupResult = await pool.query(
+      `SELECT id, teacher_id, subject_id, room_id
+       FROM groups
+       WHERE id = $1`,
+      [group_id]
+    );
+    if (groupResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Guruh topilmadi'
+      });
+    }
+
+    const group = groupResult.rows[0];
+    if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan guruhga lesson yarata olasiz'
+      });
+    }
+
+    const finalTeacherId = teacher_id || group.teacher_id || userId;
+    if (role === 'teacher' && String(finalTeacherId || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Teacher faqat o\'z lessonini yaratishi mumkin'
+      });
+    }
+
+    const finalStatus = ['not_started', 'open', 'closed'].includes(status)
+      ? status
+      : getDefaultLessonStatusForDate(date);
+    const normalizedStartTime = normalizeTimeValue(start_time);
+    const normalizedEndTime = end_time ? normalizeTimeValue(end_time, null) : null;
+
+    const duplicate = await pool.query(
+      `SELECT id
+       FROM lessons
+       WHERE group_id = $1
+         AND date = $2::date
+         AND start_time = $3::time`,
+      [group_id, date, normalizedStartTime]
+    );
+    if (duplicate.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ushbu group/date/start_time uchun lesson allaqachon mavjud'
+      });
+    }
+
+    const created = await pool.query(
+      `INSERT INTO lessons (
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
+       RETURNING id, group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status`,
+      [
+        group_id,
+        finalTeacherId,
+        subject_id || group.subject_id || null,
+        room_id || group.room_id || null,
+        date,
+        normalizedStartTime,
+        normalizedEndTime,
+        finalStatus,
+        userId
+      ]
+    );
+
+    const lesson = created.rows[0];
+    await syncLessonAttendanceForDate(lesson.id, group_id, date);
+    await writeLessonAuditLog({
+      lessonId: lesson.id,
+      changedBy: userId,
+      action: 'manual_create',
+      beforeData: null,
+      afterData: lesson
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Manual lesson yaratildi',
+      data: lesson
+    });
+  } catch (error) {
+    console.error('Manual lesson yaratishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 8.2 LESSONNI PATCH QILISH (room/time/status)
+// ============================================================================
+exports.patchLesson = async (req, res) => {
+  const { lesson_id } = req.params;
+  const { role, id: userId } = req.user;
+  const { teacher_id, subject_id, room_id, date, start_time, end_time, status } = req.body || {};
+
+  try {
+    if (
+      teacher_id === undefined &&
+      subject_id === undefined &&
+      room_id === undefined &&
+      date === undefined &&
+      start_time === undefined &&
+      end_time === undefined &&
+      status === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Kamida bitta field yuborilishi kerak'
+      });
+    }
+
+    if (date !== undefined && !isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+    if (start_time !== undefined && !isValidTime(start_time)) {
+      return res.status(400).json({
+        success: false,
+        message: "start_time HH:MM yoki HH:MM:SS formatida bo'lishi kerak"
+      });
+    }
+    if (end_time !== undefined && end_time !== null && !isValidTime(end_time)) {
+      return res.status(400).json({
+        success: false,
+        message: "end_time HH:MM yoki HH:MM:SS formatida bo'lishi kerak"
+      });
+    }
+    if (status !== undefined && !['not_started', 'open', 'closed'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'status faqat not_started/open/closed bo\'lishi mumkin'
+      });
+    }
+
+    const lessonResult = await pool.query(
+      `SELECT l.*, COALESCE(l.teacher_id, g.teacher_id) as effective_teacher_id
+       FROM lessons l
+       LEFT JOIN groups g ON g.id = l.group_id
+       WHERE l.id = $1`,
+      [lesson_id]
+    );
+    if (lessonResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Dars topilmadi'
+      });
+    }
+
+    const current = lessonResult.rows[0];
+    if (role === 'teacher' && String(current.effective_teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan lessonni o\'zgartira olasiz'
+      });
+    }
+
+    const nextDate = date || formatDateUtc(new Date(current.date));
+    const nextStartTime = start_time !== undefined
+      ? normalizeTimeValue(start_time)
+      : normalizeTimeValue(current.start_time);
+    const nextEndTime = end_time === undefined
+      ? current.end_time
+      : (end_time === null ? null : normalizeTimeValue(end_time, null));
+    const nextStatus = status !== undefined ? status : current.status;
+    const nextTeacherId = teacher_id !== undefined ? teacher_id : current.teacher_id;
+    const nextSubjectId = subject_id !== undefined ? subject_id : current.subject_id;
+    const nextRoomId = room_id !== undefined ? room_id : current.room_id;
+
+    if (role === 'teacher' && teacher_id !== undefined && String(nextTeacherId || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Teacher lessonni boshqa teacherga o\'tkaza olmaydi'
+      });
+    }
+
+    const duplicate = await pool.query(
+      `SELECT id
+       FROM lessons
+       WHERE group_id = $1
+         AND date = $2::date
+         AND start_time = $3::time
+         AND id <> $4`,
+      [current.group_id, nextDate, nextStartTime, lesson_id]
+    );
+    if (duplicate.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ushbu group/date/start_time uchun boshqa lesson mavjud'
+      });
+    }
+
+    const updated = await pool.query(
+      `UPDATE lessons
+       SET teacher_id = $1,
+           subject_id = $2,
+           room_id = $3,
+           date = $4::date,
+           start_time = $5::time,
+           end_time = $6::time,
+           status = $7
+       WHERE id = $8
+       RETURNING *`,
+      [nextTeacherId, nextSubjectId, nextRoomId, nextDate, nextStartTime, nextEndTime, nextStatus, lesson_id]
+    );
+
+    if (nextDate !== formatDateUtc(new Date(current.date))) {
+      await syncLessonAttendanceForDate(current.id, current.group_id, nextDate);
+    }
+
+    await writeLessonAuditLog({
+      lessonId: current.id,
+      changedBy: userId,
+      action: 'patch_update',
+      beforeData: {
+        teacher_id: current.teacher_id,
+        subject_id: current.subject_id,
+        room_id: current.room_id,
+        date: formatDateUtc(new Date(current.date)),
+        start_time: normalizeTimeValue(current.start_time),
+        end_time: current.end_time,
+        status: current.status
+      },
+      afterData: {
+        teacher_id: nextTeacherId,
+        subject_id: nextSubjectId,
+        room_id: nextRoomId,
+        date: nextDate,
+        start_time: nextStartTime,
+        end_time: nextEndTime,
+        status: nextStatus
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Lesson yangilandi',
+      data: updated.rows[0]
+    });
+  } catch (error) {
+    console.error('Lesson patch xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 9. DARSNI O'CHIRISH
 // ============================================================================
 exports.deleteLesson = async (req, res) => {
   const { lesson_id } = req.params;
+  const { role, id: userId } = req.user;
   
   try {
+    const lessonResult = await pool.query(
+      `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
+       FROM lessons l
+       LEFT JOIN groups g ON g.id = l.group_id
+       WHERE l.id = $1`,
+      [lesson_id]
+    );
+
+    if (lessonResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Dars topilmadi'
+      });
+    }
+
+    if (role === 'teacher' && String(lessonResult.rows[0].teacher_id || '') !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Siz faqat o\'zingizga biriktirilgan lessonni o\'chira olasiz'
+      });
+    }
+
     await pool.query('BEGIN');
 
     // Attendance yozuvlarini o'chirish
@@ -1333,7 +2544,6 @@ exports.deleteLesson = async (req, res) => {
 
     // Darsni o'chirish
     const result = await pool.query('DELETE FROM lessons WHERE id = $1 RETURNING id', [lesson_id]);
-
     if (result.rowCount === 0) {
       await pool.query('ROLLBACK');
       return res.status(404).json({
@@ -1592,7 +2802,10 @@ exports.exportMonthlyAttendance = async (req, res) => {
 };
 
 module.exports = {
+  getTeachersAttendanceList: exports.getTeachersAttendanceList,
+  getTeacherGroupsForAttendance: exports.getTeacherGroupsForAttendance,
   getGroupsForAttendance: exports.getGroupsForAttendance,
+  getMyLessons: exports.getMyLessons,
   createLesson: exports.createLesson,
   getLessonStudents: exports.getLessonStudents,
   markAttendance: exports.markAttendance,
@@ -1601,6 +2814,7 @@ module.exports = {
   getGroupLessons: exports.getGroupLessons,
   regenerateGroupLessons: exports.regenerateGroupLessons,
   updateLessonDate: exports.updateLessonDate,
+  patchLesson: exports.patchLesson,
   deleteLesson: exports.deleteLesson,
   exportMonthlyAttendance: exports.exportMonthlyAttendance
 };

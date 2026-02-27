@@ -17,16 +17,127 @@ const createLessonsTable = async () => {
       CREATE TABLE IF NOT EXISTS lessons (
         id SERIAL PRIMARY KEY,
         group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+        room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
         date DATE NOT NULL,
+        start_time TIME NOT NULL DEFAULT '00:00:00',
+        end_time TIME,
+        status VARCHAR(20) NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started', 'open', 'closed')),
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(group_id, date)
+        UNIQUE(group_id, date, start_time)
       );
-      
-      CREATE INDEX IF NOT EXISTS idx_lessons_group_date ON lessons(group_id, date);
     `;
     
     await pool.query(createQuery);
+
+    // Mavjud sxema uchun minimal migratsiya.
+    await pool.query(`
+      ALTER TABLE lessons
+      ADD COLUMN IF NOT EXISTS teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS start_time TIME DEFAULT '00:00:00',
+      ADD COLUMN IF NOT EXISTS end_time TIME,
+      ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'not_started'
+        CHECK (status IN ('not_started', 'open', 'closed'));
+    `);
+
+    // Eski lessonlar uchun groupdan teacher/subject/room ni to'ldiramiz.
+    await pool.query(`
+      UPDATE lessons l
+      SET teacher_id = g.teacher_id
+      FROM groups g
+      WHERE l.group_id = g.id
+        AND l.teacher_id IS NULL
+    `);
+    await pool.query(`
+      UPDATE lessons l
+      SET subject_id = g.subject_id
+      FROM groups g
+      WHERE l.group_id = g.id
+        AND l.subject_id IS NULL
+    `);
+    await pool.query(`
+      UPDATE lessons l
+      SET room_id = g.room_id
+      FROM groups g
+      WHERE l.group_id = g.id
+        AND l.room_id IS NULL
+    `);
+
+    await pool.query(`
+      UPDATE lessons
+      SET status = CASE
+        WHEN status = 'closed' THEN 'closed'
+        WHEN date > CURRENT_DATE THEN 'not_started'
+        ELSE 'open'
+      END
+      WHERE status IS NULL
+    `);
+
+    await pool.query(`
+      UPDATE lessons
+      SET start_time = COALESCE(start_time, '00:00:00'::time)
+      WHERE start_time IS NULL
+    `);
+
+    await pool.query(`
+      ALTER TABLE lessons
+      ALTER COLUMN start_time SET DEFAULT '00:00:00',
+      ALTER COLUMN start_time SET NOT NULL,
+      ALTER COLUMN status SET DEFAULT 'not_started',
+      ALTER COLUMN status SET NOT NULL;
+    `);
+
+    // Ustunlar mavjud bo'lgandan keyin index yaratamiz.
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_lessons_group_date ON lessons(group_id, date);
+      CREATE INDEX IF NOT EXISTS idx_lessons_teacher_date ON lessons(teacher_id, date);
+      CREATE INDEX IF NOT EXISTS idx_lessons_subject_date ON lessons(subject_id, date);
+      CREATE INDEX IF NOT EXISTS idx_lessons_room_date ON lessons(room_id, date);
+      CREATE INDEX IF NOT EXISTS idx_lessons_status ON lessons(status);
+    `);
+
+    // Eski unique(group_id, date) ni yangi unique(group_id, date, start_time) ga o'tkazamiz.
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'lessons_group_id_date_key'
+            AND contype = 'u'
+        ) THEN
+          ALTER TABLE lessons DROP CONSTRAINT lessons_group_id_date_key;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'lessons_group_id_date_start_time_key'
+            AND contype = 'u'
+        ) THEN
+          ALTER TABLE lessons
+          ADD CONSTRAINT lessons_group_id_date_start_time_key UNIQUE (group_id, date, start_time);
+        END IF;
+      END $$;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lesson_audit_logs (
+        id SERIAL PRIMARY KEY,
+        lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE,
+        changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        action VARCHAR(50) NOT NULL,
+        before_data JSONB,
+        after_data JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_lesson_audit_lesson ON lesson_audit_logs(lesson_id);
+      CREATE INDEX IF NOT EXISTS idx_lesson_audit_changed_by ON lesson_audit_logs(changed_by);
+    `);
+
     console.log("✅ 'lessons' jadvali yaratildi.");
   } catch (error) {
     console.error('Lessons jadvalini yaratishda xatolik:', error);
@@ -127,10 +238,11 @@ const createAttendanceTable = async () => {
       await pool.query(`
         UPDATE attendance a
         SET is_marked = CASE
-          WHEN a.is_marked = true THEN true
-          WHEN a.status IN ('keldi', 'kechikdi') THEN true
-          WHEN l.date < CURRENT_DATE THEN true
-          ELSE false
+          -- Muhim: faqat eski "is_marked = NULL" yozuvlarini tiklaymiz.
+          -- O'tgan sana bo'lgani uchun avtomatik true qilish yangi flowni buzadi.
+          WHEN a.is_marked IS NULL AND a.status IN ('keldi', 'kechikdi') THEN true
+          WHEN a.is_marked IS NULL THEN false
+          ELSE a.is_marked
         END
         FROM lessons l
         WHERE a.lesson_id = l.id;
