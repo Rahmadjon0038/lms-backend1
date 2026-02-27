@@ -3,7 +3,10 @@ const router = express.Router();
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 const {
+  getTeachersAttendanceList,
+  getTeacherGroupsForAttendance,
   getGroupsForAttendance,
+  getMyLessons,
   createLesson,
   getLessonStudents,
   markAttendance,
@@ -12,6 +15,7 @@ const {
   getGroupLessons,
   regenerateGroupLessons,
   updateLessonDate,
+  patchLesson,
   deleteLesson,
   exportMonthlyAttendance
 } = require('../controllers/attendanceController');
@@ -39,11 +43,30 @@ const {
  *         schema:
  *           type: string
  *           enum: [active, blocked, all]
+ *       - name: date
+ *         in: query
+ *         schema:
+ *           type: string
+ *           example: "2026-02-27"
+ *       - name: day
+ *         in: query
+ *         schema:
+ *           type: string
+ *           example: "dushanba"
+ *       - name: shift
+ *         in: query
+ *         schema:
+ *           type: string
+ *           enum: [kunduzgi, kechki, morning, evening]
  *     responses:
  *       200:
  *         description: Guruhlar ro'yxati
  */
 router.get('/groups', protect, roleCheck(['admin', 'teacher']), getGroupsForAttendance);
+router.get('/my-groups', protect, roleCheck(['teacher']), getGroupsForAttendance);
+router.get('/my-lessons', protect, roleCheck(['teacher']), getMyLessons);
+router.get('/teachers', protect, roleCheck(['admin', 'super_admin']), getTeachersAttendanceList);
+router.get('/teachers/:teacher_id/groups', protect, roleCheck(['admin', 'super_admin']), getTeacherGroupsForAttendance);
 
 /**
  * @swagger
@@ -94,7 +117,7 @@ router.post('/lessons', protect, roleCheck(['admin', 'teacher']), createLesson);
  *       200:
  *         description: Studentlar ro'yxati
  */
-router.get('/lessons/:lesson_id/students', protect, roleCheck(['admin', 'teacher']), getLessonStudents);
+router.get('/lessons/:lesson_id/students', protect, roleCheck(['admin', 'super_admin', 'teacher']), getLessonStudents);
 
 /**
  * @swagger
@@ -144,7 +167,7 @@ router.get('/lessons/:lesson_id/students', protect, roleCheck(['admin', 'teacher
  *       200:
  *         description: Davomat belgilandi
  */
-router.put('/lessons/:lesson_id/mark', protect, roleCheck(['admin', 'teacher']), markAttendance);
+router.put('/lessons/:lesson_id/mark', protect, roleCheck(['admin', 'super_admin', 'teacher']), markAttendance);
 
 /**
  * @swagger
@@ -209,7 +232,7 @@ router.get('/groups/:group_id/monthly', protect, roleCheck(['admin', 'teacher'])
  *       200:
  *         description: Status yangilandi
  */
-router.put('/student/monthly-status', protect, roleCheck(['admin']), updateStudentMonthlyStatus);
+router.put('/student/monthly-status', protect, roleCheck(['admin', 'super_admin']), updateStudentMonthlyStatus);
 
 /**
  * @swagger
@@ -234,8 +257,8 @@ router.put('/student/monthly-status', protect, roleCheck(['admin']), updateStude
  *       200:
  *         description: Darslar ro'yxati
  */
-router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'teacher']), getGroupLessons);
-router.post('/groups/:group_id/lessons/regenerate', protect, roleCheck(['admin', 'teacher']), regenerateGroupLessons);
+router.get('/groups/:group_id/lessons', protect, roleCheck(['admin', 'super_admin', 'teacher']), getGroupLessons);
+router.post('/groups/:group_id/lessons/regenerate', protect, roleCheck(['admin', 'super_admin', 'teacher']), regenerateGroupLessons);
 
 /**
  * @swagger
@@ -269,6 +292,7 @@ router.post('/groups/:group_id/lessons/regenerate', protect, roleCheck(['admin',
  *         description: Sana muvaffaqiyatli yangilandi
  */
 router.put('/lessons/:lesson_id/date', protect, roleCheck(['admin', 'teacher']), updateLessonDate);
+router.patch('/lessons/:lesson_id', protect, roleCheck(['admin', 'teacher']), patchLesson);
 
 /**
  * @swagger
