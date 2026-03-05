@@ -11,6 +11,10 @@ router.get('/settings/:teacher_id', protect, ctrl.getTeacherSalarySettings);
 router.post('/advances', protectAdmin, ctrl.createTeacherAdvance);
 router.get('/advances', protect, ctrl.getTeacherAdvances);
 
+// Payout
+router.post('/payouts', protectAdmin, ctrl.createTeacherSalaryPayout);
+router.get('/payouts', protect, ctrl.getTeacherSalaryPayouts);
+
 // Summary va close
 router.get('/months/:month_name/teachers/:teacher_id', protect, ctrl.getTeacherMonthSummary);
 router.post('/months/:month_name/teachers/:teacher_id/close', protectAdmin, ctrl.closeTeacherMonth);
