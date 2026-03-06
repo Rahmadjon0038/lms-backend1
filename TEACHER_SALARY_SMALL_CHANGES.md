@@ -1,52 +1,103 @@
-# Teacher Salary Small Changes (Frontend)
+# Teacher Salary Small Changes (Frontend Migration Guide)
 
-## Qilingan 2 ta o'zgarish
+Bu hujjat frontend uchun `payout` terminidan `given` terminiga o'tish bo'yicha yakuniy yo'riqnoma.
 
-1. Teacher statusi o'zgarsa ham oylik jadvaldan yo'qolmaydi
-- Oldin ro'yxatda faqat `status = active` teacherlar chiqardi.
-- Endi `inactive/blocked` bo'lsa ham teacher salary ro'yxatda ko'rinadi.
-- Frontend tomonda qo'shimcha ish shart emas, mavjud ro'yxat endpointini ishlatish kifoya.
+## Qisqa xulosa
+- Backendda `payout` oqimi endi `given` nomi bilan yuradi.
+- Oy yopilgandan keyin ham yangi tushum bo'lsa, yana "berildi" qilish mumkin.
+- Frontend `payout` so'zini UI, API va state'dan olib tashlashi kerak.
+- Teacher oyligi student chegirmasidan mustaqil: hisoblash kursning asl narxidan qilinadi.
 
-2. Oy yopilgandan keyin ham qayta payout qilish mumkin
-- Agar oy yopilgandan keyin talabalardan yana pul tushsa, teacherga yana to'lov qilish mumkin.
-- Buning uchun yangi payout endpointlar qo'shildi.
+## Backendda qilingan o'zgarishlar
 
----
+### 1) Yangi endpointlar
+- `POST /api/teacher-salary/given`
+- `GET /api/teacher-salary/given?teacher_id=...&month_name=YYYY-MM`
 
-## Yangi endpointlar
-
-### 1) Payout yaratish
-`POST /api/teacher-salary/payouts`
-
-Body:
+Body (`POST /given`) misol:
 ```json
 {
   "teacher_id": 12,
   "month_name": "2026-03",
-  "description": "close dan keyingi qo'shimcha payout"
+  "description": "2-qism berildi"
 }
 ```
 
-`amount` yuborish shart emas. Yuborilmasa tizim `final_salary` (mavjud yig'ilgan summa) ni to'liq payout qiladi.
+Eslatma:
+- `amount` yuborilmaydi.
+- "Berildi" tugmasi bosilganda backend `final_salary` ni avtomatik to'liq "berildi" qiladi.
 
-### 2) Payout history olish
-`GET /api/teacher-salary/payouts?teacher_id=12&month_name=2026-03`
+### 2) Eski endpointlar
+- `POST /api/teacher-salary/payouts`
+- `GET /api/teacher-salary/payouts`
 
----
+Hozircha backward compatibility uchun ishlaydi, lekin frontend **endi ishlatmasligi kerak**.
 
-## Frontend nima qilishi kerak
+### 3) Summary maydonlari yangilandi
+Eski -> Yangi
+- `total_payouts` -> `total_given`
+- `can_payout` -> `can_give`
+- `payouts_after_close` -> `given_after_close`
+- `extra_after_close` -> `post_close_collected_salary`
+- `can_payout_after_close` -> `can_give_after_close`
 
-1. Oylik detail oynasida `summary.final_salary` ni "hozir beriladigan summa" sifatida ishlating.
-2. `can_payout=true` bo'lsa "Berish" tugmasini aktiv qiling.
-3. `is_closed=true` bo'lsa ham payout tugmasini o'chirmang.
-4. Payoutdan keyin quyidagilarni refresh qiling:
+### 4) Chegirma qoidasi (yangi)
+- Teacher salary hisobida `paid_amount` ishlatilmaydi.
+- Hisob bazasi: `monthly_snapshots.group_price` (fallback: `required_amount`).
+- Ya'ni studentga chegirma berilgan bo'lsa ham teacher oyligi asl kurs narxidan chiqadi.
+
+## Frontend nima qilishi kerak (majburiy migration)
+
+### 1) API chaqiriqlarini almashtirish
+- `POST /payouts` -> `POST /given`
+- `GET /payouts` -> `GET /given`
+
+### 2) State va typed fieldlarni almashtirish
+Quyidagilarni loyihadagi barcha joyda rename qiling:
+- `payout` -> `given`
+- `payouts` -> `givenList` yoki `givenHistory`
+- `total_payouts` -> `total_given`
+- `can_payout` -> `can_give`
+- `payouts_after_close` -> `given_after_close`
+
+### 3) UI matnlarini yangilash
+Quyidagilarni olib tashlang:
+- `Payout`
+- `Jami payout`
+- `Payout history`
+
+O'rniga ishlating:
+- `Berildi`
+- `Jami berildi`
+- `Berilganlar tarixi`
+
+### 4) Tugma va action
+- Tugma nomi: `Berildi`
+- Tugma aktiv bo'lish sharti: `summary.can_give === true` (yoki `summary.final_salary > 0`)
+- `is_closed=true` bo'lsa ham tugma o'chirilmaydi.
+- Input bo'lmaydi. Summani qo'lda kiritish olib tashlanadi.
+
+### 5) Refresh oqimi
+"Berildi"dan keyin quyidagilarni qayta chaqiring:
 - `GET /api/teacher-salary/months/:month/teachers/:teacher_id`
-- `GET /api/teacher-salary/payouts?teacher_id=...&month_name=...`
-5. Agar backend `available_balance` qaytarsa, shu qiymatni foydalanuvchiga ko'rsating.
+- `GET /api/teacher-salary/given?teacher_id=...&month_name=...`
 
----
+### 6) Oy yopilgandan keyingi yangi tushum ko'rinishi
+Detailda alohida ko'rsating:
+- `post_close_collected_salary` -> oy yopilgandan keyin yangi yig'ilgan summa
+- `final_salary` -> hozir berilishi mumkin summa
 
-## Qo'shimcha maydonlar (summary)
-- `total_payouts`: shu oy teacherga berilgan to'lovlar yig'indisi.
-- `extra_after_close`: oy yopilgandan keyin qo'shilgan qo'shimcha hisob.
-- `can_payout_after_close`: yopilgan oy bo'lsa ham qayta payout mumkinligini bildiradi.
+## Frontend uchun tayyor checklist
+- [ ] `payout` endpointlaridan foydalanish olib tashlandi
+- [ ] Barcha API chaqiriqlar `given` ga o'tdi
+- [ ] UI'da `payout` so'zi qolmadi
+- [ ] `Jami payout` ustuni `Jami berildi` ga o'zgardi
+- [ ] `can_payout` ishlatilmayapti, `can_give` ishlatilmoqda
+- [ ] `GET /given` history ishlayapti
+- [ ] Close qilingan oyda ham "Berildi" tugmasi ishlayapti
+- [ ] "Berildi" oynasida amount input yo'q
+- [ ] Berishdan keyin summary + history refresh bo'lyapti
+
+## Muhim
+Frontendchi `payout`ni endi yangi kodda ishlatmasin.
+Legacy `/payouts` endpoint faqat vaqtinchalik moslik uchun qoldirilgan.

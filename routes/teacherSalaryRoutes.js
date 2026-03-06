@@ -11,7 +11,11 @@ router.get('/settings/:teacher_id', protect, ctrl.getTeacherSalarySettings);
 router.post('/advances', protectAdmin, ctrl.createTeacherAdvance);
 router.get('/advances', protect, ctrl.getTeacherAdvances);
 
-// Payout
+// Berildi (yangi nom)
+router.post('/given', protectAdmin, ctrl.createTeacherSalaryGiven);
+router.get('/given', protect, ctrl.getTeacherSalaryGivenList);
+
+// Legacy alias (eski frontendlar uchun)
 router.post('/payouts', protectAdmin, ctrl.createTeacherSalaryPayout);
 router.get('/payouts', protect, ctrl.getTeacherSalaryPayouts);
 

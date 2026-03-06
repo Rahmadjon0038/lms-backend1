@@ -6,7 +6,7 @@ Bu hujjat frontend uchun teacher oylik oynasidagi yangi biznes-qoidalarni tushun
 Yangi versiyada:
 - Teacher statusi o'zgarsa ham oy jadvalidan yo'qolmaydi.
 - Oy ichida teacher almashtirilsa, har bir teacher o'zining `worked_days` (ishlagan kun) bilan ko'rinadi.
-- Oylik `close` qilingandan keyin ham yangi tushum bo'lsa yana payout qilish mumkin.
+- Oylik `close` qilingandan keyin ham yangi tushum bo'lsa yana "berildi" qilish mumkin.
 - Manual qo'shimcha summa kiritib oylikka qo'shish mumkin.
 - O'tgan oylardan qolgan to'lanmagan qoldiq joriy oyda eslatib turiladi.
 
@@ -24,7 +24,7 @@ Base: `/api/teacher-salary`
 
 3. `POST /months/:month_name/teachers/:teacher_id/close`
 - Oyni yopish (snapshot freeze nuqtasi).
-- Eslatma: close qilingandan keyin ham payout davom etadi.
+- Eslatma: close qilingandan keyin ham "berildi" davom etadi.
 
 4. `POST /advances`
 - Avans kiritish (faqat oy yopilmagan bo'lsa).
@@ -54,20 +54,20 @@ Base: `/api/teacher-salary`
 6. `GET /manual-adjustments?month_name=YYYY-MM&teacher_id=...`
 - Manual adjustment tarixini olish.
 
-7. `POST /payouts`
+7. `POST /given`
 - Teacherga pul berish (oy yopilgan bo'lsa ham mumkin).
+- `amount` yuborilmaydi: tugma bosilganda qolgan summa to'liq beriladi.
 - Body:
 ```json
 {
   "teacher_id": 12,
   "month_name": "2026-03",
-  "amount": 350000,
   "description": "2-qism to'lov"
 }
 ```
 
-8. `GET /payouts?month_name=YYYY-MM&teacher_id=...`
-- Payout tarixini olish.
+8. `GET /given?month_name=YYYY-MM&teacher_id=...`
+- Berilgan to'lovlar tarixini olish.
 
 ---
 
@@ -77,6 +77,7 @@ Base: `/api/teacher-salary`
 - `worked_days`: teacher shu oyda nechta kun dars bergani.
 - `groups_taught`: nechta guruhda dars bergani.
 - `total_collected`: shu oydagi teacherga tegishli tushum.
+- Eslatma: teacher salary hisobida bu qiymat chegirmadan oldingi kurs narxi bazasidan olinadi.
 - `expected_salary`: foiz bo'yicha hisoblangan summa.
 - `carry_from_previous`: oldingi oylardan qolgan to'lanmagan qoldiq.
 - `manual_adjustments.included_total`: oylikka qo'shilgan manual summa.
@@ -84,7 +85,7 @@ Base: `/api/teacher-salary`
 - `gross_salary`: `expected + carry_from_previous + manual_included`.
 - `total_advances`: avanslar yig'indisi.
 - `net_salary`: `gross_salary - total_advances`.
-- `total_payouts`: shu oy bo'yicha berilgan pullar yig'indisi.
+- `total_given`: shu oy bo'yicha berilgan pullar yig'indisi.
 - `final_salary` (yoki `balance`): hozir to'lanishi kerak qolgan summa.
 - `previous_unpaid_total`: oldingi oylardan qolgan qarzdorlik yig'indisi.
 - `previous_unpaid_months`: qaysi oyda qancha qolganini list.
@@ -106,7 +107,7 @@ Base: `/api/teacher-salary`
   - Carry from previous
   - Manual included
   - Advances
-  - Payouts
+  - Berilgan
   - Balance (`final_salary`)
   - Closed status
   - Post-close generated
@@ -116,17 +117,18 @@ Base: `/api/teacher-salary`
 - Shu joyda 3 ta blokni alohida ko'rsating:
   - `GET /advances`
   - `GET /manual-adjustments`
-  - `GET /payouts`
+  - `GET /given`
 
-3. Payout tugmasi
+3. "Berildi" tugmasi
 - `final_salary > 0` bo'lsa aktiv.
-- Submitdan keyin teacher summary va payout history ni refresh qiling.
+- Amount input ko'rsatilmaydi.
+- Submitdan keyin teacher summary va "berildi" history ni refresh qiling.
 
 4. Close oy tugmasi
 - `POST /months/:month/teachers/:teacher_id/close`.
 - Close qilingach:
   - `is_closed=true` ko'rsating.
-  - Lekin payout tugmasini o'chirmang (yangi tushum bo'lishi mumkin).
+  - Lekin "berildi" tugmasini o'chirmang (yangi tushum bo'lishi mumkin).
 
 5. Oldingi oy qoldig'i eslatmasi
 - Agar `previous_unpaid_total > 0` bo'lsa badge/banner chiqaring.
@@ -137,7 +139,7 @@ Base: `/api/teacher-salary`
 ## Validatsiya va UX
 - Barcha summalar musbat son bo'lishi kerak.
 - `month_name` har doim `YYYY-MM` formatda yuborilsin.
-- Payout summasi `final_salary` dan katta yuborilsa backend 400 qaytaradi.
+- Beriladigan summa `final_salary` dan katta yuborilsa backend 400 qaytaradi.
 - `POST` amallardan keyin tegishli listlar refresh qilinsin.
 - Money format: `uz-UZ` locale bilan formatlash tavsiya.
 
@@ -147,4 +149,3 @@ Base: `/api/teacher-salary`
 - Eski endpointlar saqlangan.
 - `simple-list` endpoint ham mavjud, lekin `students` maydoni endi bo'sh array qaytishi mumkin (`[]`).
 - Yangi UI uchun asosiy manba sifatida `GET /months/:month/teachers` dan foydalaning.
-
