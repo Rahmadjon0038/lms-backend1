@@ -6,6 +6,7 @@ const cors = require('cors');
 const { createUserTable } = require('./models/userModel'); // Jadval yaratish funksiyasini chaqirish
 
 const app = express();
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://api.taraqqiyot-teaching-center.uz';
 
 // Middleware: JSON formatdagi ma'lumotlarni qabul qilish
 app.use(express.json());
@@ -55,7 +56,7 @@ app.get('/', async (req, res) => {
                 "Improved Student Management",
                 "Advanced Reporting"
             ],
-            api_docs: "http://localhost:5001/api-docs",
+            api_docs: `${PUBLIC_BASE_URL}/api-docs`,
             main_endpoints: {
                 payments: "/api/payments/monthly",
                 snapshots: "/api/snapshots",
@@ -119,7 +120,7 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server ${PORT}-portda ishga tushdi...`);
-    console.log(`Swagger: http://localhost:${PORT}/api-docs/`);
+    console.log(`Swagger: ${PUBLIC_BASE_URL}/api-docs/`);
 
     // Server yonganda jadvalni tekshirish va yaratish
     try {

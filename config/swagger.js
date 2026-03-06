@@ -1,6 +1,9 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 
+const SWAGGER_PROD_SERVER_URL = process.env.SWAGGER_PROD_SERVER_URL || 'https://api.taraqqiyot-teaching-center.uz';
+const SWAGGER_LOCAL_SERVER_URL = process.env.SWAGGER_LOCAL_SERVER_URL || 'http://localhost:5001';
+
 const options = {
   definition: {
     openapi: '3.0.0',
@@ -70,7 +73,11 @@ const options = {
     ],
     servers: [
       {
-        url: 'http://localhost:5001',
+        url: SWAGGER_PROD_SERVER_URL,
+        description: 'Production server',
+      },
+      {
+        url: SWAGGER_LOCAL_SERVER_URL,
         description: 'Local server',
       },
     ],
