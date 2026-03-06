@@ -5,6 +5,7 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
+const SALARY_BASE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -31,7 +32,7 @@ const getTeacherWithPercent = async (client, teacherId) => {
 const getTeacherMonthLiveCollected = async (client, teacherId, monthName) => {
   const res = await client.query(
     `SELECT
-       COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
+       COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
      FROM monthly_snapshots ms
      JOIN groups g ON g.id = ms.group_id
      WHERE g.teacher_id = $1
@@ -99,7 +100,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
          COUNT(*)::int AS total_students,
          COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) > 0)::int AS paid_students,
          COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) <= 0 AND COALESCE(ms.debt_amount, 0) > 0)::int AS unpaid_students,
-         COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
+         COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
        WHERE g.teacher_id = $1
@@ -114,7 +115,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       [teacherId, monthName]
     ),
     client.query(
-      `SELECT COALESCE(SUM(amount), 0)::numeric AS total_payouts
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1 AND month_name = $2`,
       [teacherId, monthName]
@@ -131,10 +132,10 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
   const stat = snapshotRes.rows[0] || {};
   const totalCollected = toNum(stat.total_collected);
   const totalAdvances = toNum(advancesRes.rows[0]?.total_advances);
-  const totalPayouts = toNum(payoutsRes.rows[0]?.total_payouts);
+  const totalGiven = toNum(payoutsRes.rows[0]?.total_given);
   const salaryPercentage = toNum(teacher.salary_percentage);
   const expectedSalary = round2((totalCollected * salaryPercentage) / 100);
-  const finalSalary = round2(expectedSalary - totalAdvances - totalPayouts);
+  const finalSalary = round2(expectedSalary - totalAdvances - totalGiven);
 
   const upsert = await client.query(
     `INSERT INTO teacher_monthly_salaries (
@@ -188,7 +189,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       toNum(stat.total_students),
       toNum(stat.paid_students),
       toNum(stat.unpaid_students),
-      totalPayouts,
+      totalGiven,
     ]
   );
 
@@ -205,12 +206,12 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     total_collected: totalCollected,
     expected_salary: expectedSalary,
     total_advances: totalAdvances,
-    total_payouts: totalPayouts,
+    total_given: totalGiven,
     final_salary: finalSalary,
     total_students: toNum(stat.total_students),
     paid_students: toNum(stat.paid_students),
     unpaid_students: toNum(stat.unpaid_students),
-    can_payout: finalSalary > 0,
+    can_give: finalSalary > 0,
     is_closed: Boolean(persisted.is_closed),
     closed_at: persisted.closed_at || null,
     close_revenue: persisted.close_revenue != null ? toNum(persisted.close_revenue) : null,
@@ -253,13 +254,13 @@ const getClosedSummary = async (client, teacherId, monthName) => {
   const [liveCollected, payoutsRes, payoutsAfterCloseRes, students] = await Promise.all([
     getTeacherMonthLiveCollected(client, teacherId, monthName),
     client.query(
-      `SELECT COALESCE(SUM(amount), 0)::numeric AS total_payouts
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1 AND month_name = $2`,
       [teacherId, monthName]
     ),
     client.query(
-      `SELECT COALESCE(SUM(amount), 0)::numeric AS payouts_after_close
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS given_after_close
        FROM teacher_salary_payouts
        WHERE teacher_id = $1
          AND month_name = $2
@@ -272,12 +273,12 @@ const getClosedSummary = async (client, teacherId, monthName) => {
   const salaryPercentage = toNum(row.salary_percentage);
   const closeExpected = toNum(row.close_expected_salary);
   const liveExpected = round2((liveCollected * salaryPercentage) / 100);
-  const extraAfterClose = round2(Math.max(liveExpected - closeExpected, 0));
-  const totalPayouts = toNum(payoutsRes.rows[0]?.total_payouts ?? row.total_payouts);
-  const payoutsAfterClose = row.closed_at
-    ? toNum(payoutsAfterCloseRes.rows[0]?.payouts_after_close)
-    : totalPayouts;
-  const availableNow = round2(toNum(row.close_balance) + extraAfterClose - payoutsAfterClose);
+  const postCloseCollectedSalary = round2(Math.max(liveExpected - closeExpected, 0));
+  const totalGiven = toNum(payoutsRes.rows[0]?.total_given ?? row.total_payouts);
+  const givenAfterClose = row.closed_at
+    ? toNum(payoutsAfterCloseRes.rows[0]?.given_after_close)
+    : totalGiven;
+  const availableNow = round2(toNum(row.close_balance) + postCloseCollectedSalary - givenAfterClose);
 
   return {
     teacher: {
@@ -290,20 +291,20 @@ const getClosedSummary = async (client, teacherId, monthName) => {
     total_collected: liveCollected,
     expected_salary: liveExpected,
     total_advances: toNum(row.total_advances),
-    total_payouts: totalPayouts,
-    payouts_after_close: payoutsAfterClose,
+    total_given: totalGiven,
+    given_after_close: givenAfterClose,
     final_salary: availableNow,
     total_students: toNum(row.total_students),
     paid_students: toNum(row.paid_students),
     unpaid_students: toNum(row.unpaid_students),
-    can_payout: availableNow > 0,
+    can_give: availableNow > 0,
     is_closed: true,
     closed_at: row.closed_at,
     close_revenue: toNum(row.close_revenue),
     close_expected_salary: closeExpected,
     close_balance: toNum(row.close_balance),
-    extra_after_close: extraAfterClose,
-    can_payout_after_close: availableNow > 0,
+    post_close_collected_salary: postCloseCollectedSalary,
+    can_give_after_close: availableNow > 0,
     students,
   };
 };
@@ -521,11 +522,9 @@ exports.getTeacherAdvances = async (req, res) => {
   }
 };
 
-exports.createTeacherSalaryPayout = async (req, res) => {
+exports.createTeacherSalaryGiven = async (req, res) => {
   const teacherId = Number(req.body.teacher_id);
   const monthName = req.body.month_name;
-  const hasManualAmount = req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '';
-  const amount = hasManualAmount ? Number(req.body.amount) : null;
   const description = req.body.description || null;
 
   if (!teacherId || Number.isNaN(teacherId)) {
@@ -536,8 +535,11 @@ exports.createTeacherSalaryPayout = async (req, res) => {
     return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
   }
 
-  if (hasManualAmount && (Number.isNaN(amount) || amount <= 0)) {
-    return res.status(400).json({ success: false, message: 'amount 0 dan katta bo\'lishi kerak' });
+  if (req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '') {
+    return res.status(400).json({
+      success: false,
+      message: 'amount yuborilmaydi. Berildi tugmasi qolgan summani to\'liq beradi',
+    });
   }
 
   const client = await pool.connect();
@@ -563,22 +565,13 @@ exports.createTeacherSalaryPayout = async (req, res) => {
       });
     }
 
-    const payoutAmount = hasManualAmount ? amount : available;
-
-    if (payoutAmount > available) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: 'Kiritilgan summa mavjud balansdan katta',
-        data: { available_balance: available },
-      });
-    }
+    const givenAmount = available;
 
     const ins = await client.query(
       `INSERT INTO teacher_salary_payouts (teacher_id, month_name, amount, description, created_by)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [teacherId, monthName, payoutAmount, description, req.user.id]
+      [teacherId, monthName, givenAmount, description, req.user.id]
     );
 
     const refreshedClosed = await getClosedSummary(client, teacherId, monthName);
@@ -588,11 +581,9 @@ exports.createTeacherSalaryPayout = async (req, res) => {
 
     return res.json({
       success: true,
-      message: hasManualAmount
-        ? 'Teacherga oylik to\'lovi saqlandi'
-        : 'Teacherga mavjud yig\'ilgan summa to\'liq berildi',
+      message: 'Teacherga mavjud yig\'ilgan summa to\'liq berildi',
       data: {
-        payout: ins.rows[0],
+        given: ins.rows[0],
         summary: refreshedOpen,
       },
     });
@@ -600,7 +591,7 @@ exports.createTeacherSalaryPayout = async (req, res) => {
     await client.query('ROLLBACK');
     return res.status(500).json({
       success: false,
-      message: 'Teacher payout saqlashda xatolik',
+      message: 'Teacherga berilgan to\'lovni saqlashda xatolik',
       error: error.message,
     });
   } finally {
@@ -608,7 +599,7 @@ exports.createTeacherSalaryPayout = async (req, res) => {
   }
 };
 
-exports.getTeacherSalaryPayouts = async (req, res) => {
+exports.getTeacherSalaryGivenList = async (req, res) => {
   const monthName = req.query.month_name;
   let teacherId = req.query.teacher_id ? Number(req.query.teacher_id) : null;
 
@@ -657,7 +648,7 @@ exports.getTeacherSalaryPayouts = async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: 'Payoutlar ro\'yxatini olishda xatolik',
+      message: 'Berilgan to\'lovlar ro\'yxatini olishda xatolik',
       error: error.message,
     });
   }
@@ -835,7 +826,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
       `WITH monthly_collected AS (
          SELECT
            g.teacher_id,
-           COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
+           COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
          FROM monthly_snapshots ms
          JOIN groups g ON g.id = ms.group_id
          WHERE ms.month = $1
@@ -850,10 +841,10 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          WHERE month_name = $1
          GROUP BY teacher_id
        ),
-       monthly_payouts AS (
+       monthly_given AS (
          SELECT
            teacher_id,
-           COALESCE(SUM(amount), 0)::numeric AS total_payouts
+           COALESCE(SUM(amount), 0)::numeric AS total_given
          FROM teacher_salary_payouts
          WHERE month_name = $1
          GROUP BY teacher_id
@@ -908,7 +899,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage,
          COALESCE(mc.total_collected, 0)::numeric AS live_total_collected,
          COALESCE(ma.total_advances, 0)::numeric AS total_advances,
-         COALESCE(mp.total_payouts, 0)::numeric AS total_payouts,
+         COALESCE(mp.total_given, 0)::numeric AS total_given,
          CASE
            WHEN COALESCE(tms.is_closed, false) = true AND tms.closed_at IS NOT NULL THEN (
              SELECT COALESCE(SUM(p2.amount), 0)::numeric
@@ -917,8 +908,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
                AND p2.month_name = $1
                AND p2.created_at >= tms.closed_at
            )
-           ELSE COALESCE(mp.total_payouts, 0)::numeric
-         END AS payouts_for_balance,
+           ELSE COALESCE(mp.total_given, 0)::numeric
+         END AS given_for_balance,
          COALESCE(tsa.paid_students_count, 0)::int AS paid_students_count,
          COALESCE(tsa.partial_students_count, 0)::int AS partial_students_count,
          COALESCE(tsa.unpaid_students_count, 0)::int AS unpaid_students_count,
@@ -931,7 +922,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
        LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
        LEFT JOIN monthly_collected mc ON mc.teacher_id = u.id
        LEFT JOIN monthly_advances ma ON ma.teacher_id = u.id
-       LEFT JOIN monthly_payouts mp ON mp.teacher_id = u.id
+       LEFT JOIN monthly_given mp ON mp.teacher_id = u.id
        LEFT JOIN teacher_students_agg tsa ON tsa.teacher_id = u.id
        LEFT JOIN teacher_monthly_salaries tms
          ON tms.teacher_id = u.id
@@ -944,8 +935,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
     const teachers = result.rows.map((row) => {
       const salaryPercentage = toNum(row.salary_percentage);
       const totalAdvances = toNum(row.total_advances);
-      const totalPayouts = toNum(row.total_payouts);
-      const payoutsForBalance = toNum(row.payouts_for_balance);
+      const totalGiven = toNum(row.total_given);
+      const givenForBalance = toNum(row.given_for_balance);
       const isClosed = Boolean(row.is_closed);
 
       const totalCollected = isClosed
@@ -965,8 +956,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         : 0;
 
       const finalSalary = isClosed
-        ? round2((toNum(row.close_balance != null ? row.close_balance : 0) + extraAfterClose) - payoutsForBalance)
-        : round2(expectedSalary - totalAdvances - totalPayouts);
+        ? round2((toNum(row.close_balance != null ? row.close_balance : 0) + extraAfterClose) - givenForBalance)
+        : round2(expectedSalary - totalAdvances - totalGiven);
 
       return {
         teacher_id: toNum(row.teacher_id),
@@ -979,13 +970,13 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         salary_percentage: salaryPercentage,
         expected_salary: expectedSalary,
         total_advances: totalAdvances,
-        total_payouts: totalPayouts,
-        payouts_for_balance: payoutsForBalance,
+        total_given: totalGiven,
+        given_for_balance: givenForBalance,
         final_salary: finalSalary,
-        can_payout: finalSalary > 0,
+        can_give: finalSalary > 0,
         is_closed: isClosed,
         can_give_advance: !isClosed,
-        extra_after_close: extraAfterClose,
+        post_close_collected_salary: extraAfterClose,
         students: Array.isArray(row.students) ? row.students : [],
       };
     });
@@ -998,7 +989,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         total_collected: round2(teachers.reduce((sum, t) => sum + toNum(t.total_collected), 0)),
         total_expected_salary: round2(teachers.reduce((sum, t) => sum + toNum(t.expected_salary), 0)),
         total_advances: round2(teachers.reduce((sum, t) => sum + toNum(t.total_advances), 0)),
-        total_payouts: round2(teachers.reduce((sum, t) => sum + toNum(t.total_payouts), 0)),
+        total_given: round2(teachers.reduce((sum, t) => sum + toNum(t.total_given), 0)),
         total_final_salary: round2(teachers.reduce((sum, t) => sum + toNum(t.final_salary), 0)),
         teachers,
       },
@@ -1011,3 +1002,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
     });
   }
 };
+
+// Backward compatibility aliases
+exports.createTeacherSalaryPayout = exports.createTeacherSalaryGiven;
+exports.getTeacherSalaryPayouts = exports.getTeacherSalaryGivenList;
