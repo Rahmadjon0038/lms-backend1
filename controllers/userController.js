@@ -66,6 +66,11 @@ const ensureRecoveryKeysForRole = async (role) => {
 const registerStudent = async (req, res) => {
     const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age } = req.body;
     try {
+        const normalizedAge = age === undefined || age === null || age === '' ? null : Number(age);
+        if (normalizedAge !== null && !Number.isInteger(normalizedAge)) {
+            return res.status(400).json({ message: "age butun son bo'lishi kerak" });
+        }
+
         const userExists = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
@@ -84,7 +89,7 @@ const registerStudent = async (req, res) => {
             ) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP) 
              RETURNING id, name, surname, username, role, father_name, father_phone, address, age`,
-            [name, surname, username, hashedPassword, phone, phone2, father_name, father_phone, address, age, recoveryKey, recoveryKeyHash]
+            [name, surname, username, hashedPassword, phone, phone2, father_name, father_phone, address, normalizedAge, recoveryKey, recoveryKeyHash]
         );
 
         res.status(201).json({
