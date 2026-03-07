@@ -66,7 +66,11 @@ const ensureRecoveryKeysForRole = async (role) => {
 const registerStudent = async (req, res) => {
     const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
     try {
-        const normalizedAge = age === undefined || age === null || age === '' ? null : Number(age);
+        const normalizedAgeInput = typeof age === 'string' ? age.trim() : age;
+        const normalizedAge =
+            normalizedAgeInput === undefined || normalizedAgeInput === null || normalizedAgeInput === ''
+                ? null
+                : Number(normalizedAgeInput);
         if (normalizedAge !== null && !Number.isInteger(normalizedAge)) {
             return res.status(400).json({ message: "age butun son bo'lishi kerak" });
         }

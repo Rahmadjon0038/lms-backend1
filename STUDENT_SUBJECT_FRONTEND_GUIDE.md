@@ -25,9 +25,12 @@ Agar `subject_id` yuborilmasa backend `400` qaytaradi.
 `GET /api/students/all` javobida endi student darajasida quyidagi maydonlar bor:
 - `registered_subject_id`
 - `registered_subject_name`
+- `subject_id` (jadval uchun umumiy fan ID)
+- `subject_name` (jadval uchun umumiy fan nomi)
 
 UI qoidasi:
 - Talaba guruhga kirmagan bo'lsa ham `registered_subject_name` ustunda ko'rsating.
+- Agar eski jadval `subject_name` ustunidan foydalansa, backend endi register fanini ham shu yerga fallback qilib qaytaradi.
 - Agar `groups` bo'sh bo'lsa, status ustunida `Guruhga biriktirilmagan` deb chiqaring.
 
 ## 3) Filter (ixtiyoriy, lekin tavsiya)
