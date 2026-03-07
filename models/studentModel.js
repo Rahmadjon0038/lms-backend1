@@ -108,6 +108,11 @@ const createStudentAdditionalTables = async () => {
       await pool.query(`
         DO $$ 
         BEGIN 
+          -- subjects jadvali yaratilgandan keyin users.subject_id ni ham kafolatlab qo'yamiz
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject_id') THEN
+            ALTER TABLE users ADD COLUMN subject_id INTEGER REFERENCES subjects(id);
+          END IF;
+
           IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='subjects' AND column_name='price') THEN
             ALTER TABLE subjects DROP COLUMN price;
             RAISE NOTICE 'subjects jadvalidan price ustuni o''chirildi';

@@ -123,6 +123,16 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *                       registration_date:
  *                         type: string
  *                         format: date-time
+ *                       registered_subject_id:
+ *                         type: integer
+ *                         nullable: true
+ *                         example: 2
+ *                         description: Student qabul paytida tanlangan fan ID (guruhga kirmagan bo'lsa ham mavjud bo'ladi)
+ *                       registered_subject_name:
+ *                         type: string
+ *                         nullable: true
+ *                         example: "Ingliz tili"
+ *                         description: Student qabul paytida tanlangan fan nomi
  *                       group_id:
  *                         type: integer
  *                         example: 5

@@ -30,6 +30,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               - surname
  *               - username
  *               - password
+ *               - subject_id
  *             properties:
  *               name:
  *                 type: string
@@ -61,6 +62,10 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               age:
  *                 type: integer
  *                 example: 20
+ *               subject_id:
+ *                 type: integer
+ *                 example: 2
+ *                 description: "Student qaysi fan uchun ro'yxatdan o'tayotgani (majburiy)"
  *     responses:
  *       201:
  *         description: Student muvaffaqiyatli yaratildi
