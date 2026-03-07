@@ -64,17 +64,30 @@ const ensureRecoveryKeysForRole = async (role) => {
 
 // 1. Student ro'yxatdan o'tishi (Yangi maydonlar bilan)
 const registerStudent = async (req, res) => {
-    const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age } = req.body;
+    const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
     try {
         const normalizedAge = age === undefined || age === null || age === '' ? null : Number(age);
         if (normalizedAge !== null && !Number.isInteger(normalizedAge)) {
             return res.status(400).json({ message: "age butun son bo'lishi kerak" });
+        }
+        const normalizedSubjectId = Number(subject_id);
+        if (!Number.isInteger(normalizedSubjectId) || normalizedSubjectId <= 0) {
+            return res.status(400).json({ message: "subject_id majburiy va butun son bo'lishi kerak" });
         }
 
         const userExists = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
+
+        const subjectResult = await pool.query(
+            'SELECT id, name FROM subjects WHERE id = $1',
+            [normalizedSubjectId]
+        );
+        if (subjectResult.rows.length === 0) {
+            return res.status(400).json({ message: "Tanlangan fan topilmadi" });
+        }
+        const selectedSubject = subjectResult.rows[0];
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
@@ -84,17 +97,33 @@ const registerStudent = async (req, res) => {
 
         const newUser = await pool.query(
             `INSERT INTO users (
-                name, surname, username, password, phone, phone2, father_name, father_phone, address, age,
+                name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
                 password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             ) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP) 
-             RETURNING id, name, surname, username, role, father_name, father_phone, address, age`,
-            [name, surname, username, hashedPassword, phone, phone2, father_name, father_phone, address, normalizedAge, recoveryKey, recoveryKeyHash]
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP) 
+             RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+            [
+                name,
+                surname,
+                username,
+                hashedPassword,
+                phone,
+                phone2,
+                father_name,
+                father_phone,
+                address,
+                normalizedAge,
+                selectedSubject.name,
+                normalizedSubjectId,
+                recoveryKey,
+                recoveryKeyHash
+            ]
         );
 
         res.status(201).json({
             message: "Muvaffaqiyatli ro'yxatdan o'tdingiz",
             user: newUser.rows[0],
+            selected_subject: selectedSubject,
             recovery_key: recoveryKey
         });
     } catch (err) {
@@ -307,13 +336,14 @@ const loginStudent = async (req, res) => {
                     r.room_number,
                     r.capacity as room_capacity,
                     r.has_projector,
-                    s.name as subject_name,
+                    COALESCE(s.name, ss.name) as subject_name,
                     CONCAT(t.name, ' ', t.surname) as teacher_name
              FROM users u
              LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
              LEFT JOIN groups g ON sg.group_id = g.id
              LEFT JOIN rooms r ON g.room_id = r.id
              LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id
              LEFT JOIN users t ON g.teacher_id = t.id
              WHERE LOWER(BTRIM(u.username)) = LOWER($1)
              ORDER BY sg.id DESC NULLS LAST
@@ -396,13 +426,14 @@ const getProfile = async (req, res) => {
                     r.room_number,
                     r.capacity as room_capacity,
                     r.has_projector,
-                    s.name as subject_name,
+                    COALESCE(s.name, ss.name) as subject_name,
                     CONCAT(t.name, ' ', t.surname) as teacher_name
              FROM users u
              LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
              LEFT JOIN groups g ON sg.group_id = g.id
              LEFT JOIN rooms r ON g.room_id = r.id
              LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id
              LEFT JOIN users t ON g.teacher_id = t.id
              WHERE u.id = $1`,
             [req.user.id]

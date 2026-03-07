@@ -290,10 +290,13 @@ exports.getAllStudents = async (req, res) => {
         u.course_status,
         u.course_start_date,
         u.course_end_date,
+        u.subject_id as registered_subject_id,
+        sp.name as registered_subject_name,
         u.password_reset_key_plain as recovery_key,
         TO_CHAR(u.course_end_date, 'DD.MM.YYYY') as formatted_course_end_date,
         u.role
       FROM users u
+      LEFT JOIN subjects sp ON u.subject_id = sp.id
     `;
     
     let whereConditions = ['u.role = \'student\''];
@@ -320,8 +323,9 @@ exports.getAllStudents = async (req, res) => {
       
       // Subject filter
       if (subject_id) {
-        whereConditions.push(`g.subject_id = $${paramIdx++}`);
+        whereConditions.push(`(g.subject_id = $${paramIdx} OR u.subject_id = $${paramIdx})`);
         params.push(subject_id);
+        paramIdx++;
       }
       
       // Group status filter
