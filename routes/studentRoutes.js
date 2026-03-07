@@ -133,6 +133,16 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *                         nullable: true
  *                         example: "Ingliz tili"
  *                         description: Student qabul paytida tanlangan fan nomi
+ *                       subject_id:
+ *                         type: integer
+ *                         nullable: true
+ *                         example: 2
+ *                         description: Jadval uchun umumiy fan ID (active/oxirgi guruh fanidan yoki register fanidan olinadi)
+ *                       subject_name:
+ *                         type: string
+ *                         nullable: true
+ *                         example: "Ingliz tili"
+ *                         description: Jadval uchun umumiy fan nomi (active/oxirgi guruh fanidan yoki register fanidan olinadi)
  *                       group_id:
  *                         type: integer
  *                         example: 5

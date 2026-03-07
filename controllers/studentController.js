@@ -365,6 +365,7 @@ exports.getAllStudents = async (req, res) => {
         SELECT 
           g.id as group_id,
           g.name as group_name,
+          g.subject_id,
           g.status as group_admin_status,
           g.class_status as group_class_status,
           g.class_start_date,
@@ -397,9 +398,15 @@ exports.getAllStudents = async (req, res) => {
         WHERE sg.student_id = $1
         ORDER BY sg.joined_at DESC
       `, [student.id]);
+
+      const activeOrLatestGroup = groupsData.rows.find(group => group.group_status === 'active') || groupsData.rows[0] || null;
+      const effectiveSubjectId = activeOrLatestGroup?.subject_id || student.registered_subject_id || null;
+      const effectiveSubjectName = activeOrLatestGroup?.subject_name || student.registered_subject_name || null;
       
       enrichedStudents.push({
         ...student,
+        subject_id: effectiveSubjectId,
+        subject_name: effectiveSubjectName,
         groups: groupsData.rows.map(group => ({
           ...group,
           // Faqat guruh active va darslar boshlangan bo'lsagina "started_at" ni ko'rsatamiz

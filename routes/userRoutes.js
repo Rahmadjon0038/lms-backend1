@@ -62,6 +62,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *               age:
  *                 type: integer
  *                 example: 20
+ *                 description: "Student yoshi (ixtiyoriy)"
  *               subject_id:
  *                 type: integer
  *                 example: 2
