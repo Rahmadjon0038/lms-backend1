@@ -311,7 +311,7 @@ exports.updateGroup = async (req, res) => {
     
     try {
         const currentGroupResult = await pool.query(
-            `SELECT id, teacher_id, room_id, subject_id, schedule
+            `SELECT id, name, teacher_id, room_id, subject_id, schedule, price
              FROM groups
              WHERE id = $1`,
             [id]
@@ -432,6 +432,46 @@ exports.updateGroup = async (req, res) => {
             return res.status(404).json({ message: "Guruh topilmadi" });
         }
 
+        let updatedCurrentMonthSnapshots = 0;
+        const oldPrice = Number(currentGroup.price);
+        const newPrice = Number(result.rows[0].price);
+        const priceChanged = Number.isFinite(oldPrice)
+            && Number.isFinite(newPrice)
+            && oldPrice !== newPrice;
+        const oldName = currentGroup.name;
+        const newName = result.rows[0].name;
+        const nameChanged = typeof oldName === 'string'
+            && typeof newName === 'string'
+            && oldName !== newName;
+
+        // Guruh narxi/nomi o'zgarsa, faqat joriy oy snapshotlarini yangilaymiz.
+        // Oldingi oylar o'zgarmaydi.
+        if (priceChanged || nameChanged) {
+            const snapshotUpdateResult = await pool.query(
+                `UPDATE monthly_snapshots ms
+                 SET group_name = CASE WHEN $2::boolean THEN $3 ELSE ms.group_name END,
+                     group_price = CASE WHEN $4::boolean THEN $5 ELSE ms.group_price END,
+                     required_amount = CASE
+                       WHEN $4::boolean THEN GREATEST($5 - COALESCE(ms.discount_amount, 0), 0)
+                       ELSE ms.required_amount
+                     END,
+                     debt_amount = CASE
+                       WHEN $4::boolean THEN GREATEST($5 - COALESCE(ms.discount_amount, 0), 0) - COALESCE(ms.paid_amount, 0)
+                       ELSE ms.debt_amount
+                     END,
+                     payment_status = CASE
+                       WHEN COALESCE(ms.monthly_status, 'active') <> 'active' THEN 'inactive'
+                       WHEN $4::boolean AND COALESCE(ms.paid_amount, 0) >= GREATEST($5 - COALESCE(ms.discount_amount, 0), 0) THEN 'paid'
+                       WHEN COALESCE(ms.paid_amount, 0) > 0 THEN 'partial'
+                       ELSE 'unpaid'
+                     END
+                 WHERE ms.group_id = $1
+                   AND ms.month = TO_CHAR(NOW() AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM')`,
+                [id, nameChanged, newName, priceChanged, newPrice]
+            );
+            updatedCurrentMonthSnapshots = snapshotUpdateResult.rowCount;
+        }
+
         let deletedLessonsCount = 0;
         let deletedAttendanceCount = 0;
         if (scheduleChanged && effectiveFrom) {
@@ -459,6 +499,14 @@ exports.updateGroup = async (req, res) => {
         return res.json({
             success: true,
             group: result.rows[0],
+            ...((priceChanged || nameChanged) ? {
+                price_change: {
+                    ...(priceChanged ? { old_price: oldPrice, new_price: newPrice } : {}),
+                    ...(nameChanged ? { old_name: oldName, new_name: newName } : {}),
+                    affected_current_month_snapshots: updatedCurrentMonthSnapshots,
+                    note: "Faqat joriy oy snapshotlari yangilandi. Oldingi oylar o'zgarmaydi."
+                }
+            } : {}),
             ...(scheduleChanged ? {
                 schedule_change: {
                     effective_from: effectiveFrom,
