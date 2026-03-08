@@ -161,9 +161,6 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *                       teacher_name:
  *                         type: string
  *                         example: "Rahmadjon Abdullayev"
- *                       subject_name:
- *                         type: string
- *                         example: "Inglis tili"
  *                       price:
  *                         type: number
  *                         example: 400000
