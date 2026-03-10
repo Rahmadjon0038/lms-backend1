@@ -240,6 +240,13 @@ router.post(
   groupCtrl.adminAddStudentToGroup
 );
 
+router.post(
+  '/admin/bulk-join-students',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.adminBulkAddStudentsToGroup
+);
+
 // NOTE: Student kod orqali qo'shilish API'si olib tashlandi
 // Admin tomonidan boshqariladi
 
@@ -271,6 +278,13 @@ router.delete(
   protect,
   roleCheck(['admin']),
   groupCtrl.removeStudentFromGroup
+);
+
+router.delete(
+  '/:group_id/remove-students',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.bulkRemoveStudentsFromGroup
 );
 
 /**
@@ -557,6 +571,13 @@ router.post(
   protect,
   roleCheck(['admin']),
   groupCtrl.changeStudentGroup
+);
+
+router.post(
+  '/change-students-group',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.bulkChangeStudentGroup
 );
 
 /**

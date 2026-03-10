@@ -73,6 +73,69 @@ const normalizeScheduleForCompare = (schedule) => {
 
 const todayAsDateString = () => new Date().toISOString().slice(0, 10);
 
+const normalizeStudentIds = (studentIds) => {
+    if (!Array.isArray(studentIds)) return [];
+    const normalized = studentIds
+        .map((id) => parseInt(id, 10))
+        .filter((id) => Number.isInteger(id) && id > 0);
+    return [...new Set(normalized)];
+};
+
+const getGroupMembershipMeta = async (groupId) => {
+    const groupRes = await pool.query(
+        `SELECT g.id, g.name as group_name, g.teacher_id, g.status, g.is_active,
+                u.name || ' ' || u.surname as teacher_name
+         FROM groups g
+         LEFT JOIN users u ON g.teacher_id = u.id
+         WHERE g.id = $1`,
+        [groupId]
+    );
+    return groupRes.rows[0] || null;
+};
+
+const syncStudentPrimaryGroup = async (studentId) => {
+    const activeGroupRes = await pool.query(
+        `SELECT sg.group_id,
+                g.name as group_name,
+                g.teacher_id,
+                t.name || ' ' || t.surname as teacher_name
+         FROM student_groups sg
+         JOIN groups g ON g.id = sg.group_id
+         LEFT JOIN users t ON g.teacher_id = t.id
+         WHERE sg.student_id = $1
+         ORDER BY CASE WHEN sg.status = 'active' THEN 0 ELSE 1 END,
+                  sg.joined_at DESC NULLS LAST,
+                  sg.group_id DESC
+         LIMIT 1`,
+        [studentId]
+    );
+
+    if (activeGroupRes.rows.length > 0) {
+        const current = activeGroupRes.rows[0];
+        await pool.query(
+            `UPDATE users
+             SET group_id = $1,
+                 group_name = $2,
+                 teacher_id = $3,
+                 teacher_name = $4
+             WHERE id = $5`,
+            [current.group_id, current.group_name, current.teacher_id, current.teacher_name, studentId]
+        );
+        return current;
+    }
+
+    await pool.query(
+        `UPDATE users
+         SET group_id = NULL,
+             group_name = NULL,
+             teacher_id = NULL,
+             teacher_name = NULL
+         WHERE id = $1`,
+        [studentId]
+    );
+    return null;
+};
+
 // Teacher schedule conflict tekshirish
 const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId = null) => {
     if (!teacherId || !schedule || !schedule.days || !schedule.time) {
@@ -789,6 +852,315 @@ exports.adminAddStudentToGroup = async (req, res) => {
             return res.status(400).json({ message: "Bu student allaqachon guruhda" });
         }
         res.status(500).json({ error: err.message }); 
+    }
+};
+
+// 4.1. Bir nechta studentni bitta guruhga qo'shish (bulk)
+exports.adminBulkAddStudentsToGroup = async (req, res) => {
+    const groupId = parseInt(req.body.group_id, 10);
+    const studentIds = normalizeStudentIds(req.body.student_ids);
+
+    if (!Number.isInteger(groupId) || groupId <= 0) {
+        return res.status(400).json({ message: "group_id to'g'ri raqam bo'lishi kerak" });
+    }
+    if (studentIds.length === 0) {
+        return res.status(400).json({ message: "student_ids bo'sh bo'lmasligi kerak" });
+    }
+
+    try {
+        const groupData = await getGroupMembershipMeta(groupId);
+        if (!groupData) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        if (!groupData.is_active || groupData.status === 'blocked') {
+            return res.status(400).json({ message: "Bloklangan guruhga student qo'shib bo'lmaydi" });
+        }
+
+        const studentsRes = await pool.query(
+            `SELECT id, name, surname, status
+             FROM users
+             WHERE role = 'student' AND id = ANY($1::int[])`,
+            [studentIds]
+        );
+        const studentsMap = new Map(studentsRes.rows.map((s) => [s.id, s]));
+
+        const added = [];
+        const skipped = [];
+        const failed = [];
+
+        for (const studentId of studentIds) {
+            const student = studentsMap.get(studentId);
+            if (!student) {
+                failed.push({ student_id: studentId, reason: 'student_not_found' });
+                continue;
+            }
+            if (student.status !== 'active') {
+                failed.push({
+                    student_id: studentId,
+                    student_name: `${student.name} ${student.surname}`,
+                    reason: 'student_not_active',
+                    student_status: student.status
+                });
+                continue;
+            }
+
+            const insertResult = await pool.query(
+                `INSERT INTO student_groups (student_id, group_id, status)
+                 VALUES ($1, $2, 'active')
+                 ON CONFLICT (student_id, group_id) DO NOTHING
+                 RETURNING student_id`,
+                [studentId, groupId]
+            );
+
+            if (insertResult.rows.length === 0) {
+                skipped.push({
+                    student_id: studentId,
+                    student_name: `${student.name} ${student.surname}`,
+                    reason: 'already_in_group'
+                });
+                continue;
+            }
+
+            await pool.query(
+                `UPDATE users
+                 SET group_id = $1,
+                     group_name = $2,
+                     teacher_id = $3
+                 WHERE id = $4`,
+                [groupData.id, groupData.group_name, groupData.teacher_id, studentId]
+            );
+
+            if (groupData.status === 'active') {
+                await pool.query(
+                    `UPDATE users
+                     SET course_status = 'in_progress',
+                         course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
+                     WHERE id = $1 AND course_status = 'not_started'`,
+                    [studentId]
+                );
+            }
+
+            added.push({
+                student_id: studentId,
+                student_name: `${student.name} ${student.surname}`
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Bulk qo'shish yakunlandi",
+            group: {
+                id: groupData.id,
+                name: groupData.group_name
+            },
+            summary: {
+                requested: studentIds.length,
+                added: added.length,
+                skipped: skipped.length,
+                failed: failed.length
+            },
+            added,
+            skipped,
+            failed
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+// 4.2. Bir nechta studentni guruhdan chiqarish (bulk)
+exports.bulkRemoveStudentsFromGroup = async (req, res) => {
+    const groupId = parseInt(req.params.group_id, 10);
+    const studentIds = normalizeStudentIds(req.body.student_ids);
+
+    if (!Number.isInteger(groupId) || groupId <= 0) {
+        return res.status(400).json({ message: "group_id to'g'ri raqam bo'lishi kerak" });
+    }
+    if (studentIds.length === 0) {
+        return res.status(400).json({ message: "student_ids bo'sh bo'lmasligi kerak" });
+    }
+
+    try {
+        const membersRes = await pool.query(
+            `SELECT sg.student_id, u.name, u.surname
+             FROM student_groups sg
+             JOIN users u ON u.id = sg.student_id
+             WHERE sg.group_id = $1 AND sg.student_id = ANY($2::int[])`,
+            [groupId, studentIds]
+        );
+        const memberMap = new Map(membersRes.rows.map((m) => [m.student_id, m]));
+
+        const deleteRes = await pool.query(
+            `DELETE FROM student_groups
+             WHERE group_id = $1 AND student_id = ANY($2::int[])
+             RETURNING student_id`,
+            [groupId, studentIds]
+        );
+
+        const removedIds = deleteRes.rows.map((r) => r.student_id);
+        const removedIdSet = new Set(removedIds);
+        const removed = [];
+        const skipped = [];
+
+        for (const studentId of studentIds) {
+            if (!removedIdSet.has(studentId)) {
+                skipped.push({ student_id: studentId, reason: 'not_in_group' });
+                continue;
+            }
+
+            await syncStudentPrimaryGroup(studentId);
+
+            const member = memberMap.get(studentId);
+            removed.push({
+                student_id: studentId,
+                student_name: member ? `${member.name} ${member.surname}` : null
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Bulk chiqarish yakunlandi",
+            group_id: groupId,
+            summary: {
+                requested: studentIds.length,
+                removed: removed.length,
+                skipped: skipped.length
+            },
+            removed,
+            skipped
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+// 11.1. Bir nechta studentni boshqa guruhga o'tkazish (bulk)
+exports.bulkChangeStudentGroup = async (req, res) => {
+    const studentIds = normalizeStudentIds(req.body.student_ids);
+    const newGroupId = parseInt(req.body.new_group_id, 10);
+    const fromGroupId = req.body.from_group_id !== undefined && req.body.from_group_id !== null
+        ? parseInt(req.body.from_group_id, 10)
+        : null;
+
+    if (studentIds.length === 0) {
+        return res.status(400).json({ message: "student_ids bo'sh bo'lmasligi kerak" });
+    }
+    if (!Number.isInteger(newGroupId) || newGroupId <= 0) {
+        return res.status(400).json({ message: "new_group_id to'g'ri raqam bo'lishi kerak" });
+    }
+    if (fromGroupId !== null && (!Number.isInteger(fromGroupId) || fromGroupId <= 0)) {
+        return res.status(400).json({ message: "from_group_id to'g'ri raqam bo'lishi kerak" });
+    }
+
+    try {
+        const newGroup = await getGroupMembershipMeta(newGroupId);
+        if (!newGroup) {
+            return res.status(404).json({ message: "Yangi guruh topilmadi" });
+        }
+        if (!newGroup.is_active || newGroup.status === 'blocked') {
+            return res.status(400).json({ message: "Yangi guruh faol emas yoki bloklangan" });
+        }
+
+        const studentsRes = await pool.query(
+            `SELECT id, name, surname, status, group_id, group_name
+             FROM users
+             WHERE role = 'student' AND id = ANY($1::int[])`,
+            [studentIds]
+        );
+        const studentsMap = new Map(studentsRes.rows.map((s) => [s.id, s]));
+
+        const moved = [];
+        const skipped = [];
+        const failed = [];
+
+        for (const studentId of studentIds) {
+            const student = studentsMap.get(studentId);
+            if (!student) {
+                failed.push({ student_id: studentId, reason: 'student_not_found' });
+                continue;
+            }
+            if (student.status !== 'active') {
+                failed.push({
+                    student_id: studentId,
+                    student_name: `${student.name} ${student.surname}`,
+                    reason: 'student_not_active',
+                    student_status: student.status
+                });
+                continue;
+            }
+
+            const sourceGroupId = fromGroupId || student.group_id;
+            if (sourceGroupId && sourceGroupId === newGroupId) {
+                skipped.push({
+                    student_id: studentId,
+                    student_name: `${student.name} ${student.surname}`,
+                    reason: 'already_in_target_group'
+                });
+                continue;
+            }
+
+            if (sourceGroupId) {
+                await pool.query(
+                    `DELETE FROM student_groups
+                     WHERE student_id = $1 AND group_id = $2`,
+                    [studentId, sourceGroupId]
+                );
+            }
+
+            await pool.query(
+                `INSERT INTO student_groups (student_id, group_id, status)
+                 VALUES ($1, $2, 'active')
+                 ON CONFLICT (student_id, group_id) DO NOTHING`,
+                [studentId, newGroupId]
+            );
+
+            await pool.query(
+                `UPDATE users
+                 SET group_id = $1,
+                     group_name = $2,
+                     teacher_id = $3,
+                     teacher_name = $4
+                 WHERE id = $5`,
+                [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, studentId]
+            );
+
+            if (newGroup.status === 'active') {
+                await pool.query(
+                    `UPDATE users
+                     SET course_status = 'in_progress',
+                         course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
+                     WHERE id = $1 AND course_status = 'not_started'`,
+                    [studentId]
+                );
+            }
+
+            moved.push({
+                student_id: studentId,
+                student_name: `${student.name} ${student.surname}`,
+                from_group_id: sourceGroupId || null,
+                to_group_id: newGroupId
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Bulk guruh almashtirish yakunlandi",
+            target_group: {
+                id: newGroup.id,
+                name: newGroup.group_name
+            },
+            summary: {
+                requested: studentIds.length,
+                moved: moved.length,
+                skipped: skipped.length,
+                failed: failed.length
+            },
+            moved,
+            skipped,
+            failed
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
     }
 };
 
