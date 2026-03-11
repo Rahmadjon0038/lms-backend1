@@ -16,7 +16,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * @swagger
  * /api/groups/create:
  *   post:
- *     summary: Yangi guruh yaratish (Faqat Admin)
+ *     summary: Yangi guruh yaratish (Admin yoki Teacher)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -64,7 +64,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *       201:
  *         description: Guruh muvaffaqiyatli yaratildi
  */
-router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
+router.post('/create', protect, roleCheck(['admin', 'teacher']), groupCtrl.createGroup);
 
 /**
  * @swagger
@@ -182,7 +182,7 @@ router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroup
  * @swagger
  * /api/groups/admin/join-student:
  *   post:
- *     summary: Admin tomonidan talabani guruhga qo'shish (guruh ma'lumotlari avtomatik yoziladi)
+ *     summary: Admin yoki Teacher tomonidan talabani guruhga qo'shish (guruh ma'lumotlari avtomatik yoziladi)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -236,14 +236,14 @@ router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroup
 router.post(
   '/admin/join-student',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.adminAddStudentToGroup
 );
 
 router.post(
   '/admin/bulk-join-students',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.adminBulkAddStudentsToGroup
 );
 

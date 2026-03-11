@@ -15,7 +15,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * @swagger
  * /api/users/register:
  *   post:
- *     summary: Yangi studentni ro'yxatdan o'tkazish (Faqat adminlar uchun)
+ *     summary: Yangi studentni ro'yxatdan o'tkazish (Admin yoki Teacher)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -73,7 +73,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *       400:
  *         description: Username band yoki ma'lumotlar xato
  */
-router.post('/register', protect, roleCheck(['admin']), registerStudent);
+router.post('/register', protect, roleCheck(['admin', 'teacher']), registerStudent);
 
 /**
  * @swagger
@@ -545,11 +545,11 @@ router.patch('/profile', protect, updateProfile);
  *       401:
  *         description: Avtorizatsiya xatosi
  *       403:
- *         description: Faqat admin va super_admin ko'ra oladi
+ *         description: Faqat admin, super_admin va teacher ko'ra oladi
  *       500:
  *         description: Server xatosi
  */
-router.get('/teachers', protect, roleCheck(['admin', 'super_admin']), getAllTeachers);
+router.get('/teachers', protect, roleCheck(['admin', 'super_admin', 'teacher']), getAllTeachers);
 
 /**
  * @swagger

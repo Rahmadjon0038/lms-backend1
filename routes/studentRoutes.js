@@ -15,7 +15,7 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  * @swagger
  * /api/students/all:
  *   get:
- *     summary: Barcha studentlar ro'yxati har birining barcha guruhlari bilan (ADMIN)
+ *     summary: Barcha studentlar ro'yxati har birining barcha guruhlari bilan (ADMIN yoki TEACHER)
  *     description: |
  *       Admin uchun barcha studentlar ro'yxatini filter bilan olish. 
  *       Har bir student uchun barcha guruhlaridagi status ma'lumotlari ko'rsatiladi.
@@ -176,11 +176,11 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *       401:
  *         description: Token kerak (unauthorized)
  *       403:
- *         description: Faqat admin uchun
+ *         description: Faqat admin yoki teacher uchun
  *       500:
  *         description: Server xatosi
  */
-router.get("/all", protect, roleCheck(['admin']), studentController.getAllStudents);
+router.get("/all", protect, roleCheck(['admin', 'teacher']), studentController.getAllStudents);
 
 /**
  * @swagger
