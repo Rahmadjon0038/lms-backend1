@@ -176,7 +176,7 @@ router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
  *       404:
  *         description: Guruh topilmadi
  */
-router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroupStatus);
+router.patch('/:id/status', protect, roleCheck(['admin', 'teacher']), groupCtrl.updateGroupStatus);
 
 /**
  * @swagger
@@ -680,7 +680,7 @@ router.get('/newly-created', protect, roleCheck(['admin']), groupCtrl.getNewlyCr
  *       404:
  *         description: Guruh topilmadi
  */
-router.patch('/:id/start-class', protect, roleCheck(['admin']), groupCtrl.startGroupClass);
+router.patch('/:id/start-class', protect, roleCheck(['admin', 'teacher']), groupCtrl.startGroupClass);
 
 /**
  * @swagger

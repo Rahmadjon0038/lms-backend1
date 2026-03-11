@@ -612,6 +612,26 @@ exports.updateGroupStatus = async (req, res) => {
     }
 
     try {
+        const groupCheck = await pool.query(
+            `SELECT id, teacher_id, status
+             FROM groups
+             WHERE id = $1`,
+            [id]
+        );
+        if (groupCheck.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+
+        const group = groupCheck.rows[0];
+        if (req.user?.role === 'teacher') {
+            if (group.teacher_id !== req.user.id) {
+                return res.status(403).json({ message: "Teacher faqat o'z guruhining statusini o'zgartira oladi" });
+            }
+            if (status !== 'active') {
+                return res.status(403).json({ message: "Teacher faqat guruhni 'active' holatiga o'tkaza oladi" });
+            }
+        }
+
         // Agar guruh bloklansa, avval faol talabalar borligini tekshirish
         if (status === 'blocked') {
             const activeStudentsCheck = await pool.query(
@@ -1943,6 +1963,9 @@ exports.startGroupClass = async (req, res) => {
         }
 
         const group = groupCheck.rows[0];
+        if (req.user?.role === 'teacher' && group.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhida darsni boshlay oladi" });
+        }
 
         // Faqat draft holatidagi guruhni boshlash mumkin
         if (group.status !== 'draft') {
