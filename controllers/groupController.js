@@ -278,17 +278,28 @@ const timeToMinutes = (timeStr) => {
 exports.createGroup = async (req, res) => {
     const { name, teacher_id, start_date, schedule, subject_id, price, status, room_id } = req.body;
     const unique_code = generateUniqueCode();
+    const isTeacher = req.user?.role === 'teacher';
+    const requestedTeacherId = teacher_id === undefined || teacher_id === null || teacher_id === ''
+        ? null
+        : parseInt(teacher_id, 10);
+    const effectiveTeacherId = isTeacher ? req.user.id : requestedTeacherId;
     
     try {
+        if (isTeacher && requestedTeacherId !== null && requestedTeacherId !== req.user.id) {
+            return res.status(403).json({
+                message: "Teacher faqat o'zi uchun guruh yarata oladi"
+            });
+        }
+
         // Agar teacher_id va subject_id berilgan bo'lsa, teacher bu fanni o'qitishini tekshirish
-        if (teacher_id && subject_id) {
-            const teacherSubjects = await getTeacherSubjects(teacher_id);
+        if (effectiveTeacherId && subject_id) {
+            const teacherSubjects = await getTeacherSubjects(effectiveTeacherId);
             const canTeachSubject = teacherSubjects.some(sub => sub.id === subject_id);
             
             if (!canTeachSubject) {
                 return res.status(400).json({ 
                     message: "Bu teacher tanlangan fanni o'qitmaydi",
-                    teacher_id,
+                    teacher_id: effectiveTeacherId,
                     subject_id,
                     teacher_subjects: teacherSubjects.map(s => ({ id: s.id, name: s.name }))
                 });
@@ -296,12 +307,12 @@ exports.createGroup = async (req, res) => {
         }
         
         // Teacher schedule conflict tekshirish
-        if (teacher_id && schedule) {
-            const conflict = await checkTeacherScheduleConflict(teacher_id, schedule);
+        if (effectiveTeacherId && schedule) {
+            const conflict = await checkTeacherScheduleConflict(effectiveTeacherId, schedule);
             if (conflict.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacher tanlangan kun va vaqtda boshqa guruhda dars bor!",
-                    teacher_id,
+                    teacher_id: effectiveTeacherId,
                     conflict_group: conflict.conflictGroup,
                     new_schedule: schedule,
                     suggestion: "Boshqa vaqt yoki kun tanlang, yoki mavjud guruhning vaqtini o'zgartiring"
@@ -310,8 +321,8 @@ exports.createGroup = async (req, res) => {
         }
 
         // Schedule conflict tekshiruvi
-        if (teacher_id && schedule) {
-            const conflictCheck = await checkScheduleConflict(teacher_id, schedule);
+        if (effectiveTeacherId && schedule) {
+            const conflictCheck = await checkScheduleConflict(effectiveTeacherId, schedule);
             if (conflictCheck.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacherning ko'rsatilgan kunda va vaqtda boshqa guruhida darsi bor!",
@@ -348,7 +359,7 @@ exports.createGroup = async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
             [
                 name, 
-                teacher_id, 
+                effectiveTeacherId,
                 unique_code, 
                 start_date ? start_date : null,
                 schedule ? JSON.stringify(schedule) : null,
@@ -792,6 +803,9 @@ exports.adminAddStudentToGroup = async (req, res) => {
         }
 
         const groupData = groupRes.rows[0];
+        if (req.user?.role === 'teacher' && groupData.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhiga student qo'sha oladi" });
+        }
 
         // Debug: guruh ma'lumotlarini console'ga chiqarish
         console.log("📊 Guruh ma'lumotlari:", groupData);
@@ -871,6 +885,9 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
         const groupData = await getGroupMembershipMeta(groupId);
         if (!groupData) {
             return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        if (req.user?.role === 'teacher' && groupData.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhiga student qo'sha oladi" });
         }
         if (!groupData.is_active || groupData.status === 'blocked') {
             return res.status(400).json({ message: "Bloklangan guruhga student qo'shib bo'lmaydi" });
