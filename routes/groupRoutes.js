@@ -109,7 +109,7 @@ router.post('/create', protect, roleCheck(['admin', 'teacher']), groupCtrl.creat
  *       200:
  *         description: Guruh yangilandi
  */
-router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
+router.patch('/:id', protect, roleCheck(['admin', 'teacher']), groupCtrl.updateGroup);
 
 /**
  * @swagger
