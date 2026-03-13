@@ -279,13 +279,27 @@ exports.createGroup = async (req, res) => {
     const { name, teacher_id, start_date, schedule, subject_id, price, status, room_id } = req.body;
     const unique_code = generateUniqueCode();
     const isTeacher = req.user?.role === 'teacher';
+    const authenticatedTeacherId = Number(req.user?.id);
+    const hasValidAuthenticatedTeacherId = Number.isInteger(authenticatedTeacherId) && authenticatedTeacherId > 0;
     const requestedTeacherId = teacher_id === undefined || teacher_id === null || teacher_id === ''
         ? null
-        : parseInt(teacher_id, 10);
-    const effectiveTeacherId = isTeacher ? req.user.id : requestedTeacherId;
+        : Number(teacher_id);
+    const effectiveTeacherId = isTeacher ? authenticatedTeacherId : requestedTeacherId;
     
     try {
-        if (isTeacher && requestedTeacherId !== null && requestedTeacherId !== req.user.id) {
+        if (isTeacher && !hasValidAuthenticatedTeacherId) {
+            return res.status(401).json({
+                message: "Teacher tokenida id noto'g'ri"
+            });
+        }
+
+        if (requestedTeacherId !== null && (!Number.isInteger(requestedTeacherId) || requestedTeacherId <= 0)) {
+            return res.status(400).json({
+                message: "teacher_id butun son bo'lishi kerak"
+            });
+        }
+
+        if (isTeacher && requestedTeacherId !== null && requestedTeacherId !== authenticatedTeacherId) {
             return res.status(403).json({
                 message: "Teacher faqat o'zi uchun guruh yarata oladi"
             });
