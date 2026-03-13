@@ -408,13 +408,23 @@ exports.updateGroup = async (req, res) => {
             return res.status(404).json({ message: "Guruh topilmadi" });
         }
         const currentGroup = currentGroupResult.rows[0];
+        const isTeacher = req.user?.role === 'teacher';
+        if (isTeacher && currentGroup.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhini yangilay oladi" });
+        }
+        const requestedTeacherId = teacher_id !== undefined ? Number(teacher_id) : undefined;
+        if (isTeacher && requestedTeacherId !== undefined && requestedTeacherId !== Number(currentGroup.teacher_id)) {
+            return res.status(403).json({ message: "Teacher teacher_id ni o'zgartira olmaydi" });
+        }
 
         // Bo'sh string va 0 qiymatlarni null ga o'zgartirish
         const processedTeacherId = (teacher_id === 0 || teacher_id === "" || teacher_id === null) ? null : teacher_id;
         const processedSubjectId = (subject_id === 0 || subject_id === "" || subject_id === null) ? null : subject_id;
         const processedStartDate = (start_date === "" || start_date === null) ? null : start_date;
         const processedRoomId = (room_id === 0 || room_id === "" || room_id === null) ? null : room_id;
-        const finalTeacherId = processedTeacherId === undefined ? currentGroup.teacher_id : processedTeacherId;
+        const finalTeacherId = isTeacher
+            ? currentGroup.teacher_id
+            : (processedTeacherId === undefined ? currentGroup.teacher_id : processedTeacherId);
         const finalSubjectId = processedSubjectId === undefined ? currentGroup.subject_id : processedSubjectId;
         const finalRoomId = processedRoomId === undefined ? currentGroup.room_id : processedRoomId;
         const teacherForValidation = processedTeacherId !== undefined ? processedTeacherId : currentGroup.teacher_id;
