@@ -349,7 +349,7 @@ const loginStudent = async (req, res) => {
              LEFT JOIN subjects s ON g.subject_id = s.id
              LEFT JOIN subjects ss ON u.subject_id = ss.id
              LEFT JOIN users t ON g.teacher_id = t.id
-             WHERE LOWER(BTRIM(u.username)) = LOWER($1)
+             WHERE BTRIM(u.username) = BTRIM($1)
              ORDER BY sg.id DESC NULLS LAST
              LIMIT 1`, 
             [username]
@@ -553,7 +553,7 @@ const updateProfile = async (req, res) => {
             const usernameExists = await pool.query(
                 `SELECT id
                  FROM users
-                 WHERE LOWER(BTRIM(username)) = LOWER($1)
+                 WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
                  LIMIT 1`,
                 [incoming.username, req.user.id]
@@ -696,7 +696,7 @@ const updateStudentInfo = async (req, res) => {
             const usernameExists = await pool.query(
                 `SELECT id
                  FROM users
-                 WHERE LOWER(BTRIM(username)) = LOWER($1)
+                 WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
                  LIMIT 1`,
                 [incoming.username, studentId]
