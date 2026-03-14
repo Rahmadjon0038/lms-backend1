@@ -599,6 +599,160 @@ const updateProfile = async (req, res) => {
     }
 };
 
+// 4.2. Student ma'lumotlarini yangilash (Admin yoki Teacher)
+const updateStudentInfo = async (req, res) => {
+    const studentId = parseInt(req.params.studentId, 10);
+    if (!Number.isInteger(studentId) || studentId <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: "studentId noto'g'ri"
+        });
+    }
+
+    const allowedFields = [
+        'username',
+        'name',
+        'surname',
+        'phone',
+        'phone2',
+        'father_name',
+        'father_phone',
+        'address',
+        'age'
+    ];
+
+    const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+    const incomingKeys = Object.keys(incoming);
+
+    if (incomingKeys.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Yangilanishi kerak bo'lgan maydonlar yuborilmadi"
+        });
+    }
+
+    const invalidFields = incomingKeys.filter((key) => !allowedFields.includes(key));
+    if (invalidFields.length > 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Ba'zi maydonlarni yangilashga ruxsat yo'q",
+            invalid_fields: invalidFields
+        });
+    }
+
+    if (incoming.age !== undefined && incoming.age !== null && !Number.isInteger(incoming.age)) {
+        return res.status(400).json({
+            success: false,
+            message: "age butun son bo'lishi kerak"
+        });
+    }
+
+    if (incoming.username !== undefined) {
+        const username = String(incoming.username).trim();
+        if (!username) {
+            return res.status(400).json({
+                success: false,
+                message: "username bo'sh bo'lmasligi kerak"
+            });
+        }
+
+        incoming.username = username;
+    }
+
+    try {
+        const studentCheck = await pool.query(
+            `SELECT id, name, surname
+             FROM users
+             WHERE id = $1 AND role = 'student'`,
+            [studentId]
+        );
+
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Student topilmadi"
+            });
+        }
+
+        if (req.user?.role === 'teacher') {
+            const teacherAccess = await pool.query(
+                `SELECT 1
+                 FROM student_groups sg
+                 JOIN groups g ON sg.group_id = g.id
+                 WHERE sg.student_id = $1 AND g.teacher_id = $2
+                 LIMIT 1`,
+                [studentId, req.user.id]
+            );
+
+            if (teacherAccess.rows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Teacher faqat o'z guruhidagi studentni yangilay oladi"
+                });
+            }
+        }
+
+        if (incoming.username !== undefined) {
+            const usernameExists = await pool.query(
+                `SELECT id
+                 FROM users
+                 WHERE LOWER(BTRIM(username)) = LOWER($1)
+                   AND id <> $2
+                 LIMIT 1`,
+                [incoming.username, studentId]
+            );
+
+            if (usernameExists.rows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Bu username allaqachon band"
+                });
+            }
+        }
+
+        const setClauses = [];
+        const values = [];
+        let index = 1;
+
+        for (const key of incomingKeys) {
+            if (incoming[key] === undefined) continue;
+            setClauses.push(`${key} = $${index}`);
+            values.push(incoming[key]);
+            index += 1;
+        }
+
+        if (setClauses.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Yangilanishi kerak bo'lgan maydonlar yuborilmadi"
+            });
+        }
+
+        values.push(studentId);
+
+        const updated = await pool.query(
+            `UPDATE users
+             SET ${setClauses.join(', ')}
+             WHERE id = $${index} AND role = 'student'
+             RETURNING id, name, surname, username, phone, phone2, father_name, father_phone, address, age`,
+            values
+        );
+
+        return res.json({
+            success: true,
+            message: "Student ma'lumotlari yangilandi",
+            updated_fields: setClauses.map((part) => part.split(' = ')[0]),
+            student: updated.rows[0]
+        });
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: "Student ma'lumotlarini yangilashda xatolik",
+            error: err.message
+        });
+    }
+};
+
 // 5. Barcha teacherlarni olish (Subject filter bilan)
 const getAllTeachers = async (req, res) => {
     const { subject_id, status } = req.query;
@@ -1458,6 +1612,7 @@ module.exports = {
     changePassword,
     getProfile, 
     updateProfile,
+    updateStudentInfo,
     refreshAccessToken, 
     getAllTeachers,
     getEnglishTeachers,
