@@ -279,6 +279,7 @@ exports.getAllStudents = async (req, res) => {
         u.id, 
         u.name, 
         u.surname, 
+        u.username,
         u.phone, 
         u.phone2, 
         u.father_name,
