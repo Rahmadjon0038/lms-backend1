@@ -27,6 +27,7 @@ Agar `subject_id` yuborilmasa backend `400` qaytaradi.
 - `registered_subject_name`
 - `subject_id` (jadval uchun umumiy fan ID)
 - `subject_name` (jadval uchun umumiy fan nomi)
+- `username` (jadvalda ko'rsatish uchun)
 
 UI qoidasi:
 - Talaba guruhga kirmagan bo'lsa ham `registered_subject_name` ustunda ko'rsating.
