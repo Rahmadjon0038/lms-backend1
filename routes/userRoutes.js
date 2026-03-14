@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
+const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -440,6 +440,56 @@ router.get('/profile', protect, getProfile);
  *         description: Avtorizatsiya xatosi
  */
 router.patch('/profile', protect, updateProfile);
+
+/**
+ * @swagger
+ * /api/users/students/{studentId}:
+ *   patch:
+ *     summary: Student ma'lumotlarini yangilash (Admin yoki Teacher)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studentId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               surname:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               phone2:
+ *                 type: string
+ *               father_name:
+ *                 type: string
+ *               father_phone:
+ *                 type: string
+ *               address:
+ *                 type: string
+ *               age:
+ *                 type: integer
+ *               username:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Success
+ *       400:
+ *         description: Error
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Not Found
+ */
+router.patch('/students/:studentId', protect, roleCheck(['admin', 'teacher']), updateStudentInfo);
 
 /**
  * @swagger

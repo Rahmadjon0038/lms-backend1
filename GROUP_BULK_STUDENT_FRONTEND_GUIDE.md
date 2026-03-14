@@ -105,3 +105,51 @@ Natija (`200`):
 5. API chaqiriladi.
 6. Natija summary + detail ko'rsatiladi.
 7. Student list va group details qayta fetch qilinadi.
+
+## 8) Guruh ma'lumotlarini yangilash (Teacher ham ruxsat)
+Endpoint:
+`PATCH /api/groups/:id`
+
+Eslatma:
+- `admin` va `teacher` ruxsatga ega.
+- `teacher` faqat o'z guruhini yangilay oladi.
+- `teacher` `teacher_id` ni o'zgartira olmaydi.
+- `schedule` o'zgarsa, `schedule_effective_from` (YYYY-MM-DD) ixtiyoriy.
+
+Body (misol):
+```json
+{
+  "name": "Node.js Backend",
+  "room_id": 3,
+  "price": 1200000,
+  "schedule": { "days": ["Mon", "Wed"], "time": "18:00-20:00" },
+  "schedule_effective_from": "2026-03-20"
+}
+```
+
+## 9) Student ma'lumotlarini yangilash (Admin yoki Teacher)
+Endpoint:
+`PATCH /api/users/students/:studentId`
+
+Body:
+```json
+{
+  "name": "Ali",
+  "surname": "Karimov",
+  "phone": "+998901234567",
+  "phone2": "+998901112233",
+  "father_name": "Anvar",
+  "father_phone": "+998907778899",
+  "address": "Toshkent, Chilonzor",
+  "age": 16
+}
+```
+
+Qoida:
+- `teacher` faqat o'z guruhidagi studentni yangilay oladi.
+- `username` ni `admin` ham `teacher` ham yangilay oladi.
+
+Xatoliklar:
+- `400`: noto'g'ri `studentId`, `age` butun son emas, yoki ruxsat berilmagan maydon yuborildi
+- `403`: teacher o'z guruhidagi student emas
+- `404`: student topilmadi
