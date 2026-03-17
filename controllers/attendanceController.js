@@ -937,9 +937,23 @@ exports.getLessonStudents = async (req, res) => {
            WHEN a.monthly_status = 'finished' THEN 'Bitirgan'
            ELSE 'Nomalum'
          END as monthly_status_description,
-         CASE WHEN a.monthly_status = 'active' THEN true ELSE false END as can_mark
+         CASE WHEN a.monthly_status = 'active' THEN true ELSE false END as can_mark,
+         COALESCE(ms.paid_amount, sp.paid_amount, 0) as paid_amount,
+         COALESCE(
+           ms.debt_amount,
+           COALESCE(ms.required_amount, sp.required_amount, g.price, 0) - COALESCE(ms.paid_amount, sp.paid_amount, 0)
+         ) as debt_amount
        FROM attendance a
        JOIN users u ON a.student_id = u.id
+       LEFT JOIN monthly_snapshots ms 
+         ON ms.student_id = a.student_id 
+        AND ms.group_id = a.group_id 
+        AND ms.month = COALESCE(a.month, a.month_name)
+       LEFT JOIN student_payments sp
+         ON sp.student_id = a.student_id
+        AND sp.group_id = a.group_id
+        AND sp.month = COALESCE(a.month, a.month_name)
+       LEFT JOIN groups g ON g.id = a.group_id
        WHERE a.lesson_id = $1 
        ORDER BY a.monthly_status, u.name`,
       [lesson_id]
@@ -1171,10 +1185,26 @@ exports.getMonthlyAttendance = async (req, res) => {
          COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_present,
          COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_absent,
          COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_late,
-         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as total_lessons
+         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as total_lessons,
+         MAX(COALESCE(ms.paid_amount, sp.paid_amount, 0)) as paid_amount,
+         MAX(
+           COALESCE(
+             ms.debt_amount,
+             COALESCE(ms.required_amount, sp.required_amount, g.price, 0) - COALESCE(ms.paid_amount, sp.paid_amount, 0)
+           )
+         ) as debt_amount
        FROM attendance a
        JOIN users u ON a.student_id = u.id
        JOIN lessons l ON a.lesson_id = l.id
+       LEFT JOIN monthly_snapshots ms 
+         ON ms.student_id = a.student_id 
+        AND ms.group_id = a.group_id 
+        AND ms.month = COALESCE(a.month, a.month_name)
+       LEFT JOIN student_payments sp
+         ON sp.student_id = a.student_id
+        AND sp.group_id = a.group_id
+        AND sp.month = COALESCE(a.month, a.month_name)
+       LEFT JOIN groups g ON g.id = a.group_id
        WHERE a.group_id = $1 AND COALESCE(a.month, a.month_name) = $2
        GROUP BY a.student_id, u.name, u.surname, u.phone, a.monthly_status
        ORDER BY a.monthly_status, u.name`,

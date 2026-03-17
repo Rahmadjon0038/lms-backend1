@@ -126,6 +126,83 @@ const getAdminDailyStats = async (req, res) => {
       },
     };
 
+    const dailyPaymentTotalResult = await client.query(
+      `SELECT COALESCE(SUM(amount), 0)::float AS total_amount
+       FROM payment_transactions
+       WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date`,
+      [toDate]
+    );
+
+    const dailyPaymentsResult = await client.query(
+      `SELECT
+         pt.id as payment_id,
+         pt.student_id,
+         u.name,
+         u.surname,
+         u.username,
+         u.status as student_status,
+         u.phone,
+         u.phone2,
+         u.father_name,
+         u.father_phone,
+         u.address,
+         u.age,
+         u.subject,
+         u.subject_id,
+         u.group_id as student_group_id,
+         u.group_name as student_group_name,
+         u.teacher_id as student_teacher_id,
+         u.teacher_name as student_teacher_name,
+         u.course_status,
+         TO_CHAR(u.course_start_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_start_date,
+         TO_CHAR(u.course_end_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_end_date,
+         g.id as group_id,
+         g.name as group_name,
+         s.name as subject_name,
+         CONCAT(t.name, ' ', t.surname) as teacher_name,
+         pt.amount::float as amount,
+         pt.payment_method,
+         TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as payment_time
+       FROM payment_transactions pt
+       JOIN users u ON u.id = pt.student_id
+       JOIN groups g ON g.id = pt.group_id
+       LEFT JOIN subjects s ON s.id = g.subject_id
+       LEFT JOIN users t ON t.id = g.teacher_id
+       WHERE DATE(pt.created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
+       ORDER BY pt.created_at DESC`,
+      [toDate]
+    );
+
+    const dailyNewStudentsResult = await client.query(
+      `SELECT
+         id as student_id,
+         name,
+         surname,
+         username,
+         status as student_status,
+         phone,
+         phone2,
+         father_name,
+         father_phone,
+         address,
+         age,
+         subject,
+         subject_id,
+         group_id as student_group_id,
+         group_name as student_group_name,
+         teacher_id as student_teacher_id,
+         teacher_name as student_teacher_name,
+         course_status,
+         TO_CHAR(course_start_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_start_date,
+         TO_CHAR(course_end_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_end_date,
+         TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as created_time
+       FROM users
+       WHERE role = 'student'
+         AND DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
+       ORDER BY created_at DESC`,
+      [toDate]
+    );
+
     return res.json({
       success: true,
       data: {
@@ -137,6 +214,12 @@ const getAdminDailyStats = async (req, res) => {
         summary,
         chart,
         points,
+        daily: {
+          date: toDate,
+          payments_total_amount: Number(dailyPaymentTotalResult.rows[0]?.total_amount || 0),
+          payments: dailyPaymentsResult.rows,
+          new_students: dailyNewStudentsResult.rows,
+        },
       },
     });
   } catch (error) {
@@ -187,13 +270,6 @@ const getAdminMonthlyStats = async (req, res) => {
          SELECT to_char(m, 'YYYY-MM') AS month
          FROM generate_series(date_trunc('month', $1::date), date_trunc('month', $2::date), interval '1 month') AS m
        ),
-       monthly_payments AS (
-         SELECT month,
-                COUNT(*)::int AS payments_count
-         FROM payment_transactions
-         WHERE month BETWEEN $3 AND $4
-         GROUP BY 1
-       ),
        monthly_students AS (
          SELECT TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') AS month,
                 COUNT(*)::int AS new_students_count
@@ -209,27 +285,14 @@ const getAdminMonthlyStats = async (req, res) => {
          FROM center_expenses
          WHERE month BETWEEN $3 AND $4
          GROUP BY 1
-       ),
-       monthly_debt AS (
-         SELECT month,
-                COUNT(*) FILTER (WHERE debt_amount > 0)::int AS debtors_count,
-                COALESCE(SUM(CASE WHEN debt_amount > 0 THEN debt_amount ELSE 0 END), 0)::numeric AS debt_amount
-         FROM monthly_snapshots
-         WHERE month BETWEEN $3 AND $4
-         GROUP BY 1
        )
        SELECT m.month,
-              COALESCE(p.payments_count, 0)::int AS payments_count,
               COALESCE(s.new_students_count, 0)::int AS new_students_count,
               COALESCE(e.expenses_count, 0)::int AS expenses_count,
-              COALESCE(e.expenses_amount, 0)::float AS expenses_amount,
-              COALESCE(d.debtors_count, 0)::int AS debtors_count,
-              COALESCE(d.debt_amount, 0)::float AS debt_amount
+              COALESCE(e.expenses_amount, 0)::float AS expenses_amount
        FROM months m
-       LEFT JOIN monthly_payments p ON p.month = m.month
        LEFT JOIN monthly_students s ON s.month = m.month
        LEFT JOIN monthly_expenses e ON e.month = m.month
-       LEFT JOIN monthly_debt d ON d.month = m.month
        ORDER BY m.month ASC`,
       [fromDate, toDate, fromMonth, toMonth]
     );
@@ -237,25 +300,14 @@ const getAdminMonthlyStats = async (req, res) => {
     const points = result.rows;
 
     const summary = points.reduce((acc, row) => ({
-      payments_count: acc.payments_count + Number(row.payments_count || 0),
       new_students_count: acc.new_students_count + Number(row.new_students_count || 0),
       expenses_count: acc.expenses_count + Number(row.expenses_count || 0),
       expenses_amount: acc.expenses_amount + Number(row.expenses_amount || 0),
-      debtors_count: acc.debtors_count + Number(row.debtors_count || 0),
-      debt_amount: acc.debt_amount + Number(row.debt_amount || 0),
     }), {
-      payments_count: 0,
       new_students_count: 0,
       expenses_count: 0,
       expenses_amount: 0,
-      debtors_count: 0,
-      debt_amount: 0,
     });
-
-    const currentMonthPoint = points.find((p) => p.month === toMonth) || {
-      debtors_count: 0,
-      debt_amount: 0,
-    };
 
     const statusDistResult = await client.query(
       `SELECT
@@ -277,12 +329,9 @@ const getAdminMonthlyStats = async (req, res) => {
     const chart = {
       labels: points.map((p) => p.month),
       series: {
-        payments_count: points.map((p) => p.payments_count),
         new_students_count: points.map((p) => p.new_students_count),
         expenses_count: points.map((p) => p.expenses_count),
         expenses_amount: points.map((p) => Number(p.expenses_amount || 0)),
-        debtors_count: points.map((p) => Number(p.debtors_count || 0)),
-        debt_amount: points.map((p) => Number(p.debt_amount || 0)),
       },
     };
 
@@ -296,12 +345,9 @@ const getAdminMonthlyStats = async (req, res) => {
         },
         current_month: {
           month: toMonth,
-          payments_count: Number((points.find((p) => p.month === toMonth) || {}).payments_count || 0),
           new_students_count: Number((points.find((p) => p.month === toMonth) || {}).new_students_count || 0),
           expenses_count: Number((points.find((p) => p.month === toMonth) || {}).expenses_count || 0),
           expenses_amount: Number((points.find((p) => p.month === toMonth) || {}).expenses_amount || 0),
-          debtors_count: Number(currentMonthPoint.debtors_count || 0),
-          debt_amount: Number(currentMonthPoint.debt_amount || 0),
         },
         summary,
         chart,
