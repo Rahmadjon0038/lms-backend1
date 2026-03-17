@@ -153,3 +153,125 @@ Xatoliklar:
 - `400`: noto'g'ri `studentId`, `age` butun son emas, yoki ruxsat berilmagan maydon yuborildi
 - `403`: teacher o'z guruhidagi student emas
 - `404`: student topilmadi
+
+---
+
+# Davomatda to'lov ma'lumotlari (Frontend guide)
+
+Maqsad:
+Dars ichidagi student ro'yxatida va oylik davomat jadvalida talabaning shu oy uchun to'lagan summasi va qarzdorligini ko'rsatish.
+
+## 1) Dars studentlari ro'yxati
+Endpoint:
+`GET /api/attendance/lessons/:lesson_id/students`
+
+Yangi fieldlar:
+- `paid_amount` (number): shu oy uchun to'langan summa
+- `debt_amount` (number): shu oy uchun qolgan qarz
+
+Misol (bitta student):
+```json
+{
+  "attendance_id": 123,
+  "student_id": 45,
+  "student_name": "Ali Karimov",
+  "monthly_status": "active",
+  "paid_amount": 600000,
+  "debt_amount": 400000
+}
+```
+
+## 2) Guruhning oylik davomati
+Endpoint:
+`GET /api/attendance/groups/:group_id/monthly?month=YYYY-MM`
+
+Yangi fieldlar (har bir student objectida):
+- `paid_amount` (number)
+- `debt_amount` (number)
+
+Misol (bitta student):
+```json
+{
+  "student_id": 45,
+  "student_name": "Ali Karimov",
+  "monthly_status": "active",
+  "paid_amount": 600000,
+  "debt_amount": 400000,
+  "statistics": {
+    "total_attended": 8,
+    "total_missed": 2,
+    "total_late": 1,
+    "total_lessons": 10,
+    "attendance_percentage": 80
+  }
+}
+```
+
+## 3) Hisoblash logikasi (backend)
+Ma'lumotlar manbasi ketma-ketligi:
+- `monthly_snapshots` mavjud bo'lsa, shu yerdan olinadi
+- Aks holda `student_payments` ishlatiladi
+- Hech biri bo'lmasa, `groups.price` dan qarz hisoblanadi
+
+Formula:
+`debt_amount = required_amount - paid_amount`
+
+## 4) UI tavsiyasi
+- Dars studentlari jadvalida `To'langan` va `Qarz` ustunlari ko'rsating.
+- Oylik davomat jadvalida student ismi yonida yoki alohida ustunlarda ko'rsating.
+
+---
+
+# Dashboard daily stats (Frontend guide)
+
+Endpoint:
+`GET /api/dashboard/stats/daily?from=YYYY-MM-DD&to=YYYY-MM-DD`
+
+Mavjud data (o'zgarmaydi):
+- `period`, `summary`, `chart`, `points`
+
+Yangi data (qo'shildi):
+`data.daily` bo'limi.
+
+## 1) Bugun to'lov qilgan talabalar ro'yhati
+Field: `data.daily.payments`
+
+Har bir itemda:
+- `payment_id`
+- `student_id`
+- `name`, `surname`, `username`, `student_status`
+- `phone`, `phone2`
+- `father_name`, `father_phone`
+- `address`, `age`
+- `subject`, `subject_id`
+- `student_group_id`, `student_group_name`
+- `student_teacher_id`, `student_teacher_name`
+- `course_status`, `course_start_date`, `course_end_date`
+- `group_id`, `group_name`
+- `subject_name`
+- `teacher_name`
+- `amount`
+- `payment_method`
+- `payment_time` (YYYY-MM-DD HH:mm)
+
+## 2) Bugun to'lov qilingan umumiy summa
+Field: `data.daily.payments_total_amount` (number)
+
+## 3) Bugun registratsiya qilingan talabalar ro'yhati
+Field: `data.daily.new_students`
+
+Har bir itemda:
+- `student_id`
+- `name`, `surname`, `username`, `student_status`
+- `phone`, `phone2`
+- `father_name`, `father_phone`
+- `address`, `age`
+- `subject`, `subject_id`
+- `student_group_id`, `student_group_name`
+- `student_teacher_id`, `student_teacher_name`
+- `course_status`, `course_start_date`, `course_end_date`
+- `created_time` (YYYY-MM-DD HH:mm)
+
+## 4) Sana qoidasi
+`data.daily` har doim `to` parametri bo'yicha hisoblanadi.
+Masalan: `from=2026-03-10&to=2026-03-17` bo'lsa, `daily` faqat `2026-03-17` kunini qaytaradi.
