@@ -34,6 +34,62 @@ Frontend attendance bo'limida quyidagi oqimni ishlatadi:
 
 ---
 
+## 0) Teacherning o'z guruhlari (my-groups)
+### Endpoint
+`GET /api/attendance/my-groups`
+
+### Access
+- `teacher`
+
+### Query (ixtiyoriy)
+- `date=YYYY-MM-DD`
+- `day=dushanba|seshanba|...` yoki `monday|tuesday|...`
+- `shift=kunduzgi|kechki` yoki `morning|evening`
+- `status_filter=active|blocked|all`
+- `subject_id=<id>`
+
+### UI da ko'rsatish
+- `name`
+- `subject_name`
+- `room_number`
+- `students_count`
+- `today_lessons_count`
+- `today_marked_students_count`
+- `today_active_students_count`
+- `today_attendance_completed` (bugun kamida 1 lesson to'liq belgilangan bo'lsa `true`)
+- `today_attendance_fully_completed` (bugungi barcha lessonlar to'liq belgilangan bo'lsa `true`)
+
+### Response (qisqa)
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 5,
+      "name": "Frontend N12",
+      "subject_name": "Frontend",
+      "room_number": "203",
+      "students_count": "14",
+      "today_date": "2026-03-19",
+      "today_lessons_count": 1,
+      "today_active_students_count": 14,
+      "today_marked_students_count": 14,
+      "today_attendance_completed": true,
+      "today_attendance_fully_completed": true
+    }
+  ],
+  "filters": {
+    "date": null,
+    "day": null,
+    "shift": null
+  }
+}
+```
+
+Eslatma:
+- `date` yuborilmasa `today_*` maydonlar bugungi sanaga (`YYYY-MM-DD`) qarab hisoblanadi.
+- `students_count` string bo'lishi mumkin -> `Number(item.students_count)`.
+
 ## 1) Teacherlar ro'yxati
 ### Endpoint
 `GET /api/attendance/teachers`

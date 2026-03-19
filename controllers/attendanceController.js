@@ -822,9 +822,76 @@ exports.getGroupsForAttendance = async (req, res) => {
       return dayOk && shiftOk;
     });
     
+    const attendanceDate = date || new Date().toISOString().slice(0, 10);
+    let attendanceStatsMap = new Map();
+
+    if (filteredGroups.length > 0) {
+      const groupIds = filteredGroups.map((g) => g.id);
+      const lessonStatsResult = await pool.query(
+        `WITH lesson_attendance AS (
+           SELECT
+             l.id as lesson_id,
+             l.group_id,
+             COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
+             COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
+             CASE
+               WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
+               WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+                    = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
+               ELSE false
+             END as attendance_completed
+           FROM lessons l
+           LEFT JOIN attendance a ON a.lesson_id = l.id
+           WHERE l.date = $1::date
+             AND l.group_id = ANY($2::int[])
+           GROUP BY l.id, l.group_id
+         )
+         SELECT
+           group_id,
+           COUNT(*) as lessons_today_count,
+           COALESCE(SUM(active_students_count), 0) as active_students_count,
+           COALESCE(SUM(marked_students_count), 0) as marked_students_count,
+           BOOL_OR(attendance_completed) as any_attendance_completed,
+           BOOL_AND(attendance_completed) as all_attendance_completed
+         FROM lesson_attendance
+         GROUP BY group_id`,
+        [attendanceDate, groupIds]
+      );
+
+      for (const row of lessonStatsResult.rows) {
+        attendanceStatsMap.set(String(row.group_id), {
+          lessons_today_count: Number(row.lessons_today_count) || 0,
+          active_students_count: Number(row.active_students_count) || 0,
+          marked_students_count: Number(row.marked_students_count) || 0,
+          any_attendance_completed: Boolean(row.any_attendance_completed),
+          all_attendance_completed: Boolean(row.all_attendance_completed)
+        });
+      }
+    }
+
+    const groupsWithStatus = filteredGroups.map((group) => {
+      const stats = attendanceStatsMap.get(String(group.id)) || {
+        lessons_today_count: 0,
+        active_students_count: 0,
+        marked_students_count: 0,
+        any_attendance_completed: false,
+        all_attendance_completed: false
+      };
+
+      return {
+        ...group,
+        today_date: attendanceDate,
+        today_lessons_count: stats.lessons_today_count,
+        today_active_students_count: stats.active_students_count,
+        today_marked_students_count: stats.marked_students_count,
+        today_attendance_completed: stats.any_attendance_completed,
+        today_attendance_fully_completed: stats.all_attendance_completed
+      };
+    });
+
     res.json({
       success: true,
-      data: filteredGroups,
+      data: groupsWithStatus,
       filters: {
         date: date || null,
         day: day || null,

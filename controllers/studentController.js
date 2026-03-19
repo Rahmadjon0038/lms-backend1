@@ -242,7 +242,7 @@ exports.getStudentGroups = async (req, res) => {
     }
 };
 
-// 2. Studentni butunlay o'chirish - FAQAT ADMIN
+// 2. Studentni butunlay o'chirish - ADMIN yoki TEACHER
 exports.deleteStudent = async (req, res) => {
     const { student_id } = req.params;
 
