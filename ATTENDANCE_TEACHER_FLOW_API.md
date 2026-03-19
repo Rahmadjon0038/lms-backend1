@@ -90,7 +90,7 @@ Eslatma:
 `GET /api/attendance/teachers/:teacher_id/groups`
 
 ### Access
-- `admin`
+- `admin`j
 - `super_admin`
 
 ### Query filterlar (ixtiyoriy)
