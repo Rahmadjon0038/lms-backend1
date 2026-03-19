@@ -35,6 +35,7 @@ Teacher login bo'lganda attendance oqimi adminnikiga o'xshash ishlaydi:
 - Kun filter bo'lsa `date` yoki `day` dan bittasini yuboring (`date` ustuvor).
 - Shift filter bo'lsa `shift=kunduzgi|kechki` yuboring.
 - Card/list da kamida: `name`, `subject_name`, `room_number`, `students_count`.
+- Qo'shimcha flaglar (bugungi davomat holati): `today_date`, `today_lessons_count`, `today_active_students_count`, `today_marked_students_count`, `today_attendance_completed` (agar bugungi davomat kamida bitta darsda to'liq belgilangan bo'lsa `true`), `today_attendance_fully_completed` (agar bugungi barcha darslar to'liq belgilangan bo'lsa `true`).
 
 ---
 

@@ -489,7 +489,7 @@ router.get("/my-payments", protect, studentController.getMyMonthlyPayments);
  * @swagger
  * /api/students/{student_id}:
  *   delete:
- *     summary: Studentni butunlay o'chirish (FAQAT ADMIN)
+ *     summary: Studentni butunlay o'chirish (ADMIN yoki TEACHER)
  *     description: Student va uning barcha ma'lumotlari o'chiriladi
  *     tags: [Students]
  *     security:
@@ -529,7 +529,7 @@ router.get("/my-payments", protect, studentController.getMyMonthlyPayments);
  *       404:
  *         description: Student topilmadi
  */
-router.delete("/:student_id", protect, roleCheck(['admin']), studentController.deleteStudent);
+router.delete("/:student_id", protect, roleCheck(['admin', 'teacher']), studentController.deleteStudent);
 
 /**
  * @swagger
