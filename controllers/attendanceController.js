@@ -351,6 +351,30 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
+    const { date, shift } = req.query;
+    const selectedDate = date || new Date().toISOString().slice(0, 10);
+    if (!isValidDate(selectedDate)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+
+    let normalizedShift = null;
+    if (shift) {
+      const shiftRaw = String(shift).trim().toLowerCase();
+      if (shiftRaw === 'morning' || shiftRaw === 'kunduzgi') {
+        normalizedShift = 'morning';
+      } else if (shiftRaw === 'evening' || shiftRaw === 'kechki') {
+        normalizedShift = 'evening';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "shift faqat kunduzgi/kechki (yoki morning/evening) bo'lishi mumkin"
+        });
+      }
+    }
+
     const result = await pool.query(
       `SELECT
          u.id as teacher_id,
@@ -372,9 +396,95 @@ exports.getTeachersAttendanceList = async (req, res) => {
        ORDER BY u.name, u.surname`
     );
 
+    const targetWeekday = new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
+    const groupsForSchedule = await pool.query(
+      `SELECT g.id, g.teacher_id, g.schedule
+       FROM groups g
+       WHERE g.class_status = 'started'
+         AND g.status IN ('active', 'blocked')
+         AND g.teacher_id IS NOT NULL`
+    );
+
+    const scheduledGroupsCount = new Map();
+    for (const group of groupsForSchedule.rows) {
+      const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
+      if (!weekdays.includes(targetWeekday)) {
+        continue;
+      }
+
+      if (normalizedShift) {
+        const slot = parseScheduleTimeRange(group.schedule);
+        const groupShift = getShiftFromTime(slot.start_time);
+        if (groupShift !== normalizedShift) {
+          continue;
+        }
+      }
+
+      const teacherKey = String(group.teacher_id);
+      scheduledGroupsCount.set(teacherKey, (scheduledGroupsCount.get(teacherKey) || 0) + 1);
+    }
+
+    const shiftSql = normalizedShift === 'morning'
+      ? `AND l.start_time < '13:00:00'::time`
+      : normalizedShift === 'evening'
+        ? `AND l.start_time >= '13:00:00'::time`
+        : '';
+
+    const completedResult = await pool.query(
+      `WITH lesson_attendance AS (
+         SELECT
+           l.id,
+           l.group_id,
+           l.teacher_id,
+           CASE
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+                  = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
+             ELSE false
+           END as attendance_completed
+         FROM lessons l
+         LEFT JOIN attendance a ON a.lesson_id = l.id
+         WHERE l.date = $1::date
+           ${shiftSql}
+         GROUP BY l.id, l.group_id, l.teacher_id
+       )
+       SELECT
+         teacher_id,
+         COUNT(DISTINCT group_id) as groups_with_lessons,
+         COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
+       FROM lesson_attendance
+       GROUP BY teacher_id`,
+      [selectedDate]
+    );
+
+    const completedMap = new Map();
+    for (const row of completedResult.rows) {
+      completedMap.set(String(row.teacher_id), {
+        groups_with_lessons: Number(row.groups_with_lessons) || 0,
+        completed_groups: Number(row.completed_groups) || 0
+      });
+    }
+
+    const enriched = result.rows.map((row) => {
+      const teacherKey = String(row.teacher_id);
+      const scheduledCount = scheduledGroupsCount.get(teacherKey) || 0;
+      const completion = completedMap.get(teacherKey) || { completed_groups: 0, groups_with_lessons: 0 };
+      return {
+        ...row,
+        today_date: selectedDate,
+        today_shift: normalizedShift || null,
+        today_groups_count: scheduledCount,
+        today_marked_groups_count: completion.completed_groups
+      };
+    });
+
     return res.json({
       success: true,
-      data: result.rows
+      data: enriched,
+      meta: {
+        date: selectedDate,
+        shift: normalizedShift || null
+      }
     });
   } catch (error) {
     console.error('Teacher ro\'yxatini olishda xatolik:', error);
@@ -442,14 +552,16 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
       [teacherIdNum]
     );
 
+    const attendanceDate = date || new Date().toISOString().slice(0, 10);
+    if (date && !isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+
     let targetWeekday = null;
     if (date) {
-      if (!isValidDate(date)) {
-        return res.status(400).json({
-          success: false,
-          message: "date YYYY-MM-DD formatida bo'lishi kerak"
-        });
-      }
       targetWeekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
     } else if (day) {
       const normalizedDay = String(day).trim().toLowerCase();
@@ -499,6 +611,68 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
       return dayOk && shiftOk;
     });
 
+    const lessonStatsResult = await pool.query(
+      `WITH lesson_attendance AS (
+         SELECT
+           l.id as lesson_id,
+           l.group_id,
+           COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
+           COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
+           CASE
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+                  = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
+             ELSE false
+           END as attendance_completed
+         FROM lessons l
+         LEFT JOIN attendance a ON a.lesson_id = l.id
+         WHERE l.teacher_id = $1
+           AND l.date = $2::date
+         GROUP BY l.id, l.group_id
+       )
+       SELECT
+         group_id,
+         COUNT(*) as lessons_today_count,
+         COALESCE(SUM(active_students_count), 0) as active_students_count,
+         COALESCE(SUM(marked_students_count), 0) as marked_students_count,
+         BOOL_OR(attendance_completed) as any_attendance_completed,
+         BOOL_AND(attendance_completed) as all_attendance_completed
+       FROM lesson_attendance
+       GROUP BY group_id`,
+      [teacherIdNum, attendanceDate]
+    );
+
+    const lessonStatsMap = new Map();
+    for (const row of lessonStatsResult.rows) {
+      lessonStatsMap.set(String(row.group_id), {
+        lessons_today_count: Number(row.lessons_today_count) || 0,
+        active_students_count: Number(row.active_students_count) || 0,
+        marked_students_count: Number(row.marked_students_count) || 0,
+        any_attendance_completed: Boolean(row.any_attendance_completed),
+        all_attendance_completed: Boolean(row.all_attendance_completed)
+      });
+    }
+
+    const groupsWithStatus = filteredGroups.map((group) => {
+      const stats = lessonStatsMap.get(String(group.group_id)) || {
+        lessons_today_count: 0,
+        active_students_count: 0,
+        marked_students_count: 0,
+        any_attendance_completed: false,
+        all_attendance_completed: false
+      };
+
+      return {
+        ...group,
+        today_date: attendanceDate,
+        today_lessons_count: stats.lessons_today_count,
+        today_active_students_count: stats.active_students_count,
+        today_marked_students_count: stats.marked_students_count,
+        today_attendance_completed: stats.any_attendance_completed,
+        today_attendance_fully_completed: stats.all_attendance_completed
+      };
+    });
+
     return res.json({
       success: true,
       data: {
@@ -511,7 +685,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
           day: day || null,
           shift: normalizedShift || null
         },
-        groups: filteredGroups
+        groups: groupsWithStatus
       }
     });
   } catch (error) {

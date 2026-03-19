@@ -42,11 +42,17 @@ Frontend attendance bo'limida quyidagi oqimni ishlatadi:
 - `admin`
 - `super_admin`
 
+### Query (ixtiyoriy)
+- `date=YYYY-MM-DD` (kunlik progress uchun sana, default: bugun)
+- `shift=kunduzgi|kechki` yoki `morning|evening` (ixtiyoriy)
+
 ### UI da ko'rsatish
 - `full_name`
 - `subjects`
 - `room_numbers`
 - `groups_count`
+- `today_groups_count` (bugungi dars bor guruhlar soni)
+- `today_marked_groups_count` (bugun davomat to'liq belgilangan guruhlar soni)
 
 ### Response (qisqa)
 ```json
@@ -58,14 +64,24 @@ Frontend attendance bo'limida quyidagi oqimni ishlatadi:
       "full_name": "Ali Valiyev",
       "subjects": ["Matematika", "Fizika"],
       "room_numbers": ["101", "203"],
-      "groups_count": "4"
+      "groups_count": "4",
+      "today_date": "2026-03-19",
+      "today_shift": null,
+      "today_groups_count": 5,
+      "today_marked_groups_count": 1
     }
-  ]
+  ],
+  "meta": {
+    "date": "2026-03-19",
+    "shift": null
+  }
 }
 ```
 
 Eslatma:
 - `groups_count` string bo'lishi mumkin -> `Number(item.groups_count)`.
+- `today_groups_count` teacher schedule bo'yicha hisoblanadi (tanlangan `date` va `shift` ga qarab).
+- `today_marked_groups_count` lesson + attendance yozuvlariga qarab hisoblanadi.
 
 ---
 
@@ -89,6 +105,10 @@ Eslatma:
 - `students_count`
 - `schedule.days`
 - `schedule.time`
+- `today_lessons_count` (bugun nechta lesson bor)
+- `today_marked_students_count` / `today_active_students_count` (progress ko'rsatish uchun)
+- `today_attendance_completed` (bugun kamida 1 lesson to'liq belgilangan)
+- `today_attendance_fully_completed` (bugungi barcha lessonlar to'liq belgilangan)
 
 ### Response (qisqa)
 ```json
@@ -111,12 +131,21 @@ Eslatma:
         "subject_name": "Frontend",
         "room_number": "203",
         "students_count": "14",
-        "schedule": { "days": ["Dushanba", "Chorshanba"], "time": "10:00-12:00" }
+        "schedule": { "days": ["Dushanba", "Chorshanba"], "time": "10:00-12:00" },
+        "today_date": "2026-03-19",
+        "today_lessons_count": 1,
+        "today_active_students_count": 14,
+        "today_marked_students_count": 14,
+        "today_attendance_completed": true,
+        "today_attendance_fully_completed": true
       }
     ]
   }
 }
 ```
+
+Eslatma:
+- `date` yuborilmasa ham `today_*` maydonlar bugungi sanaga (`YYYY-MM-DD`) qarab hisoblanadi.
 
 ---
 
