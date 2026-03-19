@@ -32,6 +32,7 @@ Frontend attendance bo'limida quyidagi oqimni ishlatadi:
 4. Dars ichida studentlar va davomat
 5. Student monthly status boshqaruvi
 
+
 ---
 
 ## 0) Teacherning o'z guruhlari (my-groups)

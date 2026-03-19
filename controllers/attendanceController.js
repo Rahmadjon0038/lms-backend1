@@ -1384,6 +1384,12 @@ exports.getMonthlyAttendance = async (req, res) => {
       [group_id, selectedMonth]
     );
 
+    // SAFETY: shu oy darslaridagi attendance yozuvlari mavjudligini ta'minlaymiz
+    // (bugun/kelajak sanalari uchun bo'sh kelishni oldini oladi)
+    for (const lesson of lessons.rows) {
+      await syncLessonAttendanceForDate(lesson.id, group_id, lesson.date);
+    }
+
     // Talabaning guruhdagi davrlari (bir necha marta kirib-chiqqan bo'lishi mumkin)
     const membershipPeriodsResult = await pool.query(
       `SELECT 
@@ -1446,7 +1452,7 @@ exports.getMonthlyAttendance = async (req, res) => {
         AND sp.group_id = a.group_id
         AND sp.month = COALESCE(a.month, a.month_name)
        LEFT JOIN groups g ON g.id = a.group_id
-       WHERE a.group_id = $1 AND COALESCE(a.month, a.month_name) = $2
+       WHERE a.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
        GROUP BY a.student_id, u.name, u.surname, u.phone, a.monthly_status
        ORDER BY a.monthly_status, u.name`,
       [group_id, selectedMonth]
