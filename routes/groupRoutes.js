@@ -254,7 +254,7 @@ router.post(
  * @swagger
  * /api/groups/{group_id}/remove-student/{student_id}:
  *   delete:
- *     summary: Talabani guruhdan chiqarib yuborish (Admin)
+ *     summary: Talabani guruhdan chiqarib yuborish (Admin yoki Teacher)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -276,14 +276,14 @@ router.post(
 router.delete(
   '/:group_id/remove-student/:student_id',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.removeStudentFromGroup
 );
 
 router.delete(
   '/:group_id/remove-students',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.bulkRemoveStudentsFromGroup
 );
 
@@ -420,7 +420,7 @@ router.delete(
  * @swagger
  * /api/groups/change-student-group:
  *   post:
- *     summary: Studentni boshqa guruhga o'tkazish (Faqat Admin)
+ *     summary: Studentni boshqa guruhga o'tkazish (Admin yoki Teacher)
  *     description: Student bir guruhdan boshqa guruhga ko'chiriladi. Eski guruhdan o'chirib, yangi guruhga qo'shadi.
  *     tags: [Groups]
  *     security:
@@ -569,14 +569,14 @@ router.post('/fix-student-status', protect, roleCheck(['admin']), groupCtrl.fixS
 router.post(
   '/change-student-group',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.changeStudentGroup
 );
 
 router.post(
   '/change-students-group',
   protect,
-  roleCheck(['admin']),
+  roleCheck(['admin', 'teacher']),
   groupCtrl.bulkChangeStudentGroup
 );
 

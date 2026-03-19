@@ -787,6 +787,17 @@ exports.removeStudentFromGroup = async (req, res) => {
     const group_id = parseInt(req.params.group_id);
     const student_id = parseInt(req.params.student_id);
     try {
+        const groupRes = await pool.query(
+            'SELECT id, teacher_id FROM groups WHERE id = $1',
+            [group_id]
+        );
+        if (groupRes.rows.length === 0) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        if (req.user?.role === 'teacher' && groupRes.rows[0].teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhidan studentni chiqarishi mumkin" });
+        }
+
         const result = await pool.query(
             "DELETE FROM student_groups WHERE group_id = $1 AND student_id = $2 RETURNING *",
             [group_id, student_id]
@@ -1042,6 +1053,14 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
     }
 
     try {
+        const groupData = await getGroupMembershipMeta(groupId);
+        if (!groupData) {
+            return res.status(404).json({ message: "Guruh topilmadi" });
+        }
+        if (req.user?.role === 'teacher' && groupData.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhidan studentni chiqarishi mumkin" });
+        }
+
         const membersRes = await pool.query(
             `SELECT sg.student_id, u.name, u.surname
              FROM student_groups sg
@@ -1118,14 +1137,29 @@ exports.bulkChangeStudentGroup = async (req, res) => {
         if (!newGroup) {
             return res.status(404).json({ message: "Yangi guruh topilmadi" });
         }
+        if (req.user?.role === 'teacher' && newGroup.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhiga student o'tkaza oladi" });
+        }
         if (!newGroup.is_active || newGroup.status === 'blocked') {
             return res.status(400).json({ message: "Yangi guruh faol emas yoki bloklangan" });
         }
 
+        if (req.user?.role === 'teacher' && fromGroupId) {
+            const fromGroup = await getGroupMembershipMeta(fromGroupId);
+            if (!fromGroup) {
+                return res.status(404).json({ message: "Manba guruh topilmadi" });
+            }
+            if (fromGroup.teacher_id !== req.user.id) {
+                return res.status(403).json({ message: "Teacher faqat o'z guruhidagi studentlarni ko'chira oladi" });
+            }
+        }
+
         const studentsRes = await pool.query(
-            `SELECT id, name, surname, status, group_id, group_name
-             FROM users
-             WHERE role = 'student' AND id = ANY($1::int[])`,
+            `SELECT u.id, u.name, u.surname, u.status, u.group_id, u.group_name,
+                    g.teacher_id as current_group_teacher_id
+             FROM users u
+             LEFT JOIN groups g ON g.id = u.group_id
+             WHERE u.role = 'student' AND u.id = ANY($1::int[])`,
             [studentIds]
         );
         const studentsMap = new Map(studentsRes.rows.map((s) => [s.id, s]));
@@ -1138,6 +1172,14 @@ exports.bulkChangeStudentGroup = async (req, res) => {
             const student = studentsMap.get(studentId);
             if (!student) {
                 failed.push({ student_id: studentId, reason: 'student_not_found' });
+                continue;
+            }
+            if (req.user?.role === 'teacher' && student.group_id && student.current_group_teacher_id !== req.user.id) {
+                failed.push({
+                    student_id: studentId,
+                    student_name: `${student.name} ${student.surname}`,
+                    reason: 'not_teacher_group'
+                });
                 continue;
             }
             if (student.status !== 'active') {
@@ -1158,6 +1200,18 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                     reason: 'already_in_target_group'
                 });
                 continue;
+            }
+
+            if (req.user?.role === 'teacher' && sourceGroupId) {
+                const sourceGroup = await getGroupMembershipMeta(sourceGroupId);
+                if (!sourceGroup || sourceGroup.teacher_id !== req.user.id) {
+                    failed.push({
+                        student_id: studentId,
+                        student_name: `${student.name} ${student.surname}`,
+                        reason: 'not_teacher_group'
+                    });
+                    continue;
+                }
             }
 
             if (sourceGroupId) {
@@ -1593,8 +1647,22 @@ exports.changeStudentGroup = async (req, res) => {
 
         const newGroup = newGroupCheck.rows[0];
 
+        if (req.user?.role === 'teacher' && newGroup.teacher_id !== req.user.id) {
+            return res.status(403).json({ message: "Teacher faqat o'z guruhiga student o'tkaza oladi" });
+        }
+
         if (!newGroup.is_active) {
             return res.status(400).json({ message: "Yangi guruh faol emas (bloklangan)" });
+        }
+
+        if (req.user?.role === 'teacher' && oldGroupId) {
+            const oldGroup = await getGroupMembershipMeta(oldGroupId);
+            if (!oldGroup) {
+                return res.status(404).json({ message: "Eski guruh topilmadi" });
+            }
+            if (oldGroup.teacher_id !== req.user.id) {
+                return res.status(403).json({ message: "Teacher faqat o'z guruhidagi studentlarni ko'chira oladi" });
+            }
         }
 
         // Eski guruhdan o'chirish (agar mavjud bo'lsa)
