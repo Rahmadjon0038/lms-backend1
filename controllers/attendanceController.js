@@ -55,6 +55,14 @@ const isValidMonth = (value) => /^\d{4}-\d{2}$/.test(String(value || ''));
 const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 const isValidTime = (value) => /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(value || ''));
 
+const normalizeMonthParam = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (isValidMonth(raw)) return raw;
+  if (isValidDate(raw)) return raw.slice(0, 7);
+  return null;
+};
+
 const normalizeTimeValue = (value, fallback = '00:00:00') => {
   if (!value) return fallback;
   const raw = String(value).trim();
@@ -1341,7 +1349,14 @@ exports.getMonthlyAttendance = async (req, res) => {
   const { role, id: userId } = req.user;
   
   try {
-    const selectedMonth = month || new Date().toISOString().slice(0, 7);
+    const normalizedMonth = normalizeMonthParam(month);
+    if (month && !normalizedMonth) {
+      return res.status(400).json({
+        success: false,
+        message: "month YYYY-MM formatida bo'lishi kerak (yoki YYYY-MM-DD yuborsangiz oyga aylantiriladi)"
+      });
+    }
+    const selectedMonth = normalizedMonth || new Date().toISOString().slice(0, 7);
 
     // Avval guruh va teacher ma'lumotlarini olamiz
     const groupInfo = await pool.query(
@@ -2855,11 +2870,12 @@ exports.exportMonthlyAttendance = async (req, res) => {
   const { month } = req.query;
   
   try {
-    // Faqat YYYY-MM formatni qabul qilamiz
-    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+    const normalizedMonth = normalizeMonthParam(month);
+    // Faqat YYYY-MM formatni qabul qilamiz (yoki YYYY-MM-DD bo'lsa oyga aylantiramiz)
+    if (!normalizedMonth) {
       return res.status(400).json({
         success: false,
-        message: 'Oy formatida xatolik (YYYY-MM format ishlatilsin)'
+        message: 'Oy formatida xatolik (YYYY-MM format ishlatilsin, YYYY-MM-DD bo\'lsa oyga aylantiriladi)'
       });
     }
     
@@ -2900,7 +2916,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
        FROM lessons 
        WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
        ORDER BY date`,
-      [group_id, month]
+      [group_id, normalizedMonth]
     );
     
     if (lessons.rows.length === 0) {
@@ -2927,7 +2943,8 @@ exports.exportMonthlyAttendance = async (req, res) => {
       ORDER BY u.name, u.surname, l.date
     `;
     
-    const attendanceResult = await pool.query(attendanceQuery, [group_id, month]);
+    const attendanceResult = await pool.query(attendanceQuery, [group_id, normalizedMonth]);
+    
     
     if (attendanceResult.rows.length === 0) {
       return res.status(404).json({
@@ -2973,7 +2990,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
       '09': 'Sentyabr', '10': 'Oktyabr', '11': 'Noyabr', '12': 'Dekabr'
     };
     
-    const [year, monthNum] = month.split('-');
+    const [year, monthNum] = normalizedMonth.split('-');
     const titleRow = [`${group.name} - ${monthName[monthNum]} ${year} - Oylik Davomat`];
     worksheetData.push(titleRow);
     worksheetData.push([]); // Bo'sh qator
