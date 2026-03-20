@@ -213,6 +213,23 @@ router.get('/new-students-notification', protect, snapshotController.getNewStude
  *           enum: [paid, partial, unpaid, inactive]
  *         description: Filter by payment status
  *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by student, parent, phone, group, teacher, or subject
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Pagination page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: Pagination page size (max 100)
+ *       - in: query
  *         name: teacher_id
  *         schema:
  *           type: integer
