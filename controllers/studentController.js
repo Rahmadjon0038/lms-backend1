@@ -269,7 +269,7 @@ exports.deleteStudent = async (req, res) => {
 
 // 3. Studentlarni oy, teacher, group, subject bo'yicha filter qilish + har birining barcha guruhlari
 exports.getAllStudents = async (req, res) => {
-  const { teacher_id, group_id, subject_id, status, group_status, unassigned } = req.query;
+  const { teacher_id, group_id, subject_id, status, group_status, unassigned, page, limit, search } = req.query;
   
   try {
     await ensureStudentRecoveryKeys();
@@ -304,6 +304,24 @@ exports.getAllStudents = async (req, res) => {
     let joinConditions = [];
     let params = [];
     let paramIdx = 1;
+
+    // Search (name/phone/username/father)
+    if (search && String(search).trim().length > 0) {
+      const searchValue = `%${String(search).trim()}%`;
+      whereConditions.push(`(
+        u.name ILIKE $${paramIdx}
+        OR u.surname ILIKE $${paramIdx}
+        OR (u.name || ' ' || u.surname) ILIKE $${paramIdx}
+        OR (u.surname || ' ' || u.name) ILIKE $${paramIdx}
+        OR u.phone ILIKE $${paramIdx}
+        OR u.phone2 ILIKE $${paramIdx}
+        OR u.username ILIKE $${paramIdx}
+        OR u.father_name ILIKE $${paramIdx}
+        OR u.father_phone ILIKE $${paramIdx}
+      )`);
+      params.push(searchValue);
+      paramIdx++;
+    }
 
     // Agar specific filters bo'lsa, JOIN qo'shamiz
     if (teacher_id || group_id || subject_id || group_status) {
@@ -350,12 +368,29 @@ exports.getAllStudents = async (req, res) => {
       whereConditions.push('sg.student_id IS NULL');
     }
 
+    // Pagination
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const offsetNumber = (pageNumber - 1) * limitNumber;
+
     const finalQuery = baseQuery + 
       (joinConditions.length > 0 ? ' ' + joinConditions.join(' ') : '') + 
       ' WHERE ' + whereConditions.join(' AND ') + 
-      ' ORDER BY u.name, u.surname';
+      ' ORDER BY u.name, u.surname' +
+      ` LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
 
-    const studentsResult = await pool.query(finalQuery, params);
+    const studentsResult = await pool.query(finalQuery, [...params, limitNumber, offsetNumber]);
+
+    const countQuery = `
+      SELECT COUNT(DISTINCT u.id) as total
+      FROM users u
+      LEFT JOIN subjects sp ON u.subject_id = sp.id
+      ${joinConditions.length > 0 ? joinConditions.join(' ') : ''}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0]?.total, 10) || 0;
+    const totalPages = Math.ceil(total / limitNumber);
     
     // Har bir student uchun barcha guruh ma'lumotlarini alohida olish
     const enrichedStudents = [];
@@ -417,39 +452,52 @@ exports.getAllStudents = async (req, res) => {
       });
     }
     
-    // Statistika hisoblash
-    let totalActiveInGroups = 0;
-    let totalStoppedInGroups = 0;
-    let totalFinishedFromGroups = 0;
-    let totalUnassigned = 0;
-    
-    enrichedStudents.forEach(student => {
-      if (student.groups.length === 0) {
-        totalUnassigned++;
-      } else {
-        student.groups.forEach(group => {
-          if (group.group_status === 'active') totalActiveInGroups++;
-          else if (group.group_status === 'stopped') totalStoppedInGroups++;
-          else if (group.group_status === 'finished') totalFinishedFromGroups++;
-        });
-      }
-    });
-    
+    // Statistika (filter bo'yicha umumiy)
+    const statsJoins = new Set(joinConditions);
+    if (!Array.from(statsJoins).some(j => j.includes('student_groups'))) {
+      statsJoins.add('LEFT JOIN student_groups sg ON u.id = sg.student_id');
+    }
+    if (!Array.from(statsJoins).some(j => j.includes('groups g'))) {
+      statsJoins.add('LEFT JOIN groups g ON sg.group_id = g.id');
+    }
+
+    const statsQuery = `
+      SELECT
+        COUNT(DISTINCT u.id) as total_students,
+        COUNT(DISTINCT CASE WHEN sg.student_id IS NOT NULL THEN u.id END) as students_with_groups,
+        COUNT(DISTINCT CASE WHEN sg.student_id IS NULL THEN u.id END) as unassigned_students,
+        COUNT(*) FILTER (WHERE sg.status = 'active') as active,
+        COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped,
+        COUNT(*) FILTER (WHERE sg.status = 'finished') as finished
+      FROM users u
+      LEFT JOIN subjects sp ON u.subject_id = sp.id
+      ${Array.from(statsJoins).join(' ')}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const statsResult = await pool.query(statsQuery, params);
+    const statsRow = statsResult.rows[0] || {};
+
     const stats = {
-      total_students: enrichedStudents.length,
-      students_with_groups: enrichedStudents.filter(s => s.groups.length > 0).length,
-      unassigned_students: totalUnassigned,
+      total_students: parseInt(statsRow.total_students || 0, 10),
+      students_with_groups: parseInt(statsRow.students_with_groups || 0, 10),
+      unassigned_students: parseInt(statsRow.unassigned_students || 0, 10),
       group_memberships: {
-        active: totalActiveInGroups,
-        stopped: totalStoppedInGroups, 
-        finished: totalFinishedFromGroups
+        active: parseInt(statsRow.active || 0, 10),
+        stopped: parseInt(statsRow.stopped || 0, 10),
+        finished: parseInt(statsRow.finished || 0, 10)
       }
     };
     
     res.json({
       success: true,
       stats: stats,
-      students: enrichedStudents
+      students: enrichedStudents,
+      pagination: {
+        page: pageNumber,
+        limit: limitNumber,
+        total,
+        total_pages: totalPages
+      }
     });
     
   } catch (err) {

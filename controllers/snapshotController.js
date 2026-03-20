@@ -229,7 +229,7 @@ exports.createMonthlySnapshot = async (req, res) => {
  */
 exports.getMonthlySnapshots = async (req, res) => {
   try {
-    const { month, group_id, status, payment_status, teacher_id, subject_id } = req.query;
+    const { month, group_id, status, payment_status, teacher_id, subject_id, page, limit, search } = req.query;
     const { role: userRole, id: userId } = req.user;
 
     let whereConditions = [];
@@ -280,6 +280,27 @@ exports.getMonthlySnapshots = async (req, res) => {
       paramIndex++;
     }
 
+    // Search (student/parent/phone) - snapshot + current user data fallback
+    if (search && String(search).trim().length > 0) {
+      const searchValue = `%${String(search).trim()}%`;
+      whereConditions.push(`(
+        ms.student_name ILIKE $${paramIndex}
+        OR ms.student_surname ILIKE $${paramIndex}
+        OR (ms.student_name || ' ' || ms.student_surname) ILIKE $${paramIndex}
+        OR (ms.student_surname || ' ' || ms.student_name) ILIKE $${paramIndex}
+        OR ms.student_phone ILIKE $${paramIndex}
+        OR ms.student_father_name ILIKE $${paramIndex}
+        OR ms.student_father_phone ILIKE $${paramIndex}
+        OR su.name ILIKE $${paramIndex}
+        OR su.surname ILIKE $${paramIndex}
+        OR (su.name || ' ' || su.surname) ILIKE $${paramIndex}
+        OR (su.surname || ' ' || su.name) ILIKE $${paramIndex}
+        OR su.phone ILIKE $${paramIndex}
+      )`);
+      params.push(searchValue);
+      paramIndex++;
+    }
+
     // Teacher ID filter - guruh orqali o'qituvchini filterlash
     if (teacher_id) {
       const teacherFilterQuery = `
@@ -303,6 +324,11 @@ exports.getMonthlySnapshots = async (req, res) => {
       params.push(subject_id);
       paramIndex++;
     }
+
+    // Pagination
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const offsetNumber = (pageNumber - 1) * limitNumber;
 
     const query = `
       SELECT 
@@ -361,11 +387,23 @@ exports.getMonthlySnapshots = async (req, res) => {
         AND sd.end_month >= ms.month
         AND sd.is_active = true
       LEFT JOIN users u ON ms.payment_made_by = u.id
+      LEFT JOIN users su ON ms.student_id = su.id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
 
-    const result = await db.query(query, params);
+    const result = await db.query(query, [...params, limitNumber, offsetNumber]);
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM monthly_snapshots ms
+      LEFT JOIN users su ON ms.student_id = su.id
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const countResult = await db.query(countQuery, params);
+    const total = parseInt(countResult.rows[0]?.total, 10) || 0;
+    const totalPages = Math.ceil(total / limitNumber);
 
     // STATIC SNAPSHOT - yaratilgandan keyin o'zgarmasligi kerak
     // Hybrid approach olib tashlandim - faqat snapshot ma'lumotlari
@@ -384,6 +422,7 @@ exports.getMonthlySnapshots = async (req, res) => {
         COUNT(CASE WHEN sd.id IS NOT NULL THEN 1 END) as students_with_discounts,
         SUM(COALESCE(ms.discount_amount, 0)) as total_discount_amount
       FROM monthly_snapshots ms
+      LEFT JOIN users su ON ms.student_id = su.id
       LEFT JOIN student_discounts sd ON ms.student_id = sd.student_id 
         AND ms.group_id = sd.group_id
         AND sd.start_month <= ms.month 
@@ -399,7 +438,13 @@ exports.getMonthlySnapshots = async (req, res) => {
       data: {
         month,
         students: result.rows,
-        summary: summaryResult.rows[0]
+        summary: summaryResult.rows[0],
+        pagination: {
+          page: pageNumber,
+          limit: limitNumber,
+          total,
+          total_pages: totalPages
+        }
       }
     });
 

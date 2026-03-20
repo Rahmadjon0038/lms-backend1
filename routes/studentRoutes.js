@@ -63,6 +63,26 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *           type: string
  *           enum: [true]
  *         description: Hali guruhga biriktirilmagan studentlarni ko'rsatish uchun 'true' qiymat berish kerak
+ *       - in: query
+ *         name: search
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Qidiruv (ism, familiya, telefon, username, ota-ona)
+ *       - in: query
+ *         name: page
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Pagination sahifasi
+ *       - in: query
+ *         name: limit
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: Pagination limit (max 100)
  *     responses:
  *       200:
  *         description: Muvaffaqiyatli ro'yxat qaytdi
