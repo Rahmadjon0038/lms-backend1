@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const initTables = async () => {
   try {
     await createLessonsTable();
+    await createHolidaysTable();
     await createAttendanceTable();
   } catch (error) {
     console.error('Jadvallarni yaratishda xatolik:', error);
@@ -23,6 +24,7 @@ const createLessonsTable = async () => {
         date DATE NOT NULL,
         start_time TIME NOT NULL DEFAULT '00:00:00',
         end_time TIME,
+        is_holiday BOOLEAN DEFAULT false,
         status VARCHAR(20) NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started', 'open', 'closed')),
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -40,6 +42,7 @@ const createLessonsTable = async () => {
       ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
       ADD COLUMN IF NOT EXISTS start_time TIME DEFAULT '00:00:00',
       ADD COLUMN IF NOT EXISTS end_time TIME,
+      ADD COLUMN IF NOT EXISTS is_holiday BOOLEAN DEFAULT false,
       ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'not_started'
         CHECK (status IN ('not_started', 'open', 'closed'));
     `);
@@ -84,9 +87,16 @@ const createLessonsTable = async () => {
     `);
 
     await pool.query(`
+      UPDATE lessons
+      SET is_holiday = COALESCE(is_holiday, false)
+      WHERE is_holiday IS NULL
+    `);
+
+    await pool.query(`
       ALTER TABLE lessons
       ALTER COLUMN start_time SET DEFAULT '00:00:00',
       ALTER COLUMN start_time SET NOT NULL,
+      ALTER COLUMN is_holiday SET DEFAULT false,
       ALTER COLUMN status SET DEFAULT 'not_started',
       ALTER COLUMN status SET NOT NULL;
     `);
@@ -141,6 +151,23 @@ const createLessonsTable = async () => {
     console.log("✅ 'lessons' jadvali yaratildi.");
   } catch (error) {
     console.error('Lessons jadvalini yaratishda xatolik:', error);
+    throw error;
+  }
+};
+
+// Global holiday (dam olish) sanalari jadvali
+const createHolidaysTable = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS holidays (
+        date DATE PRIMARY KEY,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date);`);
+  } catch (error) {
+    console.error('Holidays jadvalini yaratishda xatolik:', error);
     throw error;
   }
 };
@@ -311,7 +338,7 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
 
     // Oy ichidagi barcha darslarni olish
     const lessonsQuery = `
-      SELECT l.id, l.date, CONCAT(u.name, ' ', u.surname) as created_by_name
+      SELECT l.id, l.date, l.is_holiday, CONCAT(u.name, ' ', u.surname) as created_by_name
       FROM lessons l
       LEFT JOIN users u ON l.created_by = u.id
       WHERE l.group_id = $1 AND l.date >= $2 AND l.date <= $3
@@ -321,7 +348,8 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
     const lessons = lessonsResult.rows.map(row => ({
       id: row.id,
       date: row.date.toISOString().slice(0, 10),
-      created_by: row.created_by_name || 'Noma\'lum'
+      created_by: row.created_by_name || 'Noma\'lum',
+      is_holiday: row.is_holiday === true
     }));
 
     // Guruhdagi aktiv talabalarni olish
@@ -396,6 +424,7 @@ const getMonthlyAttendanceGrid = async (groupId, month = null) => {
 
 module.exports = {
   createLessonsTable,
+  createHolidaysTable,
   createAttendanceTable,
   getMonthlyAttendanceGrid
 };

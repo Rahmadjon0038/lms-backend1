@@ -88,7 +88,7 @@ const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
 const { createRoomTable } = require('./models/roomModel');
-const { createLessonsTable, createAttendanceTable } = require('./models/attendanceModel');
+const { createLessonsTable, createAttendanceTable, createHolidaysTable } = require('./models/attendanceModel');
 const { createGuideTables } = require('./models/guideModel');
 const { createExpenseTable } = require('./models/expenseModel');
 const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
@@ -141,6 +141,7 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['students_extra', createStudentAdditionalTables],
             ['teacher_subjects', createTeacherSubjectTables],
             ['lessons', createLessonsTable],
+            ['holidays', createHolidaysTable],
             ['attendance', createAttendanceTable],
             ['guides', createGuideTables],
             ['center_expenses', createExpenseTable],

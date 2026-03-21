@@ -16,6 +16,8 @@ const {
   regenerateGroupLessons,
   updateLessonDate,
   patchLesson,
+  setHolidayForDate,
+  getGlobalHolidays,
   deleteLesson,
   exportMonthlyAttendance
 } = require('../controllers/attendanceController');
@@ -168,6 +170,87 @@ router.get('/lessons/:lesson_id/students', protect, roleCheck(['admin', 'super_a
  *         description: Davomat belgilandi
  */
 router.put('/lessons/:lesson_id/mark', protect, roleCheck(['admin', 'super_admin', 'teacher']), markAttendance);
+
+/**
+ * @swagger
+ * /api/attendance/holidays:
+ *   get:
+ *     summary: Global dam olish kunlari ro'yxati
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: month
+ *         in: query
+ *         schema:
+ *           type: string
+ *           example: "2026-03"
+ *     responses:
+ *       200:
+ *         description: Holiday sanalar ro'yxati
+ *   patch:
+ *     summary: Global dam olish kunini belgilash
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - date
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-03-20"
+ *               is_holiday:
+ *                 type: boolean
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Dam olish belgilandi
+ */
+router.get('/holidays', protect, roleCheck(['admin', 'teacher', 'super_admin']), getGlobalHolidays);
+router.patch('/holidays', protect, roleCheck(['admin', 'teacher', 'super_admin']), setHolidayForDate);
+
+/**
+ * @swagger
+ * /api/attendance/groups/{group_id}/holiday:
+ *   patch:
+ *     summary: Dam olish kunini belgilash (global)
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: group_id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - date
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-03-20"
+ *               is_holiday:
+ *                 type: boolean
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Dam olish belgilandi
+ */
+router.patch('/groups/:group_id/holiday', protect, roleCheck(['admin', 'teacher']), setHolidayForDate);
 
 /**
  * @swagger

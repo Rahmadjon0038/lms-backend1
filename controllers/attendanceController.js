@@ -106,6 +106,46 @@ const parseScheduleTimeRange = (schedule) => {
   return { start_time: '00:00:00', end_time: null };
 };
 
+const isHolidayDate = async (dateStr) => {
+  if (!isValidDate(dateStr)) return false;
+  const result = await pool.query(`SELECT 1 FROM holidays WHERE date = $1`, [dateStr]);
+  return result.rows.length > 0;
+};
+
+const getHolidayDatesForMonth = async (month) => {
+  if (!isValidMonth(month)) return new Set();
+  const result = await pool.query(
+    `SELECT TO_CHAR(date, 'YYYY-MM-DD') as date
+     FROM holidays
+     WHERE TO_CHAR(date, 'YYYY-MM') = $1`,
+    [month]
+  );
+  return new Set(result.rows.map((r) => r.date));
+};
+
+const applyGlobalHoliday = async ({ date, isHoliday, userId }) => {
+  if (isHoliday) {
+    await pool.query(
+      `INSERT INTO holidays (date, created_by)
+       VALUES ($1::date, $2)
+       ON CONFLICT (date) DO NOTHING`,
+      [date, userId]
+    );
+  } else {
+    await pool.query(`DELETE FROM holidays WHERE date = $1::date`, [date]);
+  }
+
+  const updateResult = await pool.query(
+    `UPDATE lessons
+     SET is_holiday = $2
+     WHERE date = $1::date
+     RETURNING id`,
+    [date, Boolean(isHoliday)]
+  );
+
+  return updateResult.rowCount;
+};
+
 const getDefaultLessonStatusForDate = (dateStr) => {
   const today = new Date().toISOString().slice(0, 10);
   return String(dateStr) > today ? 'not_started' : 'open';
@@ -258,6 +298,7 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
     [groupId, month]
   );
   const existingSlots = new Set(existingLessons.rows.map((r) => `${r.lesson_date}|${normalizeTimeValue(r.start_time)}`));
+  const holidayDates = await getHolidayDatesForMonth(month);
 
   const monthlyCap = 12;
   if (existingLessons.rows.length >= monthlyCap) {
@@ -281,8 +322,8 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   let generated = 0;
   for (const lessonDate of toCreate) {
     const inserted = await pool.query(
-      `INSERT INTO lessons (group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by)
-       VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
+      `INSERT INTO lessons (group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday)
+       VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
        ON CONFLICT (group_id, date, start_time) DO NOTHING
        RETURNING id`,
       [
@@ -294,7 +335,8 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
         slot.start_time,
         slot.end_time,
         getDefaultLessonStatusForDate(lessonDate),
-        createdBy
+        createdBy,
+        holidayDates.has(lessonDate)
       ]
     );
 
@@ -453,6 +495,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
          WHERE l.date = $1::date
+           AND COALESCE(l.is_holiday, false) = false
            ${shiftSql}
          GROUP BY l.id, l.group_id, l.teacher_id
        )
@@ -636,6 +679,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          LEFT JOIN attendance a ON a.lesson_id = l.id
          WHERE l.teacher_id = $1
            AND l.date = $2::date
+           AND COALESCE(l.is_holiday, false) = false
          GROUP BY l.id, l.group_id
        )
        SELECT
@@ -848,12 +892,13 @@ exports.getGroupsForAttendance = async (req, res) => {
                     = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
                ELSE false
              END as attendance_completed
-           FROM lessons l
-           LEFT JOIN attendance a ON a.lesson_id = l.id
-           WHERE l.date = $1::date
-             AND l.group_id = ANY($2::int[])
-           GROUP BY l.id, l.group_id
-         )
+         FROM lessons l
+         LEFT JOIN attendance a ON a.lesson_id = l.id
+         WHERE l.date = $1::date
+           AND l.group_id = ANY($2::int[])
+           AND COALESCE(l.is_holiday, false) = false
+         GROUP BY l.id, l.group_id
+       )
          SELECT
            group_id,
            COUNT(*) as lessons_today_count,
@@ -971,6 +1016,7 @@ exports.createLesson = async (req, res) => {
     const finalTeacherId = teacher_id || group.teacher_id || userId;
     const finalSubjectId = subject_id || group.subject_id || null;
     const finalRoomId = room_id || group.room_id || null;
+    const holidayForDate = await isHolidayDate(date);
 
     if (role === 'teacher' && String(finalTeacherId || '') !== String(userId)) {
       return res.status(403).json({
@@ -995,9 +1041,9 @@ exports.createLesson = async (req, res) => {
     // Yangi dars yaratish
     const newLesson = await pool.query(
       `INSERT INTO lessons (
-         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by
-       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
-       RETURNING id, date, teacher_id, subject_id, room_id, start_time, end_time, status`,
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
+       RETURNING id, date, teacher_id, subject_id, room_id, start_time, end_time, status, is_holiday`,
       [
         group_id,
         finalTeacherId,
@@ -1007,7 +1053,8 @@ exports.createLesson = async (req, res) => {
         requestedStartTime,
         requestedEndTime,
         lessonStatus,
-        userId
+        userId,
+        holidayForDate
       ]
     );
     const lesson_id = newLesson.rows[0].id;
@@ -1240,7 +1287,7 @@ exports.markAttendance = async (req, res) => {
     }
 
     const lessonAccess = await pool.query(
-      `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id, l.status
+      `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id, l.status, COALESCE(l.is_holiday, false) as is_holiday
        FROM lessons l
        LEFT JOIN groups g ON g.id = l.group_id
        WHERE l.id = $1`,
@@ -1259,6 +1306,13 @@ exports.markAttendance = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: 'Siz faqat o\'zingizga biriktirilgan lesson davomatini belgilay olasiz'
+      });
+    }
+
+    if (lesson.is_holiday) {
+      return res.status(409).json({
+        success: false,
+        message: 'Dam olish kuni uchun davomat belgilab bo\'lmaydi'
       });
     }
 
@@ -1392,7 +1446,7 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // Oyning barcha darslarini olish
     const lessons = await pool.query(
-      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day
+      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
        WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
        ORDER BY date`,
@@ -1436,18 +1490,19 @@ exports.getMonthlyAttendance = async (req, res) => {
          u.phone,
          a.monthly_status,
          json_agg(
-           json_build_object(
-             'lesson_id', l.id,
-             'date', TO_CHAR(l.date, 'YYYY-MM-DD'),
-             'status', CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END,
-             'is_marked', COALESCE(a.is_marked, false)
-           ) ORDER BY l.date
+             json_build_object(
+               'lesson_id', l.id,
+               'date', TO_CHAR(l.date, 'YYYY-MM-DD'),
+               'is_holiday', COALESCE(l.is_holiday, false),
+               'status', CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END,
+               'is_marked', COALESCE(a.is_marked, false)
+             ) ORDER BY l.date
          ) as attendance_records,
          -- Statistika hisoblash (barcha mavjud attendance yozuvlari uchun)
-         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_present,
-         COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_absent,
-         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as total_late,
-         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as total_lessons,
+         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_present,
+         COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_absent,
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_late,
+         COUNT(CASE WHEN COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_lessons,
          MAX(COALESCE(ms.paid_amount, sp.paid_amount, 0)) as paid_amount,
          MAX(
            COALESCE(
@@ -1939,18 +1994,26 @@ exports.getGroupLessons = async (req, res) => {
          TO_CHAR(l.start_time, 'HH24:MI') as start_time,
          CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
          l.status as lesson_status,
+         l.is_holiday,
          l.teacher_id,
          l.subject_id,
          l.room_id,
          s2.name as lesson_subject_name,
          r2.room_number as lesson_room_number,
-         COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END) as total_students,
-         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
-         COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
-         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END) as present_count,
-         COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as absent_count,
-         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count,
+         COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as total_students,
+         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as active_students_count,
+         COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as marked_students_count,
+         COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as present_count,
+         COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as absent_count,
+         COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as late_count,
          CASE
+           WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN 'not_marked'
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) = 0 THEN 'not_marked'
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
@@ -1959,6 +2022,7 @@ exports.getGroupLessons = async (req, res) => {
            ELSE 'marked'
          END as attendance_state,
          CASE
+           WHEN COALESCE(l.is_holiday, false) = true THEN false
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
                 = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
@@ -1969,7 +2033,7 @@ exports.getGroupLessons = async (req, res) => {
        LEFT JOIN subjects s2 ON l.subject_id = s2.id
        LEFT JOIN rooms r2 ON l.room_id = r2.id
        WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
-       GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number
+       GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.is_holiday, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number
        ORDER BY l.date DESC, l.start_time ASC`,
       [group_id, selectedMonth]
     );
@@ -2069,9 +2133,12 @@ exports.getMyLessons = async (req, res) => {
          TO_CHAR(l.start_time, 'HH24:MI') as start_time,
          CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
          l.status as lesson_status,
-         COUNT(a.id) as attendance_rows,
-         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students,
-         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END) as marked_students
+         l.is_holiday,
+         COUNT(a.id) FILTER (WHERE COALESCE(l.is_holiday, false) = false) as attendance_rows,
+         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as active_students,
+         COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END)
+           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as marked_students
        FROM lessons l
        JOIN groups g ON g.id = l.group_id
        LEFT JOIN subjects s ON s.id = l.subject_id
@@ -2080,7 +2147,7 @@ exports.getMyLessons = async (req, res) => {
        LEFT JOIN attendance a ON a.lesson_id = l.id
        WHERE l.teacher_id = $1
          ${filterQuery}
-       GROUP BY l.id, g.name, s.name, gs.name, r.room_number
+       GROUP BY l.id, g.name, s.name, gs.name, r.room_number, l.is_holiday
        ORDER BY l.date ASC, l.start_time ASC`,
       params
     );
@@ -2471,11 +2538,14 @@ exports.updateLessonDate = async (req, res) => {
       });
     }
 
+    const holidayForDate = await isHolidayDate(date);
+
     await pool.query(
       `UPDATE lessons
-       SET date = $1::date
+       SET date = $1::date,
+           is_holiday = $3
        WHERE id = $2`,
-      [date, lesson_id]
+      [date, lesson_id, holidayForDate]
     );
 
     await syncLessonAttendanceForDate(lesson_id, lesson.group_id, date);
@@ -2577,6 +2647,7 @@ exports.createManualLesson = async (req, res) => {
       : getDefaultLessonStatusForDate(date);
     const normalizedStartTime = normalizeTimeValue(start_time);
     const normalizedEndTime = end_time ? normalizeTimeValue(end_time, null) : null;
+    const holidayForDate = await isHolidayDate(date);
 
     const duplicate = await pool.query(
       `SELECT id
@@ -2595,9 +2666,9 @@ exports.createManualLesson = async (req, res) => {
 
     const created = await pool.query(
       `INSERT INTO lessons (
-         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by
-       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9)
-       RETURNING id, group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status`,
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
+       RETURNING id, group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, is_holiday`,
       [
         group_id,
         finalTeacherId,
@@ -2607,7 +2678,8 @@ exports.createManualLesson = async (req, res) => {
         normalizedStartTime,
         normalizedEndTime,
         finalStatus,
-        userId
+        userId,
+        holidayForDate
       ]
     );
 
@@ -2718,6 +2790,9 @@ exports.patchLesson = async (req, res) => {
     const nextTeacherId = teacher_id !== undefined ? teacher_id : current.teacher_id;
     const nextSubjectId = subject_id !== undefined ? subject_id : current.subject_id;
     const nextRoomId = room_id !== undefined ? room_id : current.room_id;
+    const nextIsHoliday = date !== undefined
+      ? await isHolidayDate(nextDate)
+      : Boolean(current.is_holiday);
 
     if (role === 'teacher' && teacher_id !== undefined && String(nextTeacherId || '') !== String(userId)) {
       return res.status(403).json({
@@ -2750,10 +2825,11 @@ exports.patchLesson = async (req, res) => {
            date = $4::date,
            start_time = $5::time,
            end_time = $6::time,
-           status = $7
+           status = $7,
+           is_holiday = $9
        WHERE id = $8
        RETURNING *`,
-      [nextTeacherId, nextSubjectId, nextRoomId, nextDate, nextStartTime, nextEndTime, nextStatus, lesson_id]
+      [nextTeacherId, nextSubjectId, nextRoomId, nextDate, nextStartTime, nextEndTime, nextStatus, lesson_id, nextIsHoliday]
     );
 
     if (nextDate !== formatDateUtc(new Date(current.date))) {
@@ -2791,6 +2867,90 @@ exports.patchLesson = async (req, res) => {
     });
   } catch (error) {
     console.error('Lesson patch xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 8.3 DAM OLISH KUNINI BELGILASH (GLOBAL)
+// ============================================================================
+exports.setHolidayForDate = async (req, res) => {
+  const { date, is_holiday = true } = req.body || {};
+  const { id: userId } = req.user;
+
+  try {
+    if (!isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    const updatedLessons = await applyGlobalHoliday({
+      date,
+      isHoliday: Boolean(is_holiday),
+      userId
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        date,
+        is_holiday: Boolean(is_holiday),
+        updated_lessons: updatedLessons
+      }
+    });
+  } catch (error) {
+    console.error('Dam olish belgilashda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 8.3.A GLOBAL HOLIDAY LIST (month)
+// ============================================================================
+exports.getGlobalHolidays = async (req, res) => {
+  const { month } = req.query;
+
+  try {
+    if (month && !isValidMonth(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'month YYYY-MM formatida bo\'lishi kerak'
+      });
+    }
+
+    const params = [];
+    let filter = '';
+    if (month) {
+      filter = ' WHERE TO_CHAR(date, \'YYYY-MM\') = $1';
+      params.push(month);
+    }
+
+    const result = await pool.query(
+      `SELECT TO_CHAR(date, 'YYYY-MM-DD') as date
+       FROM holidays${filter}
+       ORDER BY date ASC`,
+      params
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        month: month || null,
+        dates: result.rows.map((r) => r.date)
+      }
+    });
+  } catch (error) {
+    console.error('Holiday list olishda xatolik:', error);
     return res.status(500).json({
       success: false,
       message: 'Server xatoligi',
@@ -2912,7 +3072,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
     
     // Avval oyning barcha darslarini olamiz (getMonthlyAttendance kabi)
     const lessons = await pool.query(
-      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day
+      `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
        WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
        ORDER BY date`,
@@ -2935,6 +3095,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
         l.id as lesson_id,
         TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date,
         a.status,
+        COALESCE(l.is_holiday, false) as is_holiday,
         COALESCE(a.monthly_status, 'active') as monthly_status
       FROM attendance a
       JOIN users u ON a.student_id = u.id  
@@ -2956,10 +3117,14 @@ exports.exportMonthlyAttendance = async (req, res) => {
     // Ma'lumotlarni Excel formatiga tayyorlaymiz
     const studentsMap = new Map();
     const dates = new Set();
+    const holidayDates = new Set();
     
     // Darslar sanalarini olish (lessons dan)
     lessons.rows.forEach(lesson => {
       dates.add(lesson.date);
+      if (lesson.is_holiday) {
+        holidayDates.add(lesson.date);
+      }
     });
     
     // Student ma'lumotlarini to'plash
@@ -2974,7 +3139,11 @@ exports.exportMonthlyAttendance = async (req, res) => {
       }
       
       // Har bir dars uchun status
-      studentsMap.get(studentKey).attendance[row.lesson_date] = row.status;
+      if (row.is_holiday) {
+        studentsMap.get(studentKey).attendance[row.lesson_date] = 'holiday';
+      } else {
+        studentsMap.get(studentKey).attendance[row.lesson_date] = row.status;
+      }
     });
     
     // Sanalarni tartiblaymiz
@@ -3021,8 +3190,10 @@ exports.exportMonthlyAttendance = async (req, res) => {
       sortedDates.forEach(date => {
         const status = student.attendance[date] || '';
         let displayStatus = '';
-        
-        if (status === 'keldi') {
+
+        if (holidayDates.has(date) || status === 'holiday') {
+          displayStatus = 'Dam';
+        } else if (status === 'keldi') {
           displayStatus = '✓';
           totalPresent++;
         } else if (status === 'kelmadi') {
@@ -3036,7 +3207,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
         } else {
           displayStatus = '';
         }
-        
+
         row.push(displayStatus);
       });
       
@@ -3109,6 +3280,8 @@ module.exports = {
   regenerateGroupLessons: exports.regenerateGroupLessons,
   updateLessonDate: exports.updateLessonDate,
   patchLesson: exports.patchLesson,
+  setHolidayForDate: exports.setHolidayForDate,
+  getGlobalHolidays: exports.getGlobalHolidays,
   deleteLesson: exports.deleteLesson,
   exportMonthlyAttendance: exports.exportMonthlyAttendance
 };
