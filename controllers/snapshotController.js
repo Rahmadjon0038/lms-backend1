@@ -137,6 +137,7 @@ exports.createMonthlySnapshot = async (req, res) => {
         LEFT JOIN attendance a ON l.id = a.lesson_id
         LEFT JOIN student_groups sg ON a.student_id = sg.student_id AND l.group_id = sg.group_id
         WHERE DATE_TRUNC('month', l.date) = DATE_TRUNC('month', ($1 || '-01')::date)
+          AND COALESCE(l.is_holiday, false) = false
           AND l.date >= COALESCE(DATE(sg.joined_at), l.date) -- Faqat qo'shilgandan keyin
         GROUP BY l.group_id, a.student_id
       ) lesson_stats ON lesson_stats.group_id = g.id AND lesson_stats.student_id = u.id
@@ -1279,6 +1280,7 @@ exports.getStudentAttendance = async (req, res) => {
           WHEN sg.joined_at IS NOT NULL AND l.date < DATE(sg.joined_at) THEN NULL
           ELSE COALESCE(a.status, 'kelmagan')
         END as status,
+        COALESCE(l.is_holiday, false) as is_holiday,
         TO_CHAR(l.date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY') as formatted_date,
         TO_CHAR(a.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as marked_at
       FROM lessons l
@@ -1293,9 +1295,9 @@ exports.getStudentAttendance = async (req, res) => {
 
     // Real lessons count (agar snapshot bo'lmasa)
     if (snapshot.id === null && dailyResult.rows.length > 0) {
-      const eligibleRows = dailyResult.rows.filter((row) => row.status !== null);
+      const eligibleRows = dailyResult.rows.filter((row) => row.status !== null && !row.is_holiday);
       snapshot.total_lessons = eligibleRows.length;
-      snapshot.attended_lessons = dailyResult.rows.filter(row => row.status === 'keldi' || row.status === 'present').length;
+      snapshot.attended_lessons = eligibleRows.filter(row => row.status === 'keldi' || row.status === 'present').length;
       snapshot.attendance_percentage = snapshot.total_lessons > 0 
         ? Math.round((snapshot.attended_lessons / snapshot.total_lessons) * 100) 
         : 0;
@@ -1311,12 +1313,13 @@ exports.getStudentAttendance = async (req, res) => {
     };
 
     // Kunlik davomatni status bo'yicha guruhlash
+    const nonHolidayRows = dailyResult.rows.filter(row => !row.is_holiday);
     const attendanceByStatus = {
-      keldi: dailyResult.rows.filter(row => row.status === 'keldi' || row.status === 'present').length,
-      kelmadi: dailyResult.rows.filter(row => row.status === 'kelmadi' || row.status === 'absent').length,
-      kechikdi: dailyResult.rows.filter(row => row.status === 'kechikdi' || row.status === 'late').length,
-      kelmagan: dailyResult.rows.filter(row => row.status === 'kelmagan').length, // Hali belgilanmagan
-      not_joined_yet: dailyResult.rows.filter(row => row.status === null).length // Talaba hali guruhga qo'shilmagan kunlar
+      keldi: nonHolidayRows.filter(row => row.status === 'keldi' || row.status === 'present').length,
+      kelmadi: nonHolidayRows.filter(row => row.status === 'kelmadi' || row.status === 'absent').length,
+      kechikdi: nonHolidayRows.filter(row => row.status === 'kechikdi' || row.status === 'late').length,
+      kelmagan: nonHolidayRows.filter(row => row.status === 'kelmagan').length, // Hali belgilanmagan
+      not_joined_yet: nonHolidayRows.filter(row => row.status === null).length // Talaba hali guruhga qo'shilmagan kunlar
     };
 
     console.log(`📊 Davomat so'raldi:`);
@@ -1603,6 +1606,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2
         WHERE l.group_id = $2
           AND TO_CHAR(l.date, 'YYYY-MM') = $3
+          AND COALESCE(l.is_holiday, false) = false
           AND l.date >= COALESCE(DATE(sg.joined_at), l.date) -- Faqat qo'shilgandan keyin
       `;
       const attendanceResult = await db.query(attendanceQuery, [student.student_id, student.group_id, month]);
@@ -1794,6 +1798,7 @@ exports.getNewStudentsNotification = async (req, res) => {
           COUNT(l.id) as total_lessons
         FROM lessons l
         WHERE TO_CHAR(l.date, 'YYYY-MM') = $2
+          AND COALESCE(l.is_holiday, false) = false
         GROUP BY l.group_id
       ) lesson_count ON lesson_count.group_id = g.id
       
@@ -1806,6 +1811,7 @@ exports.getNewStudentsNotification = async (req, res) => {
         FROM attendance a
         JOIN lessons l ON a.lesson_id = l.id
         WHERE TO_CHAR(l.date, 'YYYY-MM') = $2
+          AND COALESCE(l.is_holiday, false) = false
           AND (a.status = 'keldi' OR a.status = 'present')
         GROUP BY a.student_id, l.group_id
       ) attendance_count ON attendance_count.student_id = sg.student_id 
