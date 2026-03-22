@@ -1003,6 +1003,81 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
   }
 };
 
+exports.resetTeacherMonthPayouts = async (req, res) => {
+  const teacherId = Number(req.params.teacher_id);
+  const monthName = req.params.month_name;
+
+  if (!teacherId || Number.isNaN(teacherId)) {
+    return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
+  }
+
+  if (!isValidMonth(monthName)) {
+    return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const teacher = await getTeacherWithPercent(client, teacherId);
+    if (!teacher) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
+    }
+
+    const closed = await client.query(
+      `SELECT is_closed
+       FROM teacher_monthly_salaries
+       WHERE teacher_id = $1 AND month_name = $2
+       FOR UPDATE`,
+      [teacherId, monthName]
+    );
+
+    if (closed.rows[0]?.is_closed) {
+      await client.query(
+        `UPDATE teacher_monthly_salaries
+         SET is_closed = false,
+             closed_at = NULL,
+             closed_by = NULL,
+             close_revenue = NULL,
+             close_expected_salary = NULL,
+             close_balance = NULL
+         WHERE teacher_id = $1 AND month_name = $2`,
+        [teacherId, monthName]
+      );
+    }
+
+    const del = await client.query(
+      `DELETE FROM teacher_salary_payouts
+       WHERE teacher_id = $1 AND month_name = $2
+       RETURNING id`,
+      [teacherId, monthName]
+    );
+
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      message: 'Teacher oyligi bo\'yicha berilgan to\'lovlar 0 ga qaytarildi',
+      data: {
+        deleted_count: del.rowCount,
+        summary,
+      },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return res.status(500).json({
+      success: false,
+      message: 'Teacher oyligini tiklashda xatolik',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
 // Backward compatibility aliases
 exports.createTeacherSalaryPayout = exports.createTeacherSalaryGiven;
 exports.getTeacherSalaryPayouts = exports.getTeacherSalaryGivenList;
