@@ -1224,6 +1224,7 @@ exports.getLessonStudents = async (req, res) => {
          u.surname,
          u.name || ' ' || u.surname as student_name,
          u.phone,
+         TO_CHAR(DATE(sg.joined_at), 'YYYY-MM-DD') as joined_at,
          CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END as status,
          COALESCE(a.is_marked, false) as is_marked,
          a.monthly_status,
@@ -1241,6 +1242,11 @@ exports.getLessonStudents = async (req, res) => {
          ) as debt_amount
        FROM attendance a
        JOIN users u ON a.student_id = u.id
+       LEFT JOIN student_groups sg
+         ON sg.student_id = a.student_id
+        AND sg.group_id = a.group_id
+        AND DATE(sg.joined_at) <= $2::date
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        LEFT JOIN monthly_snapshots ms 
          ON ms.student_id = a.student_id 
         AND ms.group_id = a.group_id 
@@ -1252,7 +1258,7 @@ exports.getLessonStudents = async (req, res) => {
        LEFT JOIN groups g ON g.id = a.group_id
        WHERE a.lesson_id = $1 
        ORDER BY a.monthly_status, u.name`,
-      [lesson_id]
+      [lesson_id, currentLessonDate]
     );
 
     res.json({
@@ -1481,6 +1487,26 @@ exports.getMonthlyAttendance = async (req, res) => {
         left_at: row.left_at
       });
     });
+    
+    const getMonthBounds = (monthStr) => {
+      const [y, m] = monthStr.split('-').map(Number);
+      const monthStart = `${monthStr}-01`;
+      const lastDay = new Date(y, m, 0).getDate();
+      const monthEnd = `${monthStr}-${String(lastDay).padStart(2, '0')}`;
+      return { monthStart, monthEnd };
+    };
+
+    const pickJoinedAtForMonth = (periods, monthStr) => {
+      if (!periods || periods.length === 0) return null;
+      const { monthStart, monthEnd } = getMonthBounds(monthStr);
+      const match = periods.find(p => {
+        const joinedOk = !p.joined_at || p.joined_at <= monthEnd;
+        const leftOk = !p.left_at || p.left_at >= monthStart;
+        return joinedOk && leftOk;
+      });
+      if (match) return match.joined_at;
+      return periods[periods.length - 1].joined_at || null;
+    };
 
     // Shu oydagi barcha attendance yozuvlari - student chiqib ketgan bo'lsa ham ko'rinsin
     const attendance = await pool.query(
@@ -1533,9 +1559,12 @@ exports.getMonthlyAttendance = async (req, res) => {
       const totalAttended = parseInt(student.total_present) + parseInt(student.total_late);
       const totalLessons = parseInt(student.total_lessons);
       const attendancePercentage = totalLessons > 0 ? Math.round((totalAttended / totalLessons) * 100) : 0;
+      const periods = membershipPeriodsMap.get(student.student_id) || [];
+      const joinedAtForMonth = pickJoinedAtForMonth(periods, selectedMonth);
       
       return {
         ...student,
+        joined_at: joinedAtForMonth,
         membership_periods: membershipPeriodsMap.get(student.student_id) || [],
         statistics: {
           total_attended: totalAttended,      // Nechta darsga qatnashdi (keldi + kechikdi)
