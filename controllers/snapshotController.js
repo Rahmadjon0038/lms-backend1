@@ -502,6 +502,9 @@ exports.updateMonthlySnapshot = async (req, res) => {
     let paramIndex = 1;
     let attendanceUpdateNeeded = false;
     let newMonthlyStatus = null;
+    let newRequiredAmount = parseFloat(current.required_amount);
+    let newPaidAmount = parseFloat(current.paid_amount);
+    const currentDiscountAmount = parseFloat(current.discount_amount || 0);
 
     if (monthly_status !== undefined) {
       updates.push(`monthly_status = $${paramIndex}`);
@@ -511,39 +514,20 @@ exports.updateMonthlySnapshot = async (req, res) => {
       // Attendance jadvalini ham yangilash uchun
       attendanceUpdateNeeded = true;
       newMonthlyStatus = monthly_status;
-
-      // Status o'zgarsa payment status ham yangilanadi
-      if (monthly_status !== 'active') {
-        updates.push(`payment_status = 'inactive'`);
-      }
     }
 
     if (required_amount !== undefined) {
       updates.push(`required_amount = $${paramIndex}`);
       params.push(required_amount);
       paramIndex++;
+      newRequiredAmount = parseFloat(required_amount);
     }
 
     if (paid_amount !== undefined) {
       updates.push(`paid_amount = $${paramIndex}`);
       params.push(paid_amount);
       paramIndex++;
-
-      // Paid amount o'zgarsa, payment status ham yangilanadi
-      const newPaidAmount = parseFloat(paid_amount);
-      const currentRequired = parseFloat(current.required_amount);
-
-      let newPaymentStatus;
-      if (newPaidAmount >= currentRequired) {
-        newPaymentStatus = 'paid';
-      } else if (newPaidAmount > 0) {
-        newPaymentStatus = 'partial';
-      } else {
-        newPaymentStatus = 'unpaid';
-      }
-
-      updates.push(`payment_status = '${newPaymentStatus}'`);
-      updates.push(`debt_amount = required_amount - $${paramIndex - 1}`);
+      newPaidAmount = parseFloat(paid_amount);
     }
 
     if (attendance_percentage !== undefined) {
@@ -559,6 +543,34 @@ exports.updateMonthlySnapshot = async (req, res) => {
       });
     }
 
+    // To'lov statusi va qarzni qayta hisoblash (required/paid/monthly_status o'zgarsa)
+    const effectiveRequired = Math.max(newRequiredAmount - currentDiscountAmount, 0);
+    const recalculationNeeded = required_amount !== undefined || paid_amount !== undefined || monthly_status !== undefined;
+    if (recalculationNeeded) {
+      let newPaymentStatus = current.payment_status;
+      const resolvedMonthlyStatus = newMonthlyStatus !== null ? newMonthlyStatus : current.monthly_status;
+
+      if (resolvedMonthlyStatus !== 'active') {
+        newPaymentStatus = 'inactive';
+      } else if (newPaidAmount >= effectiveRequired) {
+        newPaymentStatus = 'paid';
+      } else if (newPaidAmount > 0) {
+        newPaymentStatus = 'partial';
+      } else {
+        newPaymentStatus = 'unpaid';
+      }
+
+      const newDebtAmount = Math.max(effectiveRequired - newPaidAmount, 0);
+
+      updates.push(`payment_status = $${paramIndex}`);
+      params.push(newPaymentStatus);
+      paramIndex++;
+
+      updates.push(`debt_amount = $${paramIndex}`);
+      params.push(newDebtAmount);
+      paramIndex++;
+    }
+
     // Yangilash
     const updateQuery = `
       UPDATE monthly_snapshots 
@@ -569,6 +581,39 @@ exports.updateMonthlySnapshot = async (req, res) => {
     params.push(id);
 
     const result = await db.query(updateQuery, params);
+
+    // Student_payments ni ham mos ravishda yangilaymiz (agar mavjud bo'lsa)
+    if (required_amount !== undefined || paid_amount !== undefined) {
+      const spUpdates = [];
+      const spParams = [];
+      let spIndex = 1;
+
+      if (required_amount !== undefined) {
+        spUpdates.push(`required_amount = $${spIndex}`);
+        spParams.push(newRequiredAmount);
+        spIndex++;
+      }
+
+      if (paid_amount !== undefined) {
+        spUpdates.push(`paid_amount = $${spIndex}`);
+        spParams.push(newPaidAmount);
+        spIndex++;
+      }
+
+      spUpdates.push(`updated_by = $${spIndex}`);
+      spParams.push(req.user.id);
+      spIndex++;
+
+      spUpdates.push(`updated_at = CURRENT_TIMESTAMP`);
+
+      spParams.push(current.student_id, current.group_id, current.month);
+
+      await db.query(`
+        UPDATE student_payments
+        SET ${spUpdates.join(', ')}
+        WHERE student_id = $${spIndex} AND group_id = $${spIndex + 1} AND month = $${spIndex + 2}
+      `, spParams);
+    }
 
     // ATTENDANCE JADVALINI HAM YANGILASH
     if (attendanceUpdateNeeded && newMonthlyStatus) {
