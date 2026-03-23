@@ -176,36 +176,36 @@ const getAdminDailyStats = async (req, res) => {
     const dailyNewStudentsResult = await client.query(
       `SELECT
          users.id as student_id,
-         name,
-         surname,
-         username,
-         status as student_status,
-         phone,
-         phone2,
-         father_name,
-         father_phone,
-         address,
-         age,
-         subject,
-         subject_id,
+         users.name,
+         users.surname,
+         users.username,
+         users.status as student_status,
+         users.phone,
+         users.phone2,
+         users.father_name,
+         users.father_phone,
+         users.address,
+         users.age,
+         users.subject,
+         users.subject_id,
          s.name as subject_name,
          g.subject_id as group_subject_id,
          sg.name as group_subject_name,
          group_id as student_group_id,
          group_name as student_group_name,
-         teacher_id as student_teacher_id,
-         teacher_name as student_teacher_name,
-         course_status,
-         TO_CHAR(course_start_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_start_date,
-         TO_CHAR(course_end_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_end_date,
-         TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as created_time
+         users.teacher_id as student_teacher_id,
+         users.teacher_name as student_teacher_name,
+         users.course_status,
+         TO_CHAR(users.course_start_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_start_date,
+         TO_CHAR(users.course_end_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_end_date,
+         TO_CHAR(users.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as created_time
        FROM users
        LEFT JOIN subjects s ON s.id = users.subject_id
        LEFT JOIN groups g ON g.id = users.group_id
        LEFT JOIN subjects sg ON sg.id = g.subject_id
-       WHERE role = 'student'
-         AND DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
-       ORDER BY created_at DESC`,
+       WHERE users.role = 'student'
+         AND DATE(users.created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
+       ORDER BY users.created_at DESC`,
       [toDate]
     );
 
@@ -251,7 +251,6 @@ const getAdminDailyStats = async (req, res) => {
           date: toDate,
           payments_total_amount: Number(dailyPaymentTotalResult.rows[0]?.total_amount || 0),
           payments: dailyPaymentsResult.rows,
-          new_students: dailyNewStudents,
           new_students_grouped: newStudentsGrouped,
         },
       },
