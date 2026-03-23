@@ -175,7 +175,7 @@ const getAdminDailyStats = async (req, res) => {
 
     const dailyNewStudentsResult = await client.query(
       `SELECT
-         id as student_id,
+         users.id as student_id,
          name,
          surname,
          username,
