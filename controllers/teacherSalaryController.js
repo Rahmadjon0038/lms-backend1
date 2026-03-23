@@ -9,15 +9,6 @@ const round2 = (v) => Number(toNum(v).toFixed(2));
 // (group_price mavjud bo'lsa shuni, bo'lmasa required_amount ni olamiz)
 const SALARY_BASE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
 
-const applyResetOverridesToSummary = (summary) => {
-  if (!summary || !summary.payouts_reset_at) return summary;
-  return {
-    ...summary,
-    expected_salary: 0,
-    post_close_collected_salary: 0,
-  };
-};
-
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
   if (reqUser.role === 'admin' || reqUser.role === 'super_admin') return true;
@@ -134,7 +125,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     ),
     getTeacherStudentsForMonth(client, teacherId, monthName),
     client.query(
-      `SELECT is_closed, closed_at, close_revenue, close_expected_salary, close_balance, payouts_reset_at
+      `SELECT is_closed, closed_at, close_revenue, close_expected_salary, close_balance
        FROM teacher_monthly_salaries
        WHERE teacher_id = $1 AND month_name = $2`,
       [teacherId, monthName]
@@ -189,7 +180,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
        partial_students = 0,
        fully_paid_students = EXCLUDED.fully_paid_students,
        recalculated_at = CURRENT_TIMESTAMP
-     RETURNING is_closed, closed_at, close_revenue, close_expected_salary, close_balance, payouts_reset_at`,
+     RETURNING is_closed, closed_at, close_revenue, close_expected_salary, close_balance`,
     [
       teacherId,
       monthName,
@@ -230,8 +221,6 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     close_expected_salary:
       persisted.close_expected_salary != null ? toNum(persisted.close_expected_salary) : null,
     close_balance: persisted.close_balance != null ? toNum(persisted.close_balance) : null,
-    payouts_reset_at: persisted.payouts_reset_at || null,
-    post_close_collected_salary: 0,
     students,
   };
 };
@@ -254,8 +243,7 @@ const getClosedSummary = async (client, teacherId, monthName) => {
        closed_at,
        close_revenue,
        close_expected_salary,
-       close_balance,
-       payouts_reset_at
+       close_balance
      FROM teacher_monthly_salaries
      WHERE teacher_id = $1 AND month_name = $2`,
     [teacherId, monthName]
@@ -318,7 +306,6 @@ const getClosedSummary = async (client, teacherId, monthName) => {
     close_revenue: toNum(row.close_revenue),
     close_expected_salary: closeExpected,
     close_balance: toNum(row.close_balance),
-    payouts_reset_at: row.payouts_reset_at || null,
     post_close_collected_salary: postCloseCollectedSalary,
     can_give_after_close: availableNow > 0,
     students,
@@ -590,13 +577,6 @@ exports.createTeacherSalaryGiven = async (req, res) => {
       [teacherId, monthName, givenAmount, description, req.user.id]
     );
 
-    await client.query(
-      `UPDATE teacher_monthly_salaries
-       SET payouts_reset_at = NULL
-       WHERE teacher_id = $1 AND month_name = $2`,
-      [teacherId, monthName]
-    );
-
     const refreshedClosed = await getClosedSummary(client, teacherId, monthName);
     const refreshedOpen = refreshedClosed || (await buildOpenMonthSummary(client, teacherId, monthName));
 
@@ -697,11 +677,11 @@ exports.getTeacherMonthSummary = async (req, res) => {
   try {
     const closed = await getClosedSummary(client, teacherId, monthName);
     if (closed) {
-      return res.json({ success: true, data: applyResetOverridesToSummary(closed) });
+      return res.json({ success: true, data: closed });
     }
 
     const summary = await buildOpenMonthSummary(client, teacherId, monthName);
-    return res.json({ success: true, data: applyResetOverridesToSummary(summary) });
+    return res.json({ success: true, data: summary });
   } catch (error) {
     return res.status(500).json({
       success: false,
@@ -809,12 +789,12 @@ exports.getAllTeachersMonthSummary = async (req, res) => {
     for (const t of teachers.rows) {
       const closed = await getClosedSummary(client, t.id, monthName);
       if (closed) {
-        items.push(applyResetOverridesToSummary(closed));
+        items.push(closed);
         continue;
       }
 
       const open = await buildOpenMonthSummary(client, t.id, monthName);
-      items.push(applyResetOverridesToSummary(open));
+      items.push(open);
     }
 
     return res.json({
@@ -944,8 +924,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          COALESCE(tms.is_closed, false) AS is_closed,
          tms.close_revenue,
          tms.close_expected_salary,
-         tms.close_balance,
-         tms.payouts_reset_at
+         tms.close_balance
        FROM users u
        LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
        LEFT JOIN monthly_collected mc ON mc.teacher_id = u.id
@@ -966,15 +945,12 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
       const totalGiven = toNum(row.total_given);
       const givenForBalance = toNum(row.given_for_balance);
       const isClosed = Boolean(row.is_closed);
-      const isReset = Boolean(row.payouts_reset_at);
 
       const totalCollected = isClosed
         ? toNum(row.close_revenue != null ? row.close_revenue : row.live_total_collected)
         : toNum(row.live_total_collected);
 
-      const expectedSalary = isReset
-        ? 0
-        : isClosed
+      const expectedSalary = isClosed
         ? toNum(
             row.close_expected_salary != null
               ? row.close_expected_salary
@@ -982,9 +958,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
           )
         : round2((totalCollected * salaryPercentage) / 100);
 
-      const extraAfterClose = isReset
-        ? 0
-        : isClosed
+      const extraAfterClose = isClosed
         ? round2(Math.max(expectedSalary - toNum(row.close_expected_salary), 0))
         : 0;
 
@@ -1058,39 +1032,27 @@ exports.resetTeacherMonthPayouts = async (req, res) => {
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
     }
 
-    await client.query(
-      `SELECT id
+    const closed = await client.query(
+      `SELECT is_closed
        FROM teacher_monthly_salaries
        WHERE teacher_id = $1 AND month_name = $2
        FOR UPDATE`,
       [teacherId, monthName]
     );
 
-    await client.query(
-      `INSERT INTO teacher_monthly_salaries (
-         teacher_id,
-         month_name,
-         is_closed,
-         closed_at,
-         closed_by,
-         close_revenue,
-         close_expected_salary,
-         close_balance,
-         payouts_reset_at
-       ) VALUES (
-         $1, $2, false, NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP
-       )
-       ON CONFLICT (teacher_id, month_name)
-       DO UPDATE SET
-         is_closed = false,
-         closed_at = NULL,
-         closed_by = NULL,
-         close_revenue = NULL,
-         close_expected_salary = NULL,
-         close_balance = NULL,
-         payouts_reset_at = CURRENT_TIMESTAMP`,
-      [teacherId, monthName]
-    );
+    if (closed.rows[0]?.is_closed) {
+      await client.query(
+        `UPDATE teacher_monthly_salaries
+         SET is_closed = false,
+             closed_at = NULL,
+             closed_by = NULL,
+             close_revenue = NULL,
+             close_expected_salary = NULL,
+             close_balance = NULL
+         WHERE teacher_id = $1 AND month_name = $2`,
+        [teacherId, monthName]
+      );
+    }
 
     const del = await client.query(
       `DELETE FROM teacher_salary_payouts
