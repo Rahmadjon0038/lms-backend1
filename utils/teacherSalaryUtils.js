@@ -211,12 +211,13 @@ async function calculateTeacherSalaryInternal(teacher_id, month_name) {
 
     const studentPayments = await pool.query(`
         SELECT 
-            COALESCE(SUM(p.amount), 0) as total_payments,
-            COUNT(DISTINCT p.student_id) as active_students
-        FROM payments p
-        JOIN users s ON p.student_id = s.id
-        JOIN groups g ON p.group_id = g.id
-        WHERE g.teacher_id = $1 AND p.month_name = $2
+            COALESCE(SUM(COALESCE(ms.group_price, ms.required_amount, 0)), 0) as total_payments,
+            COUNT(DISTINCT ms.student_id) as active_students
+        FROM monthly_snapshots ms
+        JOIN groups g ON ms.group_id = g.id
+        WHERE g.teacher_id = $1 
+          AND ms.month = $2
+          AND COALESCE(ms.monthly_status, 'active') = 'active'
     `, [teacher_id, month_name]);
 
     const totalStudentPayments = parseFloat(studentPayments.rows[0].total_payments || 0);
