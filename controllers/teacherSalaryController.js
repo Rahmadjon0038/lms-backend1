@@ -5,11 +5,10 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
-// Teacher tushumi faqat to'lov bo'lsa: partial ham qo'shiladi.
-// Chegirma oylikka ta'sir qilmaydi, faqat to'langan summa hisobga olinadi.
-// Overpayment bo'lsa ham to'liq qo'shiladi (cap yo'q).
+// Teacher tushumi chegirmadan mustaqil: group_price (yoki required_amount) asosida.
+// Partial to'lov bo'lsa ham teacher uchun to'liq kurs narxi hisobga olinadi.
 const GROUP_PRICE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
-const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
+const SALARY_BASE_EXPR = GROUP_PRICE_EXPR;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;

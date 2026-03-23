@@ -12,6 +12,10 @@ const mapExpense = (row) => ({
   expense_date: row.expense_date,
   month: row.month,
   created_at: row.created_at,
+  created_by: row.created_by,
+  admin_name: row.admin_name,
+  admin_surname: row.admin_surname,
+  admin_full_name: row.admin_full_name,
 });
 
 const createExpense = async (req, res) => {
@@ -34,11 +38,25 @@ const createExpense = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO center_expenses (title, note, amount, expense_date, month, created_by)
        VALUES ($1, NULL, $2, $3::date, $4, $5)
-       RETURNING id, title, amount, expense_date::text, month, created_at`,
+       RETURNING id, title, amount, expense_date::text, month, created_at, created_by`,
       [reason, amount, expenseDate, month, req.user.id]
     );
 
-    return res.status(201).json({ success: true, data: mapExpense(result.rows[0]) });
+    const created = result.rows[0];
+    const adminName = req.user?.name || null;
+    const adminSurname = req.user?.surname || null;
+    const adminFullName = adminName && adminSurname ? `${adminName} ${adminSurname}` : null;
+
+    return res.status(201).json({
+      success: true,
+      data: mapExpense({
+        ...created,
+        created_by: req.user?.id,
+        admin_name: adminName,
+        admin_surname: adminSurname,
+        admin_full_name: adminFullName,
+      }),
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Rasxod qo\'shishda xatolik', errors: { detail: error.message } });
   }
@@ -46,23 +64,40 @@ const createExpense = async (req, res) => {
 
 const getExpenses = async (req, res) => {
   const month = req.query.month || getCurrentMonth();
+  const adminNameFilter = typeof req.query.admin_name === 'string' ? req.query.admin_name.trim() : '';
   if (!isValidMonth(month)) {
     return res.status(400).json({ success: false, message: 'month formati YYYY-MM bo\'lishi kerak', errors: {} });
   }
 
   try {
+    const filters = [];
+    const params = [month];
+    let paramIndex = 2;
+
+    if (adminNameFilter) {
+      filters.push(`(u.name ILIKE $${paramIndex} OR u.surname ILIKE $${paramIndex} OR (u.name || ' ' || u.surname) ILIKE $${paramIndex})`);
+      params.push(`%${adminNameFilter}%`);
+      paramIndex++;
+    }
+
+    const whereClause = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
+
     const result = await pool.query(
-      `SELECT id, title, amount, expense_date::text, month, created_at
-       FROM center_expenses
-       WHERE month = $1
-       ORDER BY expense_date DESC, id DESC`,
-      [month]
+      `SELECT ce.id, ce.title, ce.amount, ce.expense_date::text, ce.month, ce.created_at, ce.created_by,
+              u.name AS admin_name, u.surname AS admin_surname, (u.name || ' ' || u.surname) AS admin_full_name
+       FROM center_expenses ce
+       JOIN users u ON u.id = ce.created_by
+       WHERE ce.month = $1
+       ${whereClause}
+       ORDER BY ce.expense_date DESC, ce.id DESC`,
+      params
     );
 
     return res.json({
       success: true,
       data: {
         month,
+        admin_name: adminNameFilter || undefined,
         count: result.rows.length,
         items: result.rows.map(mapExpense),
       },
@@ -172,7 +207,7 @@ const updateExpense = async (req, res) => {
       `UPDATE center_expenses
        SET ${updates.join(', ')}
        WHERE id = $${paramIndex}
-       RETURNING id, title, amount, expense_date::text, month, created_at`,
+       RETURNING id, title, amount, expense_date::text, month, created_at, created_by`,
       params
     );
 
@@ -196,7 +231,7 @@ const deleteExpense = async (req, res) => {
     const result = await pool.query(
       `DELETE FROM center_expenses
        WHERE id = $1
-       RETURNING id, title, amount, expense_date::text, month, created_at`,
+       RETURNING id, title, amount, expense_date::text, month, created_at, created_by`,
       [id]
     );
 

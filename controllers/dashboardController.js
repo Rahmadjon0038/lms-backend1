@@ -188,6 +188,9 @@ const getAdminDailyStats = async (req, res) => {
          age,
          subject,
          subject_id,
+         s.name as subject_name,
+         g.subject_id as group_subject_id,
+         sg.name as group_subject_name,
          group_id as student_group_id,
          group_name as student_group_name,
          teacher_id as student_teacher_id,
@@ -197,10 +200,40 @@ const getAdminDailyStats = async (req, res) => {
          TO_CHAR(course_end_date AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as course_end_date,
          TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as created_time
        FROM users
+       LEFT JOIN subjects s ON s.id = users.subject_id
+       LEFT JOIN groups g ON g.id = users.group_id
+       LEFT JOIN subjects sg ON sg.id = g.subject_id
        WHERE role = 'student'
          AND DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
        ORDER BY created_at DESC`,
       [toDate]
+    );
+
+    const dailyNewStudents = dailyNewStudentsResult.rows;
+    const groupedNewStudentsMap = new Map();
+    for (const row of dailyNewStudents) {
+      const subjectName =
+        row.subject_name ||
+        row.group_subject_name ||
+        row.subject ||
+        'Noma\'lum fan';
+      const subjectId = row.subject_id || row.group_subject_id || null;
+      const key = `${subjectId ?? 'null'}:${subjectName}`;
+      if (!groupedNewStudentsMap.has(key)) {
+        groupedNewStudentsMap.set(key, {
+          subject_id: subjectId,
+          subject_name: subjectName,
+          count: 0,
+          students: [],
+        });
+      }
+      const group = groupedNewStudentsMap.get(key);
+      group.count += 1;
+      group.students.push(row);
+    }
+
+    const newStudentsGrouped = Array.from(groupedNewStudentsMap.values()).sort((a, b) =>
+      String(a.subject_name).localeCompare(String(b.subject_name), 'uz')
     );
 
     return res.json({
@@ -218,7 +251,8 @@ const getAdminDailyStats = async (req, res) => {
           date: toDate,
           payments_total_amount: Number(dailyPaymentTotalResult.rows[0]?.total_amount || 0),
           payments: dailyPaymentsResult.rows,
-          new_students: dailyNewStudentsResult.rows,
+          new_students: dailyNewStudents,
+          new_students_grouped: newStudentsGrouped,
         },
       },
     });
@@ -581,7 +615,7 @@ const getSuperAdminStats = async (req, res) => {
          teacher_revenue AS (
            SELECT
              g.teacher_id,
-             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
+             COALESCE(SUM(COALESCE(ms.group_price, ms.required_amount, 0)), 0)::numeric AS total_collected
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            WHERE ms.month = $1
