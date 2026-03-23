@@ -27,6 +27,15 @@ router.use(roleCheck(['admin', 'super_admin']));
  *     summary: Tanlangan oy rasxodlari ro'yxati
  *     tags: [Expenses]
  *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema: { type: string, example: "2026-03" }
+ *         description: YYYY-MM format
+ *       - in: query
+ *         name: admin_name
+ *         schema: { type: string, example: "Ali Valiyev" }
+ *         description: Admin ismi/familiyasi bo'yicha filter (qisman mos)
  *     responses: { 200: { description: OK } }
  */
 router.post('/', expenseController.createExpense);

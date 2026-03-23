@@ -211,7 +211,7 @@ async function calculateTeacherSalaryInternal(teacher_id, month_name) {
 
     const studentPayments = await pool.query(`
         SELECT 
-            COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) as total_payments,
+            COALESCE(SUM(COALESCE(ms.group_price, ms.required_amount, 0)), 0) as total_payments,
             COUNT(DISTINCT ms.student_id) as active_students
         FROM monthly_snapshots ms
         JOIN groups g ON ms.group_id = g.id
