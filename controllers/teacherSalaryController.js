@@ -5,9 +5,11 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
-// Teacher tushumi chegirmadan mustaqil: asl kurs narxi bo'yicha
-// (group_price mavjud bo'lsa shuni, bo'lmasa required_amount ni olamiz)
-const SALARY_BASE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
+// Teacher tushumi faqat to'lov bo'lsa: partial ham qo'shiladi.
+// Chegirma oylikka ta'sir qilmaydi, faqat to'langan summa hisobga olinadi.
+// Overpayment bo'lsa ham to'liq qo'shiladi (cap yo'q).
+const GROUP_PRICE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
+const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -102,7 +104,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       `SELECT
          COUNT(*)::int AS total_students,
          COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) > 0)::int AS paid_students,
-         COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) <= 0 AND COALESCE(ms.debt_amount, 0) > 0)::int AS unpaid_students,
+         COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) <= 0 AND ${GROUP_PRICE_EXPR} > 0)::int AS unpaid_students,
          COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
