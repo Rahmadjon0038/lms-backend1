@@ -23,6 +23,7 @@ router.get('/payouts', protect, ctrl.getTeacherSalaryPayouts);
 router.get('/months/:month_name/teachers/:teacher_id', protect, ctrl.getTeacherMonthSummary);
 router.post('/months/:month_name/teachers/:teacher_id/close', protectAdmin, ctrl.closeTeacherMonth);
 router.post('/months/:month_name/teachers/:teacher_id/reset-payouts', protectAdmin, ctrl.resetTeacherMonthPayouts);
+router.post('/months/:month_name/teachers/:teacher_id/reset-advances', protectAdmin, ctrl.resetTeacherMonthAdvances);
 router.get('/months/:month_name/teachers', protectAdmin, ctrl.getAllTeachersMonthSummary);
 router.get('/months/:month_name/simple-list', protectAdmin, ctrl.getSimpleTeacherSalaryList);
 
