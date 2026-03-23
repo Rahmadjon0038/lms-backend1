@@ -5,7 +5,9 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
-const SALARY_BASE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
+// Teacher tushumi faqat real to'langan summa bo'yicha hisoblanadi
+// (to'lanmaganlar 0, qisman to'langanlar esa o'sha qisman miqdor)
+const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
