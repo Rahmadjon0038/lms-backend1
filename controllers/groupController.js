@@ -550,7 +550,7 @@ exports.updateGroup = async (req, res) => {
                  SET group_name = CASE WHEN $2::boolean THEN $3 ELSE ms.group_name END,
                      group_price = CASE WHEN $4::boolean THEN $5 ELSE ms.group_price END,
                      required_amount = CASE
-                       WHEN $4::boolean THEN GREATEST($5 - COALESCE(ms.discount_amount, 0), 0)
+                       WHEN $4::boolean THEN $5
                        ELSE ms.required_amount
                      END,
                      debt_amount = CASE

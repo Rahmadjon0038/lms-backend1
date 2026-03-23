@@ -468,6 +468,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
     const { 
       monthly_status, 
       required_amount, 
+      group_price,
       paid_amount,
       attendance_percentage 
     } = req.body;
@@ -516,11 +517,16 @@ exports.updateMonthlySnapshot = async (req, res) => {
       newMonthlyStatus = monthly_status;
     }
 
-    if (required_amount !== undefined) {
-      updates.push(`required_amount = $${paramIndex}`);
-      params.push(required_amount);
+    const basePriceInput =
+      group_price !== undefined ? group_price : (required_amount !== undefined ? required_amount : undefined);
+    if (basePriceInput !== undefined) {
+      updates.push(`group_price = $${paramIndex}`);
+      params.push(basePriceInput);
       paramIndex++;
-      newRequiredAmount = parseFloat(required_amount);
+      updates.push(`required_amount = $${paramIndex}`);
+      params.push(basePriceInput);
+      paramIndex++;
+      newRequiredAmount = parseFloat(basePriceInput);
     }
 
     if (paid_amount !== undefined) {
@@ -545,7 +551,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
 
     // To'lov statusi va qarzni qayta hisoblash (required/paid/monthly_status o'zgarsa)
     const effectiveRequired = Math.max(newRequiredAmount - currentDiscountAmount, 0);
-    const recalculationNeeded = required_amount !== undefined || paid_amount !== undefined || monthly_status !== undefined;
+    const recalculationNeeded = basePriceInput !== undefined || paid_amount !== undefined || monthly_status !== undefined;
     if (recalculationNeeded) {
       let newPaymentStatus = current.payment_status;
       const resolvedMonthlyStatus = newMonthlyStatus !== null ? newMonthlyStatus : current.monthly_status;
@@ -583,12 +589,12 @@ exports.updateMonthlySnapshot = async (req, res) => {
     const result = await db.query(updateQuery, params);
 
     // Student_payments ni ham mos ravishda yangilaymiz (agar mavjud bo'lsa)
-    if (required_amount !== undefined || paid_amount !== undefined) {
+    if (basePriceInput !== undefined || paid_amount !== undefined) {
       const spUpdates = [];
       const spParams = [];
       let spIndex = 1;
 
-      if (required_amount !== undefined) {
+      if (basePriceInput !== undefined) {
         spUpdates.push(`required_amount = $${spIndex}`);
         spParams.push(newRequiredAmount);
         spIndex++;
@@ -897,9 +903,10 @@ exports.giveSnapshotDiscount = async (req, res) => {
     const snapshot = snapshotCheck.rows[0];
 
     // Chegirma miqdorini hisoblash
+    const basePrice = snapshot.group_price != null ? parseFloat(snapshot.group_price) : parseFloat(snapshot.required_amount);
     let discountAmount;
     if (discount_type === 'percent') {
-      discountAmount = (parseFloat(snapshot.required_amount) * parseFloat(discount_value)) / 100;
+      discountAmount = (basePrice * parseFloat(discount_value)) / 100;
     } else {
       discountAmount = parseFloat(discount_value);
     }
@@ -932,7 +939,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
     }
 
     // Snapshot yangilash - chegirma effective required_amount ni kamaytiradi
-    const originalRequired = parseFloat(snapshot.required_amount);
+    const originalRequired = basePrice;
     const effectiveRequired = originalRequired - discountAmount; // 400,000 - 80,000 = 320,000
     const paidAmount = parseFloat(snapshot.paid_amount);
     const newDebtAmount = effectiveRequired - paidAmount; // 320,000 - paid_amount

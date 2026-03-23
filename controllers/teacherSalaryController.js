@@ -5,9 +5,9 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
-// Teacher tushumi faqat real to'langan summa bo'yicha hisoblanadi
-// (to'lanmaganlar 0, qisman to'langanlar esa o'sha qisman miqdor)
-const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
+// Teacher tushumi chegirmadan mustaqil: asl kurs narxi bo'yicha
+// (group_price mavjud bo'lsa shuni, bo'lmasa required_amount ni olamiz)
+const SALARY_BASE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -54,6 +54,7 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
          MAX(ms.student_name) AS student_name,
          MAX(ms.student_surname) AS student_surname,
          COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
+         COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
          COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
@@ -72,7 +73,7 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
            'payment_state',
              CASE
                WHEN COALESCE(tss.total_paid_amount, 0) <= 0 THEN 'unpaid'
-               WHEN COALESCE(tss.total_paid_amount, 0) >= COALESCE(tss.total_required_amount, 0) THEN 'paid'
+               WHEN COALESCE(tss.total_paid_amount, 0) >= GREATEST(COALESCE(tss.total_required_amount, 0) - COALESCE(tss.total_discount_amount, 0), 0) THEN 'paid'
                ELSE 'partial'
              END,
            'required_amount', tss.total_required_amount,
@@ -858,10 +859,14 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            MAX(ms.student_name) AS student_name,
            MAX(ms.student_surname) AS student_surname,
            COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
+           COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
            COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
            CASE
              WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
-             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)
+             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
+               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0) - COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0),
+               0
+             )
                THEN 'paid'
              ELSE 'partial'
            END AS payment_state
