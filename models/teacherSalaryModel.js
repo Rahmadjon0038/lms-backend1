@@ -191,6 +191,10 @@ const createTeacherSalaryTables = async () => {
       ALTER TABLE teacher_monthly_salaries
       ADD COLUMN IF NOT EXISTS recalculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     `);
+    await pool.query(`
+      ALTER TABLE teacher_monthly_salaries
+      ADD COLUMN IF NOT EXISTS payouts_reset_at TIMESTAMP;
+    `);
 
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_teacher_advances_teacher_month
