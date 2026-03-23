@@ -139,8 +139,9 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
   const totalAdvances = toNum(advancesRes.rows[0]?.total_advances);
   const totalGiven = toNum(payoutsRes.rows[0]?.total_given);
   const salaryPercentage = toNum(teacher.salary_percentage);
-  const expectedSalary = round2((totalCollected * salaryPercentage) / 100);
-  const finalSalary = round2(expectedSalary - totalAdvances - totalGiven);
+  const expectedGross = round2((totalCollected * salaryPercentage) / 100);
+  const expectedNet = round2(expectedGross - totalAdvances);
+  const finalSalary = round2(expectedGross - totalAdvances - totalGiven);
 
   const upsert = await client.query(
     `INSERT INTO teacher_monthly_salaries (
@@ -188,7 +189,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       monthName,
       salaryPercentage,
       totalCollected,
-      expectedSalary,
+      expectedGross,
       totalAdvances,
       finalSalary,
       toNum(stat.total_students),
@@ -209,7 +210,8 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     month_name: monthName,
     salary_percentage: salaryPercentage,
     total_collected: totalCollected,
-    expected_salary: expectedSalary,
+    expected_salary: expectedNet,
+    expected_salary_gross: expectedGross,
     total_advances: totalAdvances,
     total_given: totalGiven,
     final_salary: finalSalary,
@@ -277,8 +279,9 @@ const getClosedSummary = async (client, teacherId, monthName) => {
 
   const salaryPercentage = toNum(row.salary_percentage);
   const closeExpected = toNum(row.close_expected_salary);
-  const liveExpected = round2((liveCollected * salaryPercentage) / 100);
-  const postCloseCollectedSalary = round2(Math.max(liveExpected - closeExpected, 0));
+  const liveExpectedGross = round2((liveCollected * salaryPercentage) / 100);
+  const liveExpectedNet = round2(liveExpectedGross - toNum(row.total_advances));
+  const postCloseCollectedSalary = round2(Math.max(liveExpectedGross - closeExpected, 0));
   const totalGiven = toNum(payoutsRes.rows[0]?.total_given ?? row.total_payouts);
   const givenAfterClose = row.closed_at
     ? toNum(payoutsAfterCloseRes.rows[0]?.given_after_close)
@@ -294,7 +297,8 @@ const getClosedSummary = async (client, teacherId, monthName) => {
     month_name: monthName,
     salary_percentage: salaryPercentage,
     total_collected: liveCollected,
-    expected_salary: liveExpected,
+    expected_salary: liveExpectedNet,
+    expected_salary_gross: liveExpectedGross,
     total_advances: toNum(row.total_advances),
     total_given: totalGiven,
     given_after_close: givenAfterClose,
@@ -744,7 +748,7 @@ exports.closeTeacherMonth = async (req, res) => {
         monthName,
         req.user.id,
         summary.total_collected,
-        summary.expected_salary,
+        summary.expected_salary_gross != null ? summary.expected_salary_gross : summary.expected_salary,
         summary.final_salary,
       ]
     );
@@ -952,7 +956,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         ? toNum(row.close_revenue != null ? row.close_revenue : row.live_total_collected)
         : toNum(row.live_total_collected);
 
-      const expectedSalary = isClosed
+      const expectedGross = isClosed
         ? toNum(
             row.close_expected_salary != null
               ? row.close_expected_salary
@@ -960,13 +964,15 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
           )
         : round2((totalCollected * salaryPercentage) / 100);
 
+      const expectedNet = round2(expectedGross - totalAdvances);
+
       const extraAfterClose = isClosed
-        ? round2(Math.max(expectedSalary - toNum(row.close_expected_salary), 0))
+        ? round2(Math.max(expectedGross - toNum(row.close_expected_salary), 0))
         : 0;
 
       const finalSalary = isClosed
         ? round2((toNum(row.close_balance != null ? row.close_balance : 0) + extraAfterClose) - givenForBalance)
-        : round2(expectedSalary - totalAdvances - totalGiven);
+        : round2(expectedGross - totalAdvances - totalGiven);
 
       return {
         teacher_id: toNum(row.teacher_id),
@@ -977,7 +983,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         unpaid_students_count: toNum(row.unpaid_students_count),
         total_collected: totalCollected,
         salary_percentage: salaryPercentage,
-        expected_salary: expectedSalary,
+        expected_salary: expectedNet,
+        expected_salary_gross: expectedGross,
         total_advances: totalAdvances,
         total_given: totalGiven,
         given_for_balance: givenForBalance,
