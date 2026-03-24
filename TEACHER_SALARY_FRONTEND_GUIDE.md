@@ -74,6 +74,9 @@ Base: `/api/teacher-salary`
 ## Summary response'dagi yangi maydonlar
 `GET /months/:month/teachers/:teacher_id` va ro'yxat endpointida asosiy maydonlar:
 
+- `teacher.phone`, `teacher.phone2`: teacher telefon raqamlari.
+- `teacher.father_name`, `teacher.father_phone`: otasining ismi va telefoni (agar saqlangan bo'lsa).
+- `teacher.address`, `teacher.age`: yashash manzili va yoshi (agar saqlangan bo'lsa).
 - `worked_days`: teacher shu oyda nechta kun dars bergani.
 - `groups_taught`: nechta guruhda dars bergani.
 - `total_collected`: shu oydagi teacherga tegishli tushum.
@@ -97,6 +100,7 @@ Base: `/api/teacher-salary`
 - `is_closed`, `closed_at`: oy yopilgan status.
 - `close_balance`: oy yopilgan vaqtdagi balance snapshot.
 - `post_close_generated`: oy yopilgandan keyin qayta yig'ilgan qo'shimcha summa.
+- `students[]` ichida qo'shimcha: `phone`, `phone2`, `father_name`, `father_phone`, `address`, `age`.
 
 ---
 
