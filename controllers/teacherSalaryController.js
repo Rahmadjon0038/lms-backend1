@@ -24,6 +24,12 @@ const getTeacherWithPercent = async (client, teacherId) => {
        u.id,
        u.name,
        u.surname,
+       u.phone,
+       u.phone2,
+       u.father_name,
+       u.father_phone,
+       u.address,
+       u.age,
        COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
      FROM users u
      LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
@@ -56,11 +62,18 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
          ms.student_id,
          MAX(ms.student_name) AS student_name,
          MAX(ms.student_surname) AS student_surname,
+         MAX(COALESCE(ms.student_phone, su.phone)) AS student_phone,
+         MAX(su.phone2) AS student_phone2,
+         MAX(COALESCE(ms.student_father_name, su.father_name)) AS student_father_name,
+         MAX(COALESCE(ms.student_father_phone, su.father_phone)) AS student_father_phone,
+         MAX(su.address) AS student_address,
+         MAX(su.age) AS student_age,
          COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
          COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
          COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
+       LEFT JOIN users su ON su.id = ms.student_id
        WHERE g.teacher_id = $1
          AND ms.month = $2
          AND COALESCE(ms.monthly_status, 'active') = 'active'
@@ -73,6 +86,12 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
            'name', tss.student_name,
            'surname', tss.student_surname,
            'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
+           'phone', tss.student_phone,
+           'phone2', tss.student_phone2,
+           'father_name', tss.student_father_name,
+           'father_phone', tss.student_father_phone,
+           'address', tss.student_address,
+           'age', tss.student_age,
            'payment_state',
              CASE
                WHEN COALESCE(tss.total_paid_amount, 0) <= 0 THEN 'unpaid'
@@ -209,6 +228,12 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       id: teacher.id,
       name: teacher.name,
       surname: teacher.surname,
+      phone: teacher.phone || null,
+      phone2: teacher.phone2 || null,
+      father_name: teacher.father_name || null,
+      father_phone: teacher.father_phone || null,
+      address: teacher.address || null,
+      age: teacher.age != null ? toNum(teacher.age) : null,
     },
     month_name: monthName,
     salary_percentage: salaryPercentage,
@@ -301,6 +326,12 @@ const getClosedSummary = async (client, teacherId, monthName) => {
       id: teacher.id,
       name: teacher.name,
       surname: teacher.surname,
+      phone: teacher.phone || null,
+      phone2: teacher.phone2 || null,
+      father_name: teacher.father_name || null,
+      father_phone: teacher.father_phone || null,
+      address: teacher.address || null,
+      age: teacher.age != null ? toNum(teacher.age) : null,
     },
     month_name: monthName,
     salary_percentage: salaryPercentage,
@@ -897,6 +928,12 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            ms.student_id,
            MAX(ms.student_name) AS student_name,
            MAX(ms.student_surname) AS student_surname,
+           MAX(COALESCE(ms.student_phone, su.phone)) AS student_phone,
+           MAX(su.phone2) AS student_phone2,
+           MAX(COALESCE(ms.student_father_name, su.father_name)) AS student_father_name,
+           MAX(COALESCE(ms.student_father_phone, su.father_phone)) AS student_father_phone,
+           MAX(su.address) AS student_address,
+           MAX(su.age) AS student_age,
            COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
            COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
            COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
@@ -911,6 +948,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            END AS payment_state
          FROM monthly_snapshots ms
          JOIN groups g ON g.id = ms.group_id
+         LEFT JOIN users su ON su.id = ms.student_id
          WHERE ms.month = $1
            AND COALESCE(ms.monthly_status, 'active') = 'active'
          GROUP BY g.teacher_id, ms.student_id
@@ -928,6 +966,12 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
                  'name', tss.student_name,
                  'surname', tss.student_surname,
                  'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
+                 'phone', tss.student_phone,
+                 'phone2', tss.student_phone2,
+                 'father_name', tss.student_father_name,
+                 'father_phone', tss.student_father_phone,
+                 'address', tss.student_address,
+                 'age', tss.student_age,
                  'payment_state', tss.payment_state,
                  'required_amount', tss.total_required_amount,
                  'paid_amount', tss.total_paid_amount
