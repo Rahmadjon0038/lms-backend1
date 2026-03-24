@@ -614,7 +614,7 @@ const getSuperAdminStats = async (req, res) => {
          teacher_revenue AS (
            SELECT
              g.teacher_id,
-             COALESCE(SUM(COALESCE(ms.group_price, ms.required_amount, 0)), 0)::numeric AS total_collected
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            WHERE ms.month = $1
