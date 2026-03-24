@@ -274,6 +274,8 @@ exports.getAllStudents = async (req, res) => {
   try {
     await ensureStudentRecoveryKeys();
 
+    const unassignedOnly = unassigned === 'true';
+
     let baseQuery = `
       SELECT DISTINCT
         u.id, 
@@ -324,7 +326,8 @@ exports.getAllStudents = async (req, res) => {
     }
 
     // Agar specific filters bo'lsa, JOIN qo'shamiz
-    if (teacher_id || group_id || subject_id || group_status) {
+    // unassigned=true bo'lsa, teacher/group/group_status filtrlari ishlamaydi (guruhsizlar uchun)
+    if (!unassignedOnly && (teacher_id || group_id || subject_id || group_status)) {
       joinConditions.push('LEFT JOIN student_groups sg ON u.id = sg.student_id');
       joinConditions.push('LEFT JOIN groups g ON sg.group_id = g.id');
       
@@ -354,6 +357,12 @@ exports.getAllStudents = async (req, res) => {
       }
     }
     
+    // Agar unassigned=true bo'lsa faqat users.subject_id bo'yicha filter qilamiz
+    if (unassignedOnly && subject_id) {
+      whereConditions.push(`u.subject_id = $${paramIdx++}`);
+      params.push(subject_id);
+    }
+
     // Student status filter
     if (status) {
       whereConditions.push(`u.status = $${paramIdx++}`);
