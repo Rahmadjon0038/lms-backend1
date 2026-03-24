@@ -42,7 +42,7 @@ Eski -> Yangi
 - `can_payout_after_close` -> `can_give_after_close`
 
 ### 4) Chegirma qoidasi (yangi)
-- Teacher salary hisobida `paid_amount` ishlatilmaydi.
+- Teacher salary hisobida `paid_amount` ishlatiladi (faqat real tushgan to'lovlar).
 - Hisob bazasi: `monthly_snapshots.group_price` (fallback: `required_amount`).
 - Ya'ni studentga chegirma berilgan bo'lsa ham teacher oyligi asl kurs narxidan chiqadi.
 

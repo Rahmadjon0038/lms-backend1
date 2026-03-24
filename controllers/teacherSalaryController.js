@@ -5,10 +5,12 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 const isValidMonth = (v) => MONTH_RE.test(v);
 const toNum = (v) => Number(v || 0);
 const round2 = (v) => Number(toNum(v).toFixed(2));
-// Teacher tushumi chegirmadan mustaqil: group_price (yoki required_amount) asosida.
-// Partial to'lov bo'lsa ham teacher uchun to'liq kurs narxi hisobga olinadi.
+const PAYOUT_TYPE_REGULAR = 'regular';
+const PAYOUT_TYPE_POST_CLOSE = 'post_close';
+// Teacher tushumi faqat real tushgan to'lovdan: paid_amount asosida.
+// To'lov bo'lmasa, oylik hisobga olinmaydi.
 const GROUP_PRICE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
-const SALARY_BASE_EXPR = GROUP_PRICE_EXPR;
+const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -121,7 +123,9 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
-       WHERE teacher_id = $1 AND month_name = $2`,
+       WHERE teacher_id = $1
+         AND month_name = $2
+         AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'`,
       [teacherId, monthName]
     ),
     getTeacherStudentsForMonth(client, teacherId, monthName),
@@ -224,6 +228,11 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
     close_expected_salary:
       persisted.close_expected_salary != null ? toNum(persisted.close_expected_salary) : null,
     close_balance: persisted.close_balance != null ? toNum(persisted.close_balance) : null,
+    post_close_collected_revenue: 0,
+    post_close_expected_salary: 0,
+    post_close_given: 0,
+    post_close_available: 0,
+    post_close_can_give: false,
     students,
   };
 };
@@ -257,35 +266,35 @@ const getClosedSummary = async (client, teacherId, monthName) => {
   const row = monthly.rows[0];
   if (!row.is_closed) return null;
 
-  const [liveCollected, payoutsRes, payoutsAfterCloseRes, students] = await Promise.all([
+  const [liveCollected, payoutsRegularRes, payoutsPostCloseRes, students] = await Promise.all([
     getTeacherMonthLiveCollected(client, teacherId, monthName),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
-       WHERE teacher_id = $1 AND month_name = $2`,
+       WHERE teacher_id = $1
+         AND month_name = $2
+         AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'`,
       [teacherId, monthName]
     ),
     client.query(
-      `SELECT COALESCE(SUM(amount), 0)::numeric AS given_after_close
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS post_close_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1
          AND month_name = $2
-         AND created_at >= $3`,
-      [teacherId, monthName, row.closed_at]
+         AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'`,
+      [teacherId, monthName]
     ),
     getTeacherStudentsForMonth(client, teacherId, monthName),
   ]);
 
-  const salaryPercentage = toNum(row.salary_percentage);
+  const salaryPercentage = toNum(teacher.salary_percentage);
   const closeExpected = toNum(row.close_expected_salary);
-  const liveExpectedGross = round2((liveCollected * salaryPercentage) / 100);
-  const liveExpectedNet = round2(liveExpectedGross - toNum(row.total_advances));
-  const postCloseCollectedSalary = round2(Math.max(liveExpectedGross - closeExpected, 0));
-  const totalGiven = toNum(payoutsRes.rows[0]?.total_given ?? row.total_payouts);
-  const givenAfterClose = row.closed_at
-    ? toNum(payoutsAfterCloseRes.rows[0]?.given_after_close)
-    : totalGiven;
-  const availableNow = round2(toNum(row.close_balance) + postCloseCollectedSalary - givenAfterClose);
+  const closeRevenue = toNum(row.close_revenue);
+  const postCloseCollectedRevenue = round2(Math.max(liveCollected - closeRevenue, 0));
+  const postCloseExpectedGross = round2((postCloseCollectedRevenue * salaryPercentage) / 100);
+  const postCloseGiven = toNum(payoutsPostCloseRes.rows[0]?.post_close_given);
+  const postCloseAvailable = round2(postCloseExpectedGross - postCloseGiven);
+  const totalGiven = toNum(payoutsRegularRes.rows[0]?.total_given ?? row.total_payouts);
 
   return {
     teacher: {
@@ -295,24 +304,26 @@ const getClosedSummary = async (client, teacherId, monthName) => {
     },
     month_name: monthName,
     salary_percentage: salaryPercentage,
-    total_collected: liveCollected,
-    expected_salary: liveExpectedNet,
-    expected_salary_gross: liveExpectedGross,
+    total_collected: closeRevenue,
+    expected_salary: round2(closeExpected - toNum(row.total_advances)),
+    expected_salary_gross: closeExpected,
     total_advances: toNum(row.total_advances),
     total_given: totalGiven,
-    given_after_close: givenAfterClose,
-    final_salary: availableNow,
+    final_salary: toNum(row.close_balance),
     total_students: toNum(row.total_students),
     paid_students: toNum(row.paid_students),
     unpaid_students: toNum(row.unpaid_students),
-    can_give: availableNow > 0,
+    can_give: toNum(row.close_balance) > 0,
     is_closed: true,
     closed_at: row.closed_at,
-    close_revenue: toNum(row.close_revenue),
+    close_revenue: closeRevenue,
     close_expected_salary: closeExpected,
     close_balance: toNum(row.close_balance),
-    post_close_collected_salary: postCloseCollectedSalary,
-    can_give_after_close: availableNow > 0,
+    post_close_collected_revenue: postCloseCollectedRevenue,
+    post_close_expected_salary: postCloseExpectedGross,
+    post_close_given: postCloseGiven,
+    post_close_available: postCloseAvailable,
+    post_close_can_give: postCloseAvailable > 0,
     students,
   };
 };
@@ -562,7 +573,8 @@ exports.createTeacherSalaryGiven = async (req, res) => {
 
     const closed = await getClosedSummary(client, teacherId, monthName);
     const live = closed || (await buildOpenMonthSummary(client, teacherId, monthName));
-    const available = toNum(live.final_salary);
+    const isClosed = Boolean(closed);
+    const available = isClosed ? toNum(live.post_close_available) : toNum(live.final_salary);
 
     if (available <= 0) {
       await client.query('ROLLBACK');
@@ -576,10 +588,17 @@ exports.createTeacherSalaryGiven = async (req, res) => {
     const givenAmount = available;
 
     const ins = await client.query(
-      `INSERT INTO teacher_salary_payouts (teacher_id, month_name, amount, description, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO teacher_salary_payouts (teacher_id, month_name, amount, payout_type, description, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [teacherId, monthName, givenAmount, description, req.user.id]
+      [
+        teacherId,
+        monthName,
+        givenAmount,
+        isClosed ? PAYOUT_TYPE_POST_CLOSE : PAYOUT_TYPE_REGULAR,
+        description,
+        req.user.id,
+      ]
     );
 
     const refreshedClosed = await getClosedSummary(client, teacherId, monthName);
@@ -589,7 +608,9 @@ exports.createTeacherSalaryGiven = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Teacherga mavjud yig\'ilgan summa to\'liq berildi',
+      message: isClosed
+        ? 'Oy yopilgandan keyingi yig\'ilgan summa to\'liq berildi'
+        : 'Teacherga mavjud yig\'ilgan summa to\'liq berildi',
       data: {
         given: ins.rows[0],
         summary: refreshedOpen,
@@ -642,10 +663,13 @@ exports.getTeacherSalaryGivenList = async (req, res) => {
     const result = await pool.query(
       `SELECT
          tsp.*,
+         COALESCE(tsp.payout_type, '${PAYOUT_TYPE_REGULAR}') AS payout_type,
          CONCAT(u.name, ' ', u.surname) AS teacher_name,
-         CONCAT(cu.name, ' ', cu.surname) AS created_by_name
+         CONCAT(cu.name, ' ', cu.surname) AS created_by_name,
+         COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
        FROM teacher_salary_payouts tsp
        JOIN users u ON u.id = tsp.teacher_id
+       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
        LEFT JOIN users cu ON cu.id = tsp.created_by
        ${whereSql}
        ORDER BY tsp.created_at DESC`,
@@ -849,12 +873,22 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          WHERE month_name = $1
          GROUP BY teacher_id
        ),
-       monthly_given AS (
+       monthly_given_regular AS (
          SELECT
            teacher_id,
            COALESCE(SUM(amount), 0)::numeric AS total_given
          FROM teacher_salary_payouts
          WHERE month_name = $1
+           AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'
+         GROUP BY teacher_id
+       ),
+       monthly_given_post_close AS (
+         SELECT
+           teacher_id,
+           COALESCE(SUM(amount), 0)::numeric AS post_close_given
+         FROM teacher_salary_payouts
+         WHERE month_name = $1
+           AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'
          GROUP BY teacher_id
        ),
        teacher_student_status AS (
@@ -911,17 +945,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage,
          COALESCE(mc.total_collected, 0)::numeric AS live_total_collected,
          COALESCE(ma.total_advances, 0)::numeric AS total_advances,
-         COALESCE(mp.total_given, 0)::numeric AS total_given,
-         CASE
-           WHEN COALESCE(tms.is_closed, false) = true AND tms.closed_at IS NOT NULL THEN (
-             SELECT COALESCE(SUM(p2.amount), 0)::numeric
-             FROM teacher_salary_payouts p2
-             WHERE p2.teacher_id = u.id
-               AND p2.month_name = $1
-               AND p2.created_at >= tms.closed_at
-           )
-           ELSE COALESCE(mp.total_given, 0)::numeric
-         END AS given_for_balance,
+         COALESCE(mgr.total_given, 0)::numeric AS total_given,
+         COALESCE(mpc.post_close_given, 0)::numeric AS post_close_given,
          COALESCE(tsa.paid_students_count, 0)::int AS paid_students_count,
          COALESCE(tsa.partial_students_count, 0)::int AS partial_students_count,
          COALESCE(tsa.unpaid_students_count, 0)::int AS unpaid_students_count,
@@ -934,7 +959,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
        LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
        LEFT JOIN monthly_collected mc ON mc.teacher_id = u.id
        LEFT JOIN monthly_advances ma ON ma.teacher_id = u.id
-       LEFT JOIN monthly_given mp ON mp.teacher_id = u.id
+       LEFT JOIN monthly_given_regular mgr ON mgr.teacher_id = u.id
+       LEFT JOIN monthly_given_post_close mpc ON mpc.teacher_id = u.id
        LEFT JOIN teacher_students_agg tsa ON tsa.teacher_id = u.id
        LEFT JOIN teacher_monthly_salaries tms
          ON tms.teacher_id = u.id
@@ -948,8 +974,9 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
       const salaryPercentage = toNum(row.salary_percentage);
       const totalAdvances = toNum(row.total_advances);
       const totalGiven = toNum(row.total_given);
-      const givenForBalance = toNum(row.given_for_balance);
+      const postCloseGiven = toNum(row.post_close_given);
       const isClosed = Boolean(row.is_closed);
+      const givenForBalance = isClosed ? postCloseGiven : totalGiven;
 
       const totalCollected = isClosed
         ? toNum(row.close_revenue != null ? row.close_revenue : row.live_total_collected)
@@ -965,12 +992,16 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
 
       const expectedNet = round2(expectedGross - totalAdvances);
 
-      const extraAfterClose = isClosed
-        ? round2(Math.max(expectedGross - toNum(row.close_expected_salary), 0))
+      const postCloseCollectedRevenue = isClosed
+        ? round2(Math.max(toNum(row.live_total_collected) - toNum(row.close_revenue), 0))
         : 0;
+      const postCloseExpectedSalary = isClosed
+        ? round2((postCloseCollectedRevenue * salaryPercentage) / 100)
+        : 0;
+      const postCloseAvailable = round2(postCloseExpectedSalary - postCloseGiven);
 
       const finalSalary = isClosed
-        ? round2((toNum(row.close_balance != null ? row.close_balance : 0) + extraAfterClose) - givenForBalance)
+        ? toNum(row.close_balance != null ? row.close_balance : 0)
         : round2(expectedGross - totalAdvances - totalGiven);
 
       return {
@@ -986,12 +1017,16 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
         expected_salary_gross: expectedGross,
         total_advances: totalAdvances,
         total_given: totalGiven,
+        post_close_given: postCloseGiven,
         given_for_balance: givenForBalance,
         final_salary: finalSalary,
         can_give: finalSalary > 0,
         is_closed: isClosed,
         can_give_advance: !isClosed,
-        post_close_collected_salary: extraAfterClose,
+        post_close_collected_revenue: postCloseCollectedRevenue,
+        post_close_expected_salary: postCloseExpectedSalary,
+        post_close_available: postCloseAvailable,
+        post_close_can_give: postCloseAvailable > 0,
         students: Array.isArray(row.students) ? row.students : [],
       };
     });

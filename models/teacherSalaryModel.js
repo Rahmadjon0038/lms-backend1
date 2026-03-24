@@ -31,6 +31,7 @@ const createTeacherSalaryTables = async () => {
         teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         month_name VARCHAR(7) NOT NULL,
         amount DECIMAL(12,2) NOT NULL,
+        payout_type VARCHAR(20) DEFAULT 'regular',
         description TEXT,
         created_by INTEGER REFERENCES users(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -71,6 +72,11 @@ const createTeacherSalaryTables = async () => {
     await pool.query(`
       ALTER TABLE teacher_salary_settings
       ADD COLUMN IF NOT EXISTS salary_percentage DECIMAL(5,2) DEFAULT 50.00;
+    `);
+
+    await pool.query(`
+      ALTER TABLE teacher_salary_payouts
+      ADD COLUMN IF NOT EXISTS payout_type VARCHAR(20) DEFAULT 'regular';
     `);
 
     await pool.query(`

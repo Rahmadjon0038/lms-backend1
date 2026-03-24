@@ -77,7 +77,7 @@ Base: `/api/teacher-salary`
 - `worked_days`: teacher shu oyda nechta kun dars bergani.
 - `groups_taught`: nechta guruhda dars bergani.
 - `total_collected`: shu oydagi teacherga tegishli tushum.
-- Eslatma: teacher salary hisobida bu qiymat chegirmadan oldingi kurs narxi bazasidan olinadi.
+- Eslatma: teacher salary hisobida bu qiymat faqat real tushgan `paid_amount` bazasidan olinadi.
 - `expected_salary`: foiz bo'yicha hisoblangan summa.
 - `carry_from_previous`: oldingi oylardan qolgan to'lanmagan qoldiq.
 - `manual_adjustments.included_total`: oylikka qo'shilgan manual summa.
@@ -87,6 +87,11 @@ Base: `/api/teacher-salary`
 - `net_salary`: `gross_salary - total_advances`.
 - `total_given`: shu oy bo'yicha berilgan pullar yig'indisi.
 - `final_salary` (yoki `balance`): hozir to'lanishi kerak qolgan summa.
+- `post_close_collected_revenue`: oy yopilgandan keyin tushgan yangi tushum (faqat shu qism).
+- `post_close_expected_salary`: shu yangi tushumdan foiz bo'yicha hisoblangan oylik.
+- `post_close_given`: post-close bo'yicha berilgan summa.
+- `post_close_available`: post-close bo'yicha hozir berilishi mumkin summa.
+- `post_close_can_give`: post-close bo'yicha berish mumkinligi.
 - `previous_unpaid_total`: oldingi oylardan qolgan qarzdorlik yig'indisi.
 - `previous_unpaid_months`: qaysi oyda qancha qolganini list.
 - `is_closed`, `closed_at`: oy yopilgan status.
@@ -129,6 +134,7 @@ Base: `/api/teacher-salary`
 - Close qilingach:
   - `is_closed=true` ko'rsating.
   - Lekin "berildi" tugmasini o'chirmang (yangi tushum bo'lishi mumkin).
+  - Yangi tushum post-close sifatida alohida hisoblanadi va oylik balansga aralashmaydi.
 
 5. Oldingi oy qoldig'i eslatmasi
 - Agar `previous_unpaid_total > 0` bo'lsa badge/banner chiqaring.
