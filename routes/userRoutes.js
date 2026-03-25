@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus } = require('../controllers/userController');
+const { registerStudent, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -161,6 +161,117 @@ router.post('/register', protect, roleCheck(['admin', 'teacher']), registerStude
  *         description: Faqat adminlar teacher yarata oladi
  */
 router.post('/register-teacher', protect, roleCheck(['admin', 'super_admin']), registerTeacher);
+
+/**
+ * @swagger
+ * /api/users/register-admin:
+ *   post:
+ *     summary: Yangi admin yaratish (Faqat super adminlar uchun)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - surname
+ *               - username
+ *               - password
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: Aziz
+ *               surname:
+ *                 type: string
+ *                 example: Karimov
+ *               username:
+ *                 type: string
+ *                 example: admin01
+ *               password:
+ *                 type: string
+ *                 example: admin123
+ *               phone:
+ *                 type: string
+ *                 example: "+998901234567"
+ *               phone2:
+ *                 type: string
+ *                 example: "+998912345678"
+ *     responses:
+ *       201:
+ *         description: Admin muvaffaqiyatli yaratildi
+ *       400:
+ *         description: Username band yoki ma'lumotlar xato
+ *       403:
+ *         description: Faqat super adminlar admin yarata oladi
+ */
+router.post('/register-admin', protect, roleCheck(['super_admin']), registerAdmin);
+
+/**
+ * @swagger
+ * /api/users/admins:
+ *   get:
+ *     summary: Adminlar ro'yxati (Faqat super adminlar uchun)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, terminated, on_leave]
+ *         description: Admin holati bo'yicha filter
+ *       - in: query
+ *         name: month_name
+ *         schema:
+ *           type: string
+ *           example: "2026-03"
+ *         description: Agar berilsa, shu oy uchun oylik ma'lumoti ham qaytadi
+ *     responses:
+ *       200:
+ *         description: Adminlar ro'yxati
+ */
+router.get('/admins', protect, roleCheck(['super_admin']), getAdmins);
+
+/**
+ * @swagger
+ * /api/users/admins/{adminId}/status:
+ *   patch:
+ *     summary: Admin holatini yangilash (Faqat super adminlar uchun)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: adminId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [active, terminated, on_leave]
+ *               terminationDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-03-25"
+ *     responses:
+ *       200:
+ *         description: Admin holati yangilandi
+ */
+router.patch('/admins/:adminId/status', protect, roleCheck(['super_admin']), updateAdminStatus);
 
 /**
  * @swagger
