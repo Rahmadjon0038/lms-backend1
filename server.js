@@ -84,6 +84,7 @@ const teacherGuideRoutes = require('./routes/teacherGuideRoutes');
 const adminGuideRoutes = require('./routes/adminGuideRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
+const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
@@ -92,6 +93,7 @@ const { createLessonsTable, createAttendanceTable, createHolidaysTable } = requi
 const { createGuideTables } = require('./models/guideModel');
 const { createExpenseTable } = require('./models/expenseModel');
 const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
+const { createAdminSalaryTables } = require('./models/adminSalaryModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -110,6 +112,7 @@ app.use('/api/teacher/guides', teacherGuideRoutes);
 app.use('/api/admin/guides', adminGuideRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
+app.use('/api/admin-salary', adminSalaryRoutes);
 
 // 
 console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
@@ -148,7 +151,8 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['group_monthly_settings', createGroupMonthlySettingsTable],
             ['payments', createPaymentTables],
             ['monthly_snapshots', createMonthlySnapshotTable],
-            ['teacher_salary_v2', createTeacherSalaryTables]
+            ['teacher_salary_v2', createTeacherSalaryTables],
+            ['admin_salary', createAdminSalaryTables]
         ];
 
         for (const [stepName, setupFn] of setupSteps) {

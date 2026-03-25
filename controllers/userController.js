@@ -62,6 +62,17 @@ const ensureRecoveryKeysForRole = async (role) => {
     }
 };
 
+const isValidMonthName = (value) => typeof value === 'string' && /^\d{4}-\d{2}$/.test(value.trim());
+
+const normalizeDateValue = (value) => {
+    if (!value) return null;
+    try {
+        return new Date(value).toISOString().split('T')[0];
+    } catch (_err) {
+        return null;
+    }
+};
+
 // 1. Student ro'yxatdan o'tishi (Yangi maydonlar bilan)
 const registerStudent = async (req, res) => {
     const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
@@ -318,6 +329,202 @@ const registerTeacher = async (req, res) => {
             error: "Teacher yaratishda xatolik yuz berdi",
             details: err.message 
         });
+    }
+};
+
+// 1.2. Admin yaratish (Faqat super adminlar uchun)
+const registerAdmin = async (req, res) => {
+    const { name, surname, username, password, phone, phone2 } = req.body;
+
+    if (!name || !surname || !username || !password) {
+        return res.status(400).json({ message: "name, surname, username va password majburiy" });
+    }
+
+    try {
+        const userExists = await pool.query('SELECT 1 FROM users WHERE username = $1', [username]);
+        if (userExists.rows.length > 0) {
+            return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const recoveryKey = generatePlainRecoveryKey();
+        const recoveryKeyHash = hashRecoveryKey(username, recoveryKey);
+
+        const newAdmin = await pool.query(
+            `INSERT INTO users (
+                name, surname, username, password, role, phone, phone2,
+                password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
+            )
+             VALUES ($1, $2, $3, $4, 'admin', $5, $6, $7, $8, CURRENT_TIMESTAMP)
+             RETURNING id, name, surname, username, role, phone, phone2, status, created_at`,
+            [name, surname, username, hashedPassword, phone || null, phone2 || null, recoveryKey, recoveryKeyHash]
+        );
+
+        return res.status(201).json({
+            success: true,
+            message: "Admin muvaffaqiyatli yaratildi",
+            admin: newAdmin.rows[0],
+            recovery_key: recoveryKey
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Admin yaratishda xatolik", error: err.message });
+    }
+};
+
+// 5.A. Barcha adminlarni olish (Super admin)
+const getAdmins = async (req, res) => {
+    const { status, month_name } = req.query || {};
+    const filters = [`u.role = 'admin'`];
+    const params = [];
+    let idx = 1;
+
+    if (status) {
+        const validStatuses = ['active', 'terminated', 'on_leave'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ success: false, message: "status noto'g'ri" });
+        }
+        filters.push(`u.status = $${idx++}`);
+        params.push(status);
+    }
+
+    let monthName = null;
+    if (month_name !== undefined) {
+        const incomingMonth = String(month_name).trim();
+        if (!isValidMonthName(incomingMonth)) {
+            return res.status(400).json({ success: false, message: "month_name 'YYYY-MM' formatida bo'lishi kerak" });
+        }
+        monthName = incomingMonth;
+    }
+
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+    try {
+        await ensureRecoveryKeysForRole('admin');
+
+        let queryText = `
+            SELECT u.id,
+                   u.name,
+                   u.surname,
+                   u.username,
+                   u.phone,
+                   u.phone2,
+                   u.status,
+                   u.termination_date,
+                   u.created_at,
+                   u.password_reset_key_plain as recovery_key
+            FROM users u
+            ${whereClause}
+            ORDER BY u.created_at DESC
+        `;
+
+        if (monthName) {
+            queryText = `
+                SELECT u.id,
+                       u.name,
+                       u.surname,
+                       u.username,
+                       u.phone,
+                       u.phone2,
+                       u.status,
+                       u.termination_date,
+                       u.created_at,
+                       u.password_reset_key_plain as recovery_key,
+                       asp.amount as salary_amount,
+                       asp.description as salary_description,
+                       asp.updated_at as salary_updated_at,
+                       asp.month_name as salary_month
+                FROM users u
+                LEFT JOIN admin_salary_payouts asp
+                  ON asp.admin_id = u.id AND asp.month_name = $${idx}
+                ${whereClause}
+                ORDER BY u.created_at DESC
+            `;
+            params.push(monthName);
+        }
+
+        const admins = await pool.query(queryText, params);
+
+        const formatted = admins.rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            surname: row.surname,
+            username: row.username,
+            phone: row.phone || '',
+            phone2: row.phone2 || '',
+            status: row.status,
+            terminationDate: normalizeDateValue(row.termination_date),
+            createdAt: normalizeDateValue(row.created_at),
+            recovery_key: row.recovery_key || null,
+            salary: monthName
+                ? {
+                    month_name: row.salary_month || monthName,
+                    amount: row.salary_amount !== null ? Number(row.salary_amount) : null,
+                    description: row.salary_description || null,
+                    updated_at: normalizeDateValue(row.salary_updated_at)
+                }
+                : undefined
+        }));
+
+        return res.json({ success: true, data: formatted });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Adminlarni olishda xatolik", error: err.message });
+    }
+};
+
+// 5.B. Admin holatini yangilash (Super admin)
+const updateAdminStatus = async (req, res) => {
+    const adminId = Number(req.params.adminId);
+    const { status, terminationDate } = req.body || {};
+
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+        return res.status(400).json({ success: false, message: "adminId noto'g'ri" });
+    }
+
+    const validStatuses = ['active', 'terminated', 'on_leave'];
+    if (!status || !validStatuses.includes(status)) {
+        return res.status(400).json({ success: false, message: "status noto'g'ri" });
+    }
+
+    try {
+        const admin = await pool.query(
+            `SELECT id, name, surname, status
+             FROM users
+             WHERE id = $1 AND role = 'admin'`,
+            [adminId]
+        );
+
+        if (admin.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Admin topilmadi' });
+        }
+
+        let terminationDateValue = null;
+        if (status === 'terminated') {
+            terminationDateValue = normalizeDateValue(terminationDate) || new Date().toISOString().split('T')[0];
+        }
+
+        await pool.query(
+            `UPDATE users
+             SET status = $1,
+                 termination_date = $2
+             WHERE id = $3`,
+            [status, terminationDateValue, adminId]
+        );
+
+        return res.json({
+            success: true,
+            message: 'Admin holati yangilandi',
+            admin: {
+                id: adminId,
+                name: admin.rows[0].name,
+                surname: admin.rows[0].surname,
+                status,
+                terminationDate: terminationDateValue
+            }
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Admin holatini yangilashda xatolik', error: err.message });
     }
 };
 
@@ -1607,6 +1814,7 @@ const changeStudentStatus = async (req, res) => {
 module.exports = { 
     registerStudent, 
     registerTeacher, 
+    registerAdmin,
     loginStudent, 
     resetPasswordWithRecoveryKey,
     changePassword,
@@ -1615,6 +1823,7 @@ module.exports = {
     updateStudentInfo,
     refreshAccessToken, 
     getAllTeachers,
+    getAdmins,
     getEnglishTeachers,
     checkIsEnglishTeacher,
     setTeacherOnLeave,
@@ -1623,5 +1832,6 @@ module.exports = {
     deleteTeacher,
     patchTeacher,
     updateTeacherInfo,
-    changeStudentStatus
+    changeStudentStatus,
+    updateAdminStatus
 };
