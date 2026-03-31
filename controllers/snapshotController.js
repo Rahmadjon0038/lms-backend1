@@ -2234,6 +2234,7 @@ module.exports = {
   makeSnapshotPayment: exports.makeSnapshotPayment,
   giveSnapshotDiscount: exports.giveSnapshotDiscount,
   resetStudentPayment: exports.resetStudentPayment,
+  removeStudentFromSnapshot: exports.removeStudentFromSnapshot,
   getSnapshotTransactions: exports.getSnapshotTransactions,
   getStudentAttendance: exports.getStudentAttendance,
   updateMonthlySnapshot: exports.updateMonthlySnapshot,
