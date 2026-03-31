@@ -564,6 +564,83 @@ router.post('/reset-payment', protect, snapshotController.resetStudentPayment);
 
 /**
  * @swagger
+ * /api/snapshots/remove-student:
+ *   post:
+ *     tags: [Monthly Snapshots]
+ *     summary: Remove a student from monthly snapshot for specific month
+ *     description: Deletes snapshot row and related payment data (transactions + student_payments). Admin only.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - student_id
+ *               - group_id
+ *               - month
+ *             properties:
+ *               student_id:
+ *                 type: integer
+ *                 description: Student ID
+ *                 example: 1
+ *               group_id:
+ *                 type: integer
+ *                 description: Group ID
+ *                 example: 1
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Month in YYYY-MM format
+ *                 example: "2024-12"
+ *     responses:
+ *       200:
+ *         description: Student removed from snapshot successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Talaba to'lov jadvalidan olib tashlandi"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     student:
+ *                       type: string
+ *                       example: "John Doe"
+ *                     group:
+ *                       type: string
+ *                       example: "Math Group A"
+ *                     month:
+ *                       type: string
+ *                       example: "2024-12"
+ *                     deleted:
+ *                       type: object
+ *                       properties:
+ *                         transactions_deleted:
+ *                           type: integer
+ *                         student_payments_deleted:
+ *                           type: integer
+ *                         snapshot_deleted:
+ *                           type: integer
+ *       400:
+ *         description: Invalid parameters
+ *       403:
+ *         description: Admin access required
+ *       404:
+ *         description: Snapshot not found
+ */
+router.post('/remove-student', protect, snapshotController.removeStudentFromSnapshot);
+
+/**
+ * @swagger
  * /api/snapshots/transactions:
  *   get:
  *     tags: [Monthly Snapshots]

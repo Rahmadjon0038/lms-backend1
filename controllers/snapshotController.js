@@ -1122,6 +1122,110 @@ exports.resetStudentPayment = async (req, res) => {
 };
 
 /**
+ * 7.1 TALABANI MALUM OY SNAPSHOTIDAN OLIB TASHLASH
+ */
+exports.removeStudentFromSnapshot = async (req, res) => {
+  try {
+    const { student_id, group_id, month } = req.body;
+    const { role } = req.user;
+
+    // Faqat admin olib tashlay oladi
+    if (role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Faqat admin to\'lov jadvalidan olib tashlashi mumkin'
+      });
+    }
+
+    // Validatsiya
+    if (!student_id || !group_id || !month) {
+      return res.status(400).json({
+        success: false,
+        message: 'student_id, group_id va month majburiy'
+      });
+    }
+
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'month YYYY-MM formatida bo\'lishi kerak'
+      });
+    }
+
+    // Snapshot mavjudligini tekshirish
+    const snapshotCheck = await db.query(
+      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3',
+      [student_id, group_id, month]
+    );
+
+    if (snapshotCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `${month} oy uchun To'lov jadvali topilmadi`
+      });
+    }
+
+    const snapshot = snapshotCheck.rows[0];
+
+    console.log(`🗑️ Snapshotdan olib tashlash boshlandi:`);
+    console.log(`   Talaba: ${snapshot.student_name} ${snapshot.student_surname}`);
+    console.log(`   Guruh: ${snapshot.group_name}`);
+    console.log(`   Oy: ${month}`);
+
+    // 1. To'lov tranzaksiyalarini o'chirish
+    const deleteTransactionsResult = await db.query(`
+      DELETE FROM payment_transactions 
+      WHERE student_id = $1 AND group_id = $2 AND month = $3
+    `, [student_id, group_id, month]);
+
+    // 2. Student_payments yozuvini o'chirish (agar mavjud bo'lsa)
+    const deleteStudentPaymentsResult = await db.query(`
+      DELETE FROM student_payments
+      WHERE student_id = $1 AND group_id = $2 AND month = $3
+    `, [student_id, group_id, month]);
+
+    // 3. Snapshot yozuvini o'chirish
+    const deleteSnapshotResult = await db.query(`
+      DELETE FROM monthly_snapshots 
+      WHERE student_id = $1 AND group_id = $2 AND month = $3
+      RETURNING *
+    `, [student_id, group_id, month]);
+
+    if (deleteSnapshotResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'To\'lov jadvalidan olib tashlab bo\'lmadi'
+      });
+    }
+
+    console.log(`✅ Snapshotdan olib tashlandi!`);
+
+    res.json({
+      success: true,
+      message: 'Talaba to\'lov jadvalidan olib tashlandi',
+      data: {
+        student: `${snapshot.student_name} ${snapshot.student_surname}`,
+        group: snapshot.group_name,
+        month: month,
+        deleted: {
+          transactions_deleted: deleteTransactionsResult.rowCount,
+          student_payments_deleted: deleteStudentPaymentsResult.rowCount,
+          snapshot_deleted: deleteSnapshotResult.rowCount
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Snapshotdan olib tashlashda xatolik:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Snapshotdan olib tashlashda xatolik',
+      error: error.message
+    });
+  }
+};
+
+/**
  * 8. SNAPSHOT ORQALI TRANSACTION TARIXI
  */
 exports.getSnapshotTransactions = async (req, res) => {
