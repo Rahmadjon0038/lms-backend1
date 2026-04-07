@@ -245,6 +245,51 @@ const changePassword = async (req, res) => {
     }
 };
 
+// Admin tomonidan recovery keyni qayta yaratish
+const rotateRecoveryKeyByAdmin = async (req, res) => {
+    const userId = parseInt(req.params.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+        return res.status(400).json({ success: false, message: "userId noto'g'ri" });
+    }
+
+    try {
+        const userResult = await pool.query(
+            'SELECT id, username, role FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Foydalanuvchi topilmadi" });
+        }
+
+        const user = userResult.rows[0];
+        const recoveryKey = generatePlainRecoveryKey();
+        const recoveryKeyHash = hashRecoveryKey(user.username, recoveryKey);
+
+        await pool.query(
+            `UPDATE users
+             SET password_reset_key_plain = $1,
+                 password_reset_key_hash = $2,
+                 password_reset_key_rotated_at = CURRENT_TIMESTAMP
+             WHERE id = $3`,
+            [recoveryKey, recoveryKeyHash, user.id]
+        );
+
+        return res.json({
+            success: true,
+            message: "Recovery key yangilandi",
+            data: {
+                user_id: user.id,
+                username: user.username,
+                role: user.role,
+                recovery_key: recoveryKey
+            }
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Recovery key yangilashda xatolik", error: err.message });
+    }
+};
+
 // 1.1. Teacher yaratish (Faqat adminlar uchun) - Ko'p fanlar bilan (primary fan yo'q)
 const registerTeacher = async (req, res) => {
     const { 
@@ -1824,11 +1869,12 @@ module.exports = {
     getProfile, 
     updateProfile,
     updateStudentInfo,
-    refreshAccessToken, 
+    refreshAccessToken,
     getAllTeachers,
     getAdmins,
     getEnglishTeachers,
     checkIsEnglishTeacher,
+    rotateRecoveryKeyByAdmin,
     setTeacherOnLeave,
     terminateTeacher,
     reactivateTeacher,
