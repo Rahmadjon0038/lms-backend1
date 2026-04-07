@@ -308,21 +308,37 @@ exports.getAllStudents = async (req, res) => {
     let paramIdx = 1;
 
     // Search (name/phone/username/father) - case-insensitive + partial
+    // Multiple tokens are treated as OR so partial typing doesn't drop results.
     if (search && String(search).trim().length > 0) {
-      const searchValue = `%${String(search).trim().toLowerCase()}%`;
-      whereConditions.push(`(
-        LOWER(COALESCE(u.name, '')) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.surname, '')) LIKE $${paramIdx}
-        OR LOWER(CONCAT_WS(' ', u.name, u.surname)) LIKE $${paramIdx}
-        OR LOWER(CONCAT_WS(' ', u.surname, u.name)) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.phone, '')) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.phone2, '')) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.username, '')) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.father_name, '')) LIKE $${paramIdx}
-        OR LOWER(COALESCE(u.father_phone, '')) LIKE $${paramIdx}
-      )`);
-      params.push(searchValue);
-      paramIdx++;
+      const raw = String(search).trim().toLowerCase();
+      const tokens = raw.split(/\s+/).filter(Boolean);
+      const fieldsClause = (idx) => `(
+        LOWER(COALESCE(u.name, '')) LIKE $${idx}
+        OR LOWER(COALESCE(u.surname, '')) LIKE $${idx}
+        OR LOWER(CONCAT_WS(' ', u.name, u.surname)) LIKE $${idx}
+        OR LOWER(CONCAT_WS(' ', u.surname, u.name)) LIKE $${idx}
+        OR LOWER(COALESCE(u.phone, '')) LIKE $${idx}
+        OR LOWER(COALESCE(u.phone2, '')) LIKE $${idx}
+        OR LOWER(COALESCE(u.username, '')) LIKE $${idx}
+        OR LOWER(COALESCE(u.father_name, '')) LIKE $${idx}
+        OR LOWER(COALESCE(u.father_phone, '')) LIKE $${idx}
+      )`;
+
+      if (tokens.length <= 1) {
+        const searchValue = `%${raw}%`;
+        whereConditions.push(fieldsClause(paramIdx));
+        params.push(searchValue);
+        paramIdx++;
+      } else {
+        const tokenClauses = [];
+        for (const token of tokens) {
+          const searchValue = `%${token}%`;
+          tokenClauses.push(fieldsClause(paramIdx));
+          params.push(searchValue);
+          paramIdx++;
+        }
+        whereConditions.push(`(${tokenClauses.join(' OR ')})`);
+      }
     }
 
     // Agar specific filters bo'lsa, JOIN qo'shamiz
