@@ -2039,7 +2039,7 @@ exports.getNewStudentsNotification = async (req, res) => {
 exports.exportSnapshotsToExcel = async (req, res) => {
   try {
     const XLSX = require('xlsx');
-    const { month, group_id, status, payment_status, teacher_id, subject_id } = req.query;
+    const { month, group_id, status, payment_status, teacher_id, subject_id, search } = req.query;
     const { role: userRole, id: userId } = req.user;
 
     let whereConditions = [];
@@ -2087,6 +2087,27 @@ exports.exportSnapshotsToExcel = async (req, res) => {
     if (payment_status) {
       whereConditions.push(`ms.payment_status = $${paramIndex}`);
       params.push(payment_status);
+      paramIndex++;
+    }
+
+    // Search (student/parent/phone) - snapshot + current user data fallback
+    if (search && String(search).trim().length > 0) {
+      const searchValue = `%${String(search).trim()}%`;
+      whereConditions.push(`(
+        ms.student_name ILIKE $${paramIndex}
+        OR ms.student_surname ILIKE $${paramIndex}
+        OR (ms.student_name || ' ' || ms.student_surname) ILIKE $${paramIndex}
+        OR (ms.student_surname || ' ' || ms.student_name) ILIKE $${paramIndex}
+        OR ms.student_phone ILIKE $${paramIndex}
+        OR ms.student_father_name ILIKE $${paramIndex}
+        OR ms.student_father_phone ILIKE $${paramIndex}
+        OR su.name ILIKE $${paramIndex}
+        OR su.surname ILIKE $${paramIndex}
+        OR (su.name || ' ' || su.surname) ILIKE $${paramIndex}
+        OR (su.surname || ' ' || su.name) ILIKE $${paramIndex}
+        OR su.phone ILIKE $${paramIndex}
+      )`);
+      params.push(searchValue);
       paramIndex++;
     }
 
@@ -2165,6 +2186,7 @@ exports.exportSnapshotsToExcel = async (req, res) => {
         AND sd.start_month <= ms.month 
         AND sd.end_month >= ms.month
         AND sd.is_active = true
+      LEFT JOIN users su ON ms.student_id = su.id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
     `;
