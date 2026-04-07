@@ -995,6 +995,7 @@ const getAllTeachers = async (req, res) => {
                 u.id, 
                 u.name, 
                 u.surname, 
+                u.username,
                 u.phone, 
                 u.phone2,
                 u.password_reset_key_plain as recovery_key,
@@ -1029,6 +1030,7 @@ const getAllTeachers = async (req, res) => {
             LEFT JOIN groups g ON u.id = g.teacher_id
             WHERE u.role = 'teacher' ${whereClause}
             GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date, 
+                     u.username,
                      u.certificate, u.age, u.has_experience, u.experience_years, u.experience_place, 
                      u.available_times, u.work_days_hours, u.created_at
             ORDER BY u.created_at DESC
@@ -1043,6 +1045,7 @@ const getAllTeachers = async (req, res) => {
                 id: teacher.id,
                 name: teacher.name,
                 surname: teacher.surname,
+                username: teacher.username || null,
                 subjects: subjects,
                 subjects_list: subjectNames || 'Belgilanmagan',
                 subjects_count: subjects.length,
