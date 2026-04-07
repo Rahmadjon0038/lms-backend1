@@ -307,19 +307,19 @@ exports.getAllStudents = async (req, res) => {
     let params = [];
     let paramIdx = 1;
 
-    // Search (name/phone/username/father)
+    // Search (name/phone/username/father) - case-insensitive + partial
     if (search && String(search).trim().length > 0) {
-      const searchValue = `%${String(search).trim()}%`;
+      const searchValue = `%${String(search).trim().toLowerCase()}%`;
       whereConditions.push(`(
-        u.name ILIKE $${paramIdx}
-        OR u.surname ILIKE $${paramIdx}
-        OR (u.name || ' ' || u.surname) ILIKE $${paramIdx}
-        OR (u.surname || ' ' || u.name) ILIKE $${paramIdx}
-        OR u.phone ILIKE $${paramIdx}
-        OR u.phone2 ILIKE $${paramIdx}
-        OR u.username ILIKE $${paramIdx}
-        OR u.father_name ILIKE $${paramIdx}
-        OR u.father_phone ILIKE $${paramIdx}
+        LOWER(COALESCE(u.name, '')) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.surname, '')) LIKE $${paramIdx}
+        OR LOWER(CONCAT_WS(' ', u.name, u.surname)) LIKE $${paramIdx}
+        OR LOWER(CONCAT_WS(' ', u.surname, u.name)) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.phone, '')) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.phone2, '')) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.username, '')) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.father_name, '')) LIKE $${paramIdx}
+        OR LOWER(COALESCE(u.father_phone, '')) LIKE $${paramIdx}
       )`);
       params.push(searchValue);
       paramIdx++;
