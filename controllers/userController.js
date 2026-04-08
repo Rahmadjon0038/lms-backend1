@@ -73,17 +73,54 @@ const normalizeDateValue = (value) => {
     }
 };
 
+const normalizeUsername = (value) => {
+    if (value === undefined || value === null) return '';
+    return String(value).trim();
+};
+
+const normalizeAgeValue = (age) => {
+    const normalizedAgeInput = typeof age === 'string' ? age.trim() : age;
+    if (normalizedAgeInput === undefined || normalizedAgeInput === null || normalizedAgeInput === '') {
+        return { value: null, error: null };
+    }
+    const normalizedAge = Number(normalizedAgeInput);
+    if (!Number.isInteger(normalizedAge)) {
+        return { value: null, error: "age butun son bo'lishi kerak" };
+    }
+    return { value: normalizedAge, error: null };
+};
+
+const generateUniqueUsername = async (baseUsername, usedUsernames) => {
+    const base = normalizeUsername(baseUsername);
+    if (!base) {
+        throw new Error("username majburiy");
+    }
+    let candidate = base;
+    let counter = 1;
+
+    while (true) {
+        if (!usedUsernames.has(candidate)) {
+            const exists = await pool.query('SELECT 1 FROM users WHERE username = $1', [candidate]);
+            if (exists.rows.length === 0) {
+                usedUsernames.add(candidate);
+                return candidate;
+            }
+        }
+        candidate = `${base}_${counter}`;
+        counter += 1;
+        if (counter > 10000) {
+            throw new Error("username uchun unikal variant topilmadi");
+        }
+    }
+};
+
 // 1. Student ro'yxatdan o'tishi (Yangi maydonlar bilan)
 const registerStudent = async (req, res) => {
     const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
     try {
-        const normalizedAgeInput = typeof age === 'string' ? age.trim() : age;
-        const normalizedAge =
-            normalizedAgeInput === undefined || normalizedAgeInput === null || normalizedAgeInput === ''
-                ? null
-                : Number(normalizedAgeInput);
-        if (normalizedAge !== null && !Number.isInteger(normalizedAge)) {
-            return res.status(400).json({ message: "age butun son bo'lishi kerak" });
+        const { value: normalizedAge, error: ageError } = normalizeAgeValue(age);
+        if (ageError) {
+            return res.status(400).json({ message: ageError });
         }
         const normalizedSubjectId = Number(subject_id);
         if (!Number.isInteger(normalizedSubjectId) || normalizedSubjectId <= 0) {
@@ -143,6 +180,150 @@ const registerStudent = async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+};
+
+const registerStudentsBulk = async (req, res) => {
+    const students = Array.isArray(req.body) ? req.body : req.body?.students;
+    if (!Array.isArray(students) || students.length === 0) {
+        return res.status(400).json({ message: "students array majburiy" });
+    }
+
+    try {
+        const subjectIds = [
+            ...new Set(
+                students
+                    .map((student) => Number(student?.subject_id))
+                    .filter((subjectId) => Number.isInteger(subjectId) && subjectId > 0)
+            )
+        ];
+
+        const subjectsResult = subjectIds.length
+            ? await pool.query('SELECT id, name FROM subjects WHERE id = ANY($1)', [subjectIds])
+            : { rows: [] };
+        const subjectMap = new Map(subjectsResult.rows.map((row) => [row.id, row]));
+
+        const usedUsernames = new Set();
+        const created = [];
+        const failed = [];
+
+        for (let index = 0; index < students.length; index += 1) {
+            const student = students[index] || {};
+            const name = student.name;
+            const surname = student.surname;
+            const username = normalizeUsername(student.username);
+            const password = student.password;
+            const phone = student.phone;
+            const phone2 = student.phone2;
+            const father_name = student.father_name;
+            const father_phone = student.father_phone;
+            const address = student.address;
+            const subjectId = Number(student.subject_id);
+
+            if (!name || !surname || !username || !password || !Number.isInteger(subjectId) || subjectId <= 0) {
+                failed.push({
+                    index,
+                    username: username || null,
+                    message: "name, surname, username, password va subject_id majburiy"
+                });
+                continue;
+            }
+
+            const subject = subjectMap.get(subjectId);
+            if (!subject) {
+                failed.push({
+                    index,
+                    username,
+                    message: "Tanlangan fan topilmadi"
+                });
+                continue;
+            }
+
+            const { value: normalizedAge, error: ageError } = normalizeAgeValue(student.age);
+            if (ageError) {
+                failed.push({
+                    index,
+                    username,
+                    message: ageError
+                });
+                continue;
+            }
+
+            try {
+                let finalUsername = await generateUniqueUsername(username, usedUsernames);
+                const salt = await bcrypt.genSalt(10);
+                const hashedPassword = await bcrypt.hash(password, salt);
+
+                let recoveryKey = generatePlainRecoveryKey();
+                let recoveryKeyHash = hashRecoveryKey(finalUsername, recoveryKey);
+
+                let inserted = null;
+                let attempts = 0;
+                while (!inserted && attempts < 5) {
+                    try {
+                        const newUser = await pool.query(
+                            `INSERT INTO users (
+                                name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
+                                password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
+                            ) 
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP) 
+                             RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+                            [
+                                name,
+                                surname,
+                                finalUsername,
+                                hashedPassword,
+                                phone,
+                                phone2,
+                                father_name,
+                                father_phone,
+                                address,
+                                normalizedAge,
+                                subject.name,
+                                subjectId,
+                                recoveryKey,
+                                recoveryKeyHash
+                            ]
+                        );
+                        inserted = newUser.rows[0];
+                    } catch (err) {
+                        if (err && err.code === '23505') {
+                            finalUsername = await generateUniqueUsername(username, usedUsernames);
+                            recoveryKeyHash = hashRecoveryKey(finalUsername, recoveryKey);
+                            attempts += 1;
+                            continue;
+                        }
+                        throw err;
+                    }
+                }
+
+                if (!inserted) {
+                    throw new Error("username uchun unikal variant topilmadi");
+                }
+
+                created.push({
+                    index,
+                    user: inserted,
+                    recovery_key: recoveryKey
+                });
+            } catch (err) {
+                failed.push({
+                    index,
+                    username,
+                    message: err.message
+                });
+            }
+        }
+
+        return res.status(201).json({
+            message: "Bulk student register yakunlandi",
+            created_count: created.length,
+            failed_count: failed.length,
+            created,
+            failed
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
     }
 };
 
@@ -1861,6 +2042,7 @@ const changeStudentStatus = async (req, res) => {
 
 module.exports = { 
     registerStudent, 
+    registerStudentsBulk,
     registerTeacher, 
     registerAdmin,
     loginStudent, 

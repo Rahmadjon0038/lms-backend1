@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, rotateRecoveryKeyByAdmin, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, rotateRecoveryKeyByAdmin, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -74,6 +74,75 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *         description: Username band yoki ma'lumotlar xato
  */
 router.post('/register', protect, roleCheck(['admin', 'teacher']), registerStudent);
+
+/**
+ * @swagger
+ * /api/users/register-bulk:
+ *   post:
+ *     summary: Bir nechta studentni ro'yxatdan o'tkazish (Admin yoki Teacher)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - students
+ *             properties:
+ *               students:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - name
+ *                     - surname
+ *                     - username
+ *                     - password
+ *                     - subject_id
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: Ali
+ *                     surname:
+ *                       type: string
+ *                       example: Valiyev
+ *                     username:
+ *                       type: string
+ *                       example: ali777
+ *                     password:
+ *                       type: string
+ *                       example: parol123
+ *                     phone:
+ *                       type: string
+ *                       example: "+998901234567"
+ *                     phone2:
+ *                       type: string
+ *                       example: "+998912345678"
+ *                     father_name:
+ *                       type: string
+ *                       example: Abdulla
+ *                     father_phone:
+ *                       type: string
+ *                       example: "+998901111111"
+ *                     address:
+ *                       type: string
+ *                       example: "Tashkent shahar, Chilonzor tumani"
+ *                     age:
+ *                       type: integer
+ *                       example: 20
+ *                     subject_id:
+ *                       type: integer
+ *                       example: 2
+ *     responses:
+ *       201:
+ *         description: Studentlar muvaffaqiyatli yaratildi
+ *       400:
+ *         description: Ma'lumotlar xato
+ */
+router.post('/register-bulk', protect, roleCheck(['admin', 'teacher']), registerStudentsBulk);
 
 /**
  * @swagger
