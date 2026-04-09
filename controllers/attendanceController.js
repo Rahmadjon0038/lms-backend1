@@ -1236,6 +1236,7 @@ exports.getLessonStudents = async (req, res) => {
          END as monthly_status_description,
          CASE WHEN a.monthly_status = 'active' THEN true ELSE false END as can_mark,
          COALESCE(ms.paid_amount, sp.paid_amount, 0) as paid_amount,
+         COALESCE(ms.discount_amount, sp.discount_amount, 0) as discount_amount,
          COALESCE(
            ms.debt_amount,
            COALESCE(ms.required_amount, sp.required_amount, g.price, 0) - COALESCE(ms.paid_amount, sp.paid_amount, 0)
@@ -1530,6 +1531,7 @@ exports.getMonthlyAttendance = async (req, res) => {
          COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_late,
          COUNT(CASE WHEN COALESCE(a.is_marked, false) AND COALESCE(l.is_holiday, false) = false THEN 1 END) as total_lessons,
          MAX(COALESCE(ms.paid_amount, sp.paid_amount, 0)) as paid_amount,
+         MAX(COALESCE(ms.discount_amount, sp.discount_amount, 0)) as discount_amount,
          MAX(
            COALESCE(
              ms.debt_amount,
