@@ -10,7 +10,8 @@ const PAYOUT_TYPE_POST_CLOSE = 'post_close';
 // Teacher tushumi faqat real tushgan to'lovdan: paid_amount asosida.
 // To'lov bo'lmasa, oylik hisobga olinmaydi.
 const GROUP_PRICE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
-const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
+// If discount exists, teacher salary should be based on full course price, not paid amount.
+const SALARY_BASE_EXPR = `CASE WHEN COALESCE(ms.discount_amount, 0) > 0 THEN ${GROUP_PRICE_EXPR} ELSE COALESCE(ms.paid_amount, 0) END`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -99,6 +100,7 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
                ELSE 'partial'
              END,
            'required_amount', tss.total_required_amount,
+           'discount_amount', tss.total_discount_amount,
            'paid_amount', tss.total_paid_amount
          )
          ORDER BY tss.student_name, tss.student_surname
