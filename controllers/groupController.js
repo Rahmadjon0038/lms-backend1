@@ -71,7 +71,25 @@ const normalizeScheduleForCompare = (schedule) => {
     return JSON.stringify({ days, time });
 };
 
-const todayAsDateString = () => new Date().toISOString().slice(0, 10);
+const dateStringInTashkent = (date = new Date()) => {
+    try {
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Tashkent',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).format(date);
+    } catch (e) {
+        return new Date().toISOString().slice(0, 10);
+    }
+};
+
+const todayAsDateString = () => dateStringInTashkent(new Date());
+const tomorrowAsDateString = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return dateStringInTashkent(d);
+};
 
 const normalizeStudentIds = (studentIds) => {
     if (!Array.isArray(studentIds)) return [];
@@ -436,10 +454,19 @@ exports.updateGroup = async (req, res) => {
                 message: "schedule_effective_from YYYY-MM-DD formatida bo'lishi kerak"
             });
         }
+        if (scheduleChanged && schedule_effective_from && /^\d{4}-\d{2}-\d{2}$/.test(String(schedule_effective_from))) {
+            const todayStr = todayAsDateString();
+            if (String(schedule_effective_from) < todayStr) {
+                return res.status(400).json({
+                    message: "schedule_effective_from bugundan oldin bo'lishi mumkin emas",
+                    today: todayStr
+                });
+            }
+        }
         const effectiveFrom = scheduleChanged
             ? (schedule_effective_from && /^\d{4}-\d{2}-\d{2}$/.test(String(schedule_effective_from))
                 ? schedule_effective_from
-                : todayAsDateString())
+                : tomorrowAsDateString())
             : null;
         
         // Teacher va subject validation - agar ikkalasi ham berilgan bo'lsa

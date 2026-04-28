@@ -300,11 +300,6 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   const existingSlots = new Set(existingLessons.rows.map((r) => `${r.lesson_date}|${normalizeTimeValue(r.start_time)}`));
   const holidayDates = await getHolidayDatesForMonth(month);
 
-  const monthlyCap = 12;
-  if (existingLessons.rows.length >= monthlyCap) {
-    return { generated: 0, skipped: 'cap_reached' };
-  }
-
   const candidates = [];
   const cursor = new Date(firstDate);
   while (cursor <= monthEnd) {
@@ -318,7 +313,7 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
-  const toCreate = candidates.slice(0, Math.max(monthlyCap - existingLessons.rows.length, 0));
+  const toCreate = candidates;
   let generated = 0;
   for (const lessonDate of toCreate) {
     const inserted = await pool.query(
@@ -2392,7 +2387,7 @@ exports.getAdminTeacherLessons = async (req, res) => {
 // ============================================================================
 exports.regenerateGroupLessons = async (req, res) => {
   const { group_id } = req.params;
-  const { month, from_date } = req.body || {};
+  const { month, from_date, append_only } = req.body || {};
   const { role, id: userId } = req.user;
 
   let transactionStarted = false;
@@ -2445,27 +2440,31 @@ exports.regenerateGroupLessons = async (req, res) => {
     const deleteStart = from_date || formatDateUtc(monthStartObj);
     const deleteEnd = formatDateUtc(monthEndObj);
 
-    await pool.query('BEGIN');
-    transactionStarted = true;
+    let deletedAttendance = { rowCount: 0 };
+    let deletedLessons = { rowCount: 0 };
+    if (!append_only) {
+      await pool.query('BEGIN');
+      transactionStarted = true;
 
-    const deletedAttendance = await pool.query(
-      `DELETE FROM attendance a
-       USING lessons l
-       WHERE a.lesson_id = l.id
-         AND l.group_id = $1
-         AND l.date BETWEEN $2::date AND $3::date`,
-      [group_id, deleteStart, deleteEnd]
-    );
+      deletedAttendance = await pool.query(
+        `DELETE FROM attendance a
+         USING lessons l
+         WHERE a.lesson_id = l.id
+           AND l.group_id = $1
+           AND l.date BETWEEN $2::date AND $3::date`,
+        [group_id, deleteStart, deleteEnd]
+      );
 
-    const deletedLessons = await pool.query(
-      `DELETE FROM lessons
-       WHERE group_id = $1
-         AND date BETWEEN $2::date AND $3::date`,
-      [group_id, deleteStart, deleteEnd]
-    );
+      deletedLessons = await pool.query(
+        `DELETE FROM lessons
+         WHERE group_id = $1
+           AND date BETWEEN $2::date AND $3::date`,
+        [group_id, deleteStart, deleteEnd]
+      );
 
-    await pool.query('COMMIT');
-    transactionStarted = false;
+      await pool.query('COMMIT');
+      transactionStarted = false;
+    }
 
     const autoGen = await autoGenerateLessonsForMonth({
       groupId: Number(group_id),
@@ -2488,7 +2487,7 @@ exports.regenerateGroupLessons = async (req, res) => {
       data: {
         group_id: Number(group_id),
         month: selectedMonth,
-        delete_range: {
+        delete_range: append_only ? null : {
           from: deleteStart,
           to: deleteEnd
         },
@@ -2496,7 +2495,7 @@ exports.regenerateGroupLessons = async (req, res) => {
         deleted_attendance_count: deletedAttendance.rowCount,
         generated_lessons_count: autoGen.generated,
         current_month_lessons_count: lessonsAfter.rows[0].lesson_count,
-        mode: 'delete_then_schedule_regenerate_max_12'
+        mode: append_only ? 'append_only_generate' : 'delete_then_schedule_regenerate'
       }
     });
   } catch (error) {
