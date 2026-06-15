@@ -418,6 +418,44 @@ router.delete(
 
 /**
  * @swagger
+ * /api/groups/admin/clear-all-students:
+ *   post:
+ *     summary: Barcha talabalarni guruhlardan chiqarish (Admin)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Barcha talabalar guruhlardan chiqarildi
+ */
+router.post(
+  '/admin/clear-all-students',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.clearAllStudentsFromGroups
+);
+
+/**
+ * @swagger
+ * /api/groups/admin/delete-empty-groups:
+ *   delete:
+ *     summary: Bo'sh guruhlarni o'chirish (Admin)
+ *     tags: [Groups]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Bo'sh guruhlar o'chirildi
+ */
+router.delete(
+  '/admin/delete-empty-groups',
+  protect,
+  roleCheck(['admin']),
+  groupCtrl.deleteEmptyGroups
+);
+
+/**
+ * @swagger
  * /api/groups/change-student-group:
  *   post:
  *     summary: Studentni boshqa guruhga o'tkazish (Admin yoki Teacher)

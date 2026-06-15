@@ -1562,6 +1562,117 @@ exports.deleteGroup = async (req, res) => {
     }
 };
 
+// 8.1. Barcha studentlarni barcha guruhlardan chiqarish (Admin)
+exports.clearAllStudentsFromGroups = async (req, res) => {
+    try {
+        await pool.query('BEGIN');
+
+        const affectedStudentsResult = await pool.query(`
+            SELECT DISTINCT student_id
+            FROM student_groups
+        `);
+        const affectedStudentIds = affectedStudentsResult.rows.map((row) => row.student_id);
+
+        const deletedMembershipsResult = await pool.query(`
+            DELETE FROM student_groups
+            RETURNING student_id, group_id
+        `);
+
+        const updatedUsersResult = await pool.query(`
+            UPDATE users
+            SET group_id = NULL,
+                group_name = NULL,
+                teacher_id = NULL,
+                teacher_name = NULL,
+                course_status = 'not_started',
+                course_start_date = NULL,
+                course_end_date = NULL
+            WHERE role = 'student'
+            RETURNING id
+        `);
+
+        await pool.query('COMMIT');
+
+        return res.json({
+            success: true,
+            message: 'Barcha talabalar guruhlardan chiqarildi',
+            summary: {
+                affected_students: affectedStudentIds.length,
+                deleted_memberships: deletedMembershipsResult.rowCount,
+                updated_students: updatedUsersResult.rowCount
+            }
+        });
+    } catch (err) {
+        await pool.query('ROLLBACK').catch(() => {});
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+// 8.2. Bo'sh guruhlarni o'chirish (Admin)
+exports.deleteEmptyGroups = async (req, res) => {
+    try {
+        await pool.query('BEGIN');
+
+        const emptyGroupsResult = await pool.query(`
+            SELECT id, name
+            FROM groups g
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM student_groups sg
+                WHERE sg.group_id = g.id
+            )
+        `);
+
+        const emptyGroupIds = emptyGroupsResult.rows.map((row) => row.id);
+        if (emptyGroupIds.length === 0) {
+            await pool.query('COMMIT');
+            return res.json({
+                success: true,
+                message: "Bo'sh guruhlar topilmadi",
+                deleted_count: 0,
+                deleted_groups: []
+            });
+        }
+
+        const dependentDeleteQueries = [
+            `DELETE FROM monthly_snapshots WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM payment_transactions WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM student_payments WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM payments WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM monthly_fees WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM student_discounts WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM group_monthly_settings WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM attendance WHERE group_id = ANY($1::int[])`,
+            `DELETE FROM lessons WHERE group_id = ANY($1::int[])`,
+        ];
+
+        const cleanupSummary = {};
+        for (const queryText of dependentDeleteQueries) {
+            const result = await pool.query(queryText, [emptyGroupIds]);
+            cleanupSummary[queryText.slice(12, queryText.indexOf(' WHERE ')).trim()] = result.rowCount;
+        }
+
+        const result = await pool.query(`
+            DELETE FROM groups
+            WHERE id = ANY($1::int[])
+            RETURNING id, name
+        `, [emptyGroupIds]);
+
+        await pool.query('COMMIT');
+
+        return res.json({
+            success: true,
+            message: "Bo'sh guruhlar o'chirildi",
+            deleted_count: result.rowCount,
+            deleted_groups: result.rows,
+            cleanup: cleanupSummary
+        });
+    } catch (err) {
+        await pool.query('ROLLBACK').catch(() => {});
+        return res.status(500).json({ error: err.message });
+    }
+};
+
 // 9. Student guruhni ko'rishi (faqat guruh tavsifotlari va ism-familiyalar)
 exports.getGroupViewForStudent = async (req, res) => {
     const groupId = parseInt(req.params.id);
