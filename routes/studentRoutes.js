@@ -15,7 +15,7 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  * @swagger
  * /api/students/all:
  *   get:
- *     summary: Barcha studentlar ro'yxati har birining barcha guruhlari bilan (ADMIN yoki TEACHER)
+ *     summary: Barcha studentlar ro'yxati har birining barcha guruhlari bilan (Faqat Admin)
  *     description: |
  *       Admin uchun barcha studentlar ro'yxatini filter bilan olish. 
  *       Har bir student uchun barcha guruhlaridagi status ma'lumotlari ko'rsatiladi.
@@ -196,11 +196,11 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *       401:
  *         description: Token kerak (unauthorized)
  *       403:
- *         description: Faqat admin yoki teacher uchun
+ *         description: Faqat admin uchun
  *       500:
  *         description: Server xatosi
  */
-router.get("/all", protect, roleCheck(['admin', 'teacher']), studentController.getAllStudents);
+router.get("/all", protect, roleCheck(['admin']), studentController.getAllStudents);
 
 /**
  * @swagger
@@ -509,7 +509,7 @@ router.get("/my-payments", protect, studentController.getMyMonthlyPayments);
  * @swagger
  * /api/students/{student_id}:
  *   delete:
- *     summary: Studentni butunlay o'chirish (ADMIN yoki TEACHER)
+ *     summary: Studentni butunlay o'chirish (Faqat Admin)
  *     description: Student va uning barcha ma'lumotlari o'chiriladi
  *     tags: [Students]
  *     security:
@@ -549,7 +549,7 @@ router.get("/my-payments", protect, studentController.getMyMonthlyPayments);
  *       404:
  *         description: Student topilmadi
  */
-router.delete("/:student_id", protect, roleCheck(['admin', 'teacher']), studentController.deleteStudent);
+router.delete("/:student_id", protect, roleCheck(['admin']), studentController.deleteStudent);
 
 /**
  * @swagger

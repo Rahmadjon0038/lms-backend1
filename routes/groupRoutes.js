@@ -16,7 +16,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * @swagger
  * /api/groups/create:
  *   post:
- *     summary: Yangi guruh yaratish (Admin yoki Teacher)
+ *     summary: Yangi guruh yaratish (Faqat Admin)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -64,7 +64,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *       201:
  *         description: Guruh muvaffaqiyatli yaratildi
  */
-router.post('/create', protect, roleCheck(['admin', 'teacher']), groupCtrl.createGroup);
+router.post('/create', protect, roleCheck(['admin']), groupCtrl.createGroup);
 
 /**
  * @swagger
@@ -109,7 +109,7 @@ router.post('/create', protect, roleCheck(['admin', 'teacher']), groupCtrl.creat
  *       200:
  *         description: Guruh yangilandi
  */
-router.patch('/:id', protect, roleCheck(['admin', 'teacher']), groupCtrl.updateGroup);
+router.patch('/:id', protect, roleCheck(['admin']), groupCtrl.updateGroup);
 
 /**
  * @swagger
@@ -176,13 +176,13 @@ router.patch('/:id', protect, roleCheck(['admin', 'teacher']), groupCtrl.updateG
  *       404:
  *         description: Guruh topilmadi
  */
-router.patch('/:id/status', protect, roleCheck(['admin', 'teacher']), groupCtrl.updateGroupStatus);
+router.patch('/:id/status', protect, roleCheck(['admin']), groupCtrl.updateGroupStatus);
 
 /**
  * @swagger
  * /api/groups/admin/join-student:
  *   post:
- *     summary: Admin yoki Teacher tomonidan talabani guruhga qo'shish (guruh ma'lumotlari avtomatik yoziladi)
+ *     summary: Admin tomonidan talabani guruhga qo'shish (guruh ma'lumotlari avtomatik yoziladi)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -236,14 +236,14 @@ router.patch('/:id/status', protect, roleCheck(['admin', 'teacher']), groupCtrl.
 router.post(
   '/admin/join-student',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.adminAddStudentToGroup
 );
 
 router.post(
   '/admin/bulk-join-students',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.adminBulkAddStudentsToGroup
 );
 
@@ -254,7 +254,7 @@ router.post(
  * @swagger
  * /api/groups/{group_id}/remove-student/{student_id}:
  *   delete:
- *     summary: Talabani guruhdan chiqarib yuborish (Admin yoki Teacher)
+ *     summary: Talabani guruhdan chiqarib yuborish (Faqat Admin)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -276,14 +276,14 @@ router.post(
 router.delete(
   '/:group_id/remove-student/:student_id',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.removeStudentFromGroup
 );
 
 router.delete(
   '/:group_id/remove-students',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.bulkRemoveStudentsFromGroup
 );
 
@@ -458,7 +458,7 @@ router.delete(
  * @swagger
  * /api/groups/change-student-group:
  *   post:
- *     summary: Studentni boshqa guruhga o'tkazish (Admin yoki Teacher)
+ *     summary: Studentni boshqa guruhga o'tkazish (Faqat Admin)
  *     description: Student bir guruhdan boshqa guruhga ko'chiriladi. Eski guruhdan o'chirib, yangi guruhga qo'shadi.
  *     tags: [Groups]
  *     security:
@@ -607,14 +607,14 @@ router.post('/fix-student-status', protect, roleCheck(['admin']), groupCtrl.fixS
 router.post(
   '/change-student-group',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.changeStudentGroup
 );
 
 router.post(
   '/change-students-group',
   protect,
-  roleCheck(['admin', 'teacher']),
+  roleCheck(['admin']),
   groupCtrl.bulkChangeStudentGroup
 );
 
@@ -718,13 +718,13 @@ router.get('/newly-created', protect, roleCheck(['admin']), groupCtrl.getNewlyCr
  *       404:
  *         description: Guruh topilmadi
  */
-router.patch('/:id/start-class', protect, roleCheck(['admin', 'teacher']), groupCtrl.startGroupClass);
+router.patch('/:id/start-class', protect, roleCheck(['admin']), groupCtrl.startGroupClass);
 
 /**
  * @swagger
  * /api/groups/swap-schedules:
  *   post:
- *     summary: Teacher guruhlarining jadvallarini almashtirish
+ *     summary: Guruhlar jadvallarini almashtirish (Faqat Admin)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -796,7 +796,7 @@ router.post('/swap-schedules', protect, roleCheck(['admin']), groupCtrl.swapGrou
  * @swagger
  * /api/groups/teacher-schedule/{teacher_id}:
  *   get:
- *     summary: Teacher guruhlarining barcha jadvallarini ko'rish
+ *     summary: Teacher guruhlarining barcha jadvallarini ko'rish (Faqat Admin)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -850,7 +850,7 @@ router.get('/teacher-schedule/:teacher_id', protect, roleCheck(['admin']), group
  * @swagger
  * /api/groups/teacher/my-groups:
  *   get:
- *     summary: Teacher o'zi o'qitayotgan guruhlar ro'yxati (dars jadvali bilan)
+ *     summary: Teacher o'zi o'qitayotgan guruhlar ro'yxati (faqat o'qish)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
@@ -963,7 +963,7 @@ router.get('/teacher/my-groups', protect, roleCheck(['teacher']), groupCtrl.getT
  * @swagger
  * /api/groups/teacher/my-groups/{group_id}:
  *   get:
- *     summary: Teacher ma'lum bir guruh haqida batafsil ma'lumot (talabalar ro'yxati bilan)
+ *     summary: Teacher ma'lum bir guruh haqida batafsil ma'lumot (faqat o'qish)
  *     tags: [Groups]
  *     security:
  *       - bearerAuth: []
