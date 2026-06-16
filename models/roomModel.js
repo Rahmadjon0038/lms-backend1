@@ -8,6 +8,8 @@ const createRoomTable = async () => {
       room_number VARCHAR(50) UNIQUE NOT NULL,
       capacity INTEGER NOT NULL,
       has_projector BOOLEAN DEFAULT false,
+      building VARCHAR(100),
+      floor VARCHAR(50),
       description TEXT,
       is_available BOOLEAN DEFAULT true,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -29,9 +31,15 @@ const createRoomTable = async () => {
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='rooms' AND column_name='capacity') THEN
             ALTER TABLE rooms ADD COLUMN capacity INTEGER;
           END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='rooms' AND column_name='building') THEN
+            ALTER TABLE rooms ADD COLUMN building VARCHAR(100);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='rooms' AND column_name='floor') THEN
+            ALTER TABLE rooms ADD COLUMN floor VARCHAR(50);
+          END IF;
         END $$;
       `);
-      console.log("✅ 'rooms' jadvaliga has_projector va capacity ustunlari qo'shildi.");
+      console.log("✅ 'rooms' jadvaliga kerakli ustunlar qo'shildi.");
     } catch (alterErr) {
       console.log("⚠️ Rooms ustunlari qo'shishda xatolik (balki mavjud):", alterErr.message);
     }
@@ -42,15 +50,22 @@ const createRoomTable = async () => {
 
 // Xona qo'shish
 const createRoom = async (roomData) => {
-  const { room_number, capacity, has_projector, description } = roomData;
+  const { room_number, capacity, has_projector, description, building, floor } = roomData;
   
   const query = `
-    INSERT INTO rooms (room_number, capacity, has_projector, description)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO rooms (room_number, capacity, has_projector, description, building, floor)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
   `;
   
-  const values = [room_number, capacity, has_projector || false, description || null];
+  const values = [
+    room_number,
+    capacity,
+    has_projector || false,
+    description || null,
+    building || null,
+    floor || null
+  ];
   
   const result = await pool.query(query, values);
   return result.rows[0];
@@ -58,7 +73,7 @@ const createRoom = async (roomData) => {
 
 // Barcha xonalarni olish
 const getAllRooms = async (filters = {}) => {
-  let query = `SELECT id, room_number, capacity, has_projector, description, is_available, created_at 
+  let query = `SELECT id, room_number, capacity, has_projector, building, floor, description, is_available, created_at 
                FROM rooms WHERE 1=1`;
   const values = [];
   let paramCount = 1;
@@ -84,7 +99,7 @@ const getAllRooms = async (filters = {}) => {
 // Bitta xonani ID bo'yicha olish
 const getRoomById = async (id) => {
   const result = await pool.query(
-    'SELECT id, room_number, capacity, has_projector, description, is_available, created_at FROM rooms WHERE id = $1', 
+    'SELECT id, room_number, capacity, has_projector, building, floor, description, is_available, created_at FROM rooms WHERE id = $1', 
     [id]
   );
   return result.rows[0];
@@ -93,7 +108,7 @@ const getRoomById = async (id) => {
 // Xonani room_number bo'yicha olish
 const getRoomByNumber = async (room_number) => {
   const result = await pool.query(
-    'SELECT id, room_number, capacity, has_projector, description, is_available FROM rooms WHERE room_number = $1', 
+    'SELECT id, room_number, capacity, has_projector, building, floor, description, is_available FROM rooms WHERE room_number = $1', 
     [room_number]
   );
   return result.rows[0];
@@ -105,7 +120,7 @@ const updateRoom = async (id, roomData) => {
   const values = [];
   let paramCount = 1;
 
-  const allowedFields = ['room_number', 'capacity', 'has_projector', 'description', 'is_available'];
+  const allowedFields = ['room_number', 'capacity', 'has_projector', 'building', 'floor', 'description', 'is_available'];
   
   allowedFields.forEach(field => {
     if (roomData[field] !== undefined) {

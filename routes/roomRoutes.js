@@ -182,6 +182,7 @@ router.get('/:id', protect, getRoomDetails);
  *         description: Xona topilmadi
  */
 router.put('/:id', protect, roleCheck(['admin']), updateRoom);
+router.patch('/:id', protect, roleCheck(['admin']), updateRoom);
 
 /**
  * @swagger

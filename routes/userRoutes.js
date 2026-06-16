@@ -15,7 +15,7 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  * @swagger
  * /api/users/register:
  *   post:
- *     summary: Yangi studentni ro'yxatdan o'tkazish (Admin yoki Teacher)
+ *     summary: Yangi studentni ro'yxatdan o'tkazish (Faqat Admin)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -73,13 +73,13 @@ const { roleCheck } = require('../middlewares/roleMiddleware');
  *       400:
  *         description: Username band yoki ma'lumotlar xato
  */
-router.post('/register', protect, roleCheck(['admin', 'teacher']), registerStudent);
+router.post('/register', protect, roleCheck(['admin']), registerStudent);
 
 /**
  * @swagger
  * /api/users/register-bulk:
  *   post:
- *     summary: Bir nechta studentni ro'yxatdan o'tkazish (Admin yoki Teacher)
+ *     summary: Bir nechta studentni ro'yxatdan o'tkazish (Faqat Admin)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -142,7 +142,7 @@ router.post('/register', protect, roleCheck(['admin', 'teacher']), registerStude
  *       400:
  *         description: Ma'lumotlar xato
  */
-router.post('/register-bulk', protect, roleCheck(['admin', 'teacher']), registerStudentsBulk);
+router.post('/register-bulk', protect, roleCheck(['admin']), registerStudentsBulk);
 
 /**
  * @swagger
@@ -651,7 +651,7 @@ router.patch('/profile', protect, updateProfile);
  * @swagger
  * /api/users/students/{studentId}:
  *   patch:
- *     summary: Student ma'lumotlarini yangilash (Admin yoki Teacher)
+ *     summary: Student ma'lumotlarini yangilash (Faqat Admin)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -695,7 +695,7 @@ router.patch('/profile', protect, updateProfile);
  *       404:
  *         description: Not Found
  */
-router.patch('/students/:studentId', protect, roleCheck(['admin', 'teacher']), updateStudentInfo);
+router.patch('/students/:studentId', protect, roleCheck(['admin']), updateStudentInfo);
 
 /**
  * @swagger

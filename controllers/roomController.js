@@ -11,7 +11,7 @@ const {
 // 1. Xona yaratish (Admin)
 exports.addRoom = async (req, res) => {
   try {
-    const { room_number, capacity, has_projector, description } = req.body;
+    const { room_number, capacity, has_projector, description, building, floor } = req.body;
 
     if (!room_number || room_number.toString().trim() === '') {
       return res.status(400).json({ message: "Xona raqami kiritilishi shart!" });
@@ -31,7 +31,9 @@ exports.addRoom = async (req, res) => {
       room_number: room_number.toString().trim(),
       capacity: parseInt(capacity),
       has_projector: has_projector === true || has_projector === 'true',
-      description: description ? description.trim() : null
+      description: description ? description.trim() : null,
+      building: building ? building.trim() : null,
+      floor: floor ? floor.trim() : null
     });
 
     res.status(201).json({
@@ -233,11 +235,13 @@ exports.getRoomSchedule = async (req, res) => {
 
     res.json({
       success: true,
-      room: {
+        room: {
         id: room.id,
         room_number: room.room_number,
         capacity: room.capacity,
         has_projector: room.has_projector,
+        building: room.building,
+        floor: room.floor,
         description: room.description,
         is_available: room.is_available
       },
