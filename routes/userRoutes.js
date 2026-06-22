@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, resetAllStudentPasswordsToDefault, resetAllTeacherPasswordsToDefault, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -371,38 +371,6 @@ router.patch('/admins/:adminId/status', protect, roleCheck(['super_admin']), upd
  *         description: Username yoki parol xato
  */
 router.post('/login', loginStudent);
-
-/**
- * @swagger
- * /api/users/admin/reset-all-student-passwords:
- *   post:
- *     summary: Barcha student parollarini 123456 ga qaytaradi
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Student parollari yangilandi
- *       403:
- *         description: Faqat admin va super_admin
- */
-router.post('/admin/reset-all-student-passwords', protect, roleCheck(['admin', 'super_admin']), resetAllStudentPasswordsToDefault);
-
-/**
- * @swagger
- * /api/users/admin/reset-all-teacher-passwords:
- *   post:
- *     summary: Barcha o'qituvchi parollarini 777777 ga qaytaradi
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: O'qituvchi parollari yangilandi
- *       403:
- *         description: Faqat admin va super_admin
- */
-router.post('/admin/reset-all-teacher-passwords', protect, roleCheck(['admin', 'super_admin']), resetAllTeacherPasswordsToDefault);
 
 /**
  * @swagger
