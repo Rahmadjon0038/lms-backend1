@@ -6,6 +6,8 @@ const createGuideTables = async () => {
       id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       description TEXT NOT NULL,
+      icon VARCHAR(50),
+      color VARCHAR(20),
       banner_path TEXT,
       banner_file_name VARCHAR(255),
       banner_file_size_bytes BIGINT,
@@ -304,10 +306,21 @@ const createGuideTables = async () => {
         ALTER COLUMN order_index SET NOT NULL;
 
         ALTER TABLE guide_levels
+          ADD COLUMN IF NOT EXISTS icon VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS color VARCHAR(20),
           ADD COLUMN IF NOT EXISTS banner_path TEXT,
           ADD COLUMN IF NOT EXISTS banner_file_name VARCHAR(255),
           ADD COLUMN IF NOT EXISTS banner_file_size_bytes BIGINT,
           ADD COLUMN IF NOT EXISTS banner_mime_type VARCHAR(100);
+
+        -- Eski sxemada banner NOT NULL bo'lsa, icon-asosli darajalar uchun ixtiyoriy qilamiz
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'guide_levels' AND column_name = 'banner_path'
+            AND is_nullable = 'NO'
+        ) THEN
+          ALTER TABLE guide_levels ALTER COLUMN banner_path DROP NOT NULL;
+        END IF;
       END $$;
     `);
 

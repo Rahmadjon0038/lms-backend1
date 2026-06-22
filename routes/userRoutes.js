@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, rotateRecoveryKeyByAdmin, resetAllStudentPasswordsToDefault, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, resetAllStudentPasswordsToDefault, resetAllTeacherPasswordsToDefault, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -374,66 +374,6 @@ router.post('/login', loginStudent);
 
 /**
  * @swagger
- * /api/users/forgot-password/reset-with-key:
- *   post:
- *     summary: Username + recovery key orqali parolni tiklash
- *     tags: [Users]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - username
- *               - recovery_key
- *               - new_password
- *             properties:
- *               username:
- *                 type: string
- *                 example: student01
- *               recovery_key:
- *                 type: string
- *                 example: RK-A1B2C3D4
- *               new_password:
- *                 type: string
- *                 example: NewStrongPass123
- *     responses:
- *       200:
- *         description: Parol tiklandi, eski key kuyadi
- *       401:
- *         description: Recovery key noto'g'ri
- */
-router.post('/forgot-password/reset-with-key', resetPasswordWithRecoveryKey);
-
-/**
- * @swagger
- * /api/users/recovery-key/{userId}/rotate:
- *   patch:
- *     summary: Admin recovery keyni qayta yaratadi
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Recovery key yangilandi
- *       400:
- *         description: userId noto'g'ri
- *       403:
- *         description: Faqat admin va super_admin
- *       404:
- *         description: Foydalanuvchi topilmadi
- */
-router.patch('/recovery-key/:userId/rotate', protect, roleCheck(['admin', 'super_admin']), rotateRecoveryKeyByAdmin);
-
-/**
- * @swagger
  * /api/users/admin/reset-all-student-passwords:
  *   post:
  *     summary: Barcha student parollarini 123456 ga qaytaradi
@@ -447,6 +387,22 @@ router.patch('/recovery-key/:userId/rotate', protect, roleCheck(['admin', 'super
  *         description: Faqat admin va super_admin
  */
 router.post('/admin/reset-all-student-passwords', protect, roleCheck(['admin', 'super_admin']), resetAllStudentPasswordsToDefault);
+
+/**
+ * @swagger
+ * /api/users/admin/reset-all-teacher-passwords:
+ *   post:
+ *     summary: Barcha o'qituvchi parollarini 777777 ga qaytaradi
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: O'qituvchi parollari yangilandi
+ *       403:
+ *         description: Faqat admin va super_admin
+ */
+router.post('/admin/reset-all-teacher-passwords', protect, roleCheck(['admin', 'super_admin']), resetAllTeacherPasswordsToDefault);
 
 /**
  * @swagger

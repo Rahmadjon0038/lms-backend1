@@ -97,6 +97,7 @@ const { createAdminSalaryTables } = require('./models/adminSalaryModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
+const { seedDefaultAdmin } = require('./scripts/seedDefaultAdmin');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -113,9 +114,6 @@ app.use('/api/admin/guides', adminGuideRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
 app.use('/api/admin-salary', adminSalaryRoutes);
-
-// 
-console.log("JWT_SECRET tekshiruvi:", process.env.JWT_SECRET);
 
 // createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
@@ -225,6 +223,9 @@ app.listen(PORT, '0.0.0.0', async () => {
         }
 
         console.log("✅ Dastlabki DB sozlash bosqichlari muvaffaqiyatli yakunlandi.");
+
+        // Default admin yaratish va login/parolni terminalda ko'rsatish
+        await seedDefaultAdmin();
     } catch (error) {
         console.error("❌ Dastlabki sozlashda xatolik:", error.message);
         process.exit(1);
