@@ -39,6 +39,28 @@ const hashRecoveryKey = (username, recoveryKey) => {
         .digest('hex');
 };
 
+const hashPassword = async (password) => {
+    const plain = String(password ?? '').trim();
+    if (!plain) {
+        throw new Error('password majburiy');
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(plain, salt);
+    return { plain, hashed };
+};
+
+const hasUsersColumn = async (columnName) => {
+    const result = await pool.query(
+        `SELECT 1
+         FROM information_schema.columns
+         WHERE table_name = 'users' AND column_name = $1
+         LIMIT 1`,
+        [columnName]
+    );
+    return result.rows.length > 0;
+};
+
 const ensureRecoveryKeysForRole = async (role) => {
     const usersResult = await pool.query(
         `SELECT id, username
@@ -141,24 +163,24 @@ const registerStudent = async (req, res) => {
         }
         const selectedSubject = subjectResult.rows[0];
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(password);
 
         const recoveryKey = generatePlainRecoveryKey();
         const recoveryKeyHash = hashRecoveryKey(username, recoveryKey);
 
         const newUser = await pool.query(
             `INSERT INTO users (
-                name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
+                name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
                 password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             ) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP) 
              RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
             [
                 name,
                 surname,
                 username,
                 hashedPassword,
+                passwordPlain,
                 phone,
                 phone2,
                 father_name,
@@ -251,8 +273,7 @@ const registerStudentsBulk = async (req, res) => {
 
             try {
                 let finalUsername = await generateUniqueUsername(username, usedUsernames);
-                const salt = await bcrypt.genSalt(10);
-                const hashedPassword = await bcrypt.hash(password, salt);
+                const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(password);
 
                 let recoveryKey = generatePlainRecoveryKey();
                 let recoveryKeyHash = hashRecoveryKey(finalUsername, recoveryKey);
@@ -263,16 +284,17 @@ const registerStudentsBulk = async (req, res) => {
                     try {
                         const newUser = await pool.query(
                             `INSERT INTO users (
-                                name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
+                                name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
                                 password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
                             ) 
-                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP) 
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP) 
                              RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
                             [
                                 name,
                                 surname,
                                 finalUsername,
                                 hashedPassword,
+                                passwordPlain,
                                 phone,
                                 phone2,
                                 father_name,
@@ -354,8 +376,7 @@ const resetPasswordWithRecoveryKey = async (req, res) => {
             return res.status(401).json({ success: false, message: "Recovery key noto'g'ri" });
         }
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(String(new_password), salt);
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(new_password);
 
         // Bir martalik ishlashi uchun keyni darhol aylantiramiz (oldingi key yaroqsiz bo'ladi)
         const nextRecoveryKey = generatePlainRecoveryKey();
@@ -364,11 +385,12 @@ const resetPasswordWithRecoveryKey = async (req, res) => {
         await pool.query(
             `UPDATE users
              SET password = $1,
-                 password_reset_key_plain = $2,
-                 password_reset_key_hash = $3,
+                 password_plain = $2,
+                 password_reset_key_plain = $3,
+                 password_reset_key_hash = $4,
                  password_reset_key_rotated_at = CURRENT_TIMESTAMP
-             WHERE id = $4`,
-            [hashedPassword, nextRecoveryKey, nextRecoveryKeyHash, user.id]
+             WHERE id = $5`,
+            [hashedPassword, passwordPlain, nextRecoveryKey, nextRecoveryKeyHash, user.id]
         );
 
         return res.json({
@@ -409,12 +431,11 @@ const changePassword = async (req, res) => {
             return res.status(401).json({ success: false, message: "Eski parol noto'g'ri" });
         }
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(String(new_password), salt);
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(new_password);
 
         await pool.query(
-            'UPDATE users SET password = $1 WHERE id = $2',
-            [hashedPassword, user.id]
+            'UPDATE users SET password = $1, password_plain = $2 WHERE id = $3',
+            [hashedPassword, passwordPlain, user.id]
         );
 
         return res.json({
@@ -468,6 +489,39 @@ const rotateRecoveryKeyByAdmin = async (req, res) => {
         });
     } catch (err) {
         return res.status(500).json({ success: false, message: "Recovery key yangilashda xatolik", error: err.message });
+    }
+};
+
+const resetAllStudentPasswordsToDefault = async (req, res) => {
+    const defaultPassword = '123456';
+
+    try {
+        const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(defaultPassword);
+
+        const result = await pool.query(
+            `UPDATE users
+             SET password = $1,
+                 ${hasPasswordPlainColumn ? 'password_plain = $2,' : ''}
+                 password_reset_key_plain = NULL,
+                 password_reset_key_hash = NULL,
+                 password_reset_key_rotated_at = NULL
+             WHERE role = 'student'
+             RETURNING id`,
+            hasPasswordPlainColumn ? [hashedPassword, passwordPlain] : [hashedPassword]
+        );
+
+        return res.json({
+            success: true,
+            message: `Barcha student parollari ${defaultPassword} ga o'zgartirildi`,
+            updated_count: result.rowCount
+        });
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: "Talabalar parolini ommaviy yangilashda xatolik",
+            error: err.message
+        });
     }
 };
 
@@ -1051,7 +1105,8 @@ const updateStudentInfo = async (req, res) => {
         'father_name',
         'father_phone',
         'address',
-        'age'
+        'age',
+        'password'
     ];
 
     const incoming = req.body && typeof req.body === 'object' ? req.body : {};
@@ -1090,6 +1145,19 @@ const updateStudentInfo = async (req, res) => {
         }
 
         incoming.username = username;
+    }
+
+    if (incoming.password !== undefined) {
+        try {
+            const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(incoming.password);
+            incoming.password = hashedPassword;
+            incoming.password_plain = passwordPlain;
+        } catch (err) {
+            return res.status(400).json({
+                success: false,
+                message: err.message || "password noto'g'ri"
+            });
+        }
     }
 
     try {
@@ -1146,9 +1214,22 @@ const updateStudentInfo = async (req, res) => {
         const setClauses = [];
         const values = [];
         let index = 1;
+        const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
 
         for (const key of incomingKeys) {
             if (incoming[key] === undefined) continue;
+            if (key === 'password') {
+                setClauses.push(`password = $${index}`);
+                values.push(incoming.password);
+                index += 1;
+                if (hasPasswordPlainColumn) {
+                    setClauses.push(`password_plain = $${index}`);
+                    values.push(incoming.password_plain);
+                    index += 1;
+                }
+                continue;
+            }
+
             setClauses.push(`${key} = $${index}`);
             values.push(incoming[key]);
             index += 1;
@@ -2057,6 +2138,7 @@ module.exports = {
     getEnglishTeachers,
     checkIsEnglishTeacher,
     rotateRecoveryKeyByAdmin,
+    resetAllStudentPasswordsToDefault,
     setTeacherOnLeave,
     terminateTeacher,
     reactivateTeacher,

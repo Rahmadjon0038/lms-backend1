@@ -92,7 +92,7 @@ router.post('/levels', handleLevelBannerUpload, guideController.createLevel);
  */
 router.get('/levels/:levelId', guideController.getLevelById);
 router.get('/levels/:levelId/banner', guideController.streamLevelBanner);
-router.patch('/levels/:levelId', guideController.updateLevel);
+router.patch('/levels/:levelId', handleLevelBannerUpload, guideController.updateLevel);
 router.delete('/levels/:levelId', guideController.deleteLevel);
 
 /**
