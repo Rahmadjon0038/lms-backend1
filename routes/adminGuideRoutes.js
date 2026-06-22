@@ -241,6 +241,7 @@ router.post('/lessons/:lessonId/pdfs', handleLessonPdfUpload, guideController.up
  *             schema: { type: string, format: binary }
  */
 router.get('/lessons/:lessonId/pdfs/:pdfId/file', guideController.streamLessonPdfFile);
+router.patch('/lessons/:lessonId/pdfs/:pdfId', handleLessonPdfUpload, guideController.updateLessonPdfItem);
 router.delete('/lessons/:lessonId/pdfs/:pdfId', guideController.deleteLessonPdfItem);
 
 /**

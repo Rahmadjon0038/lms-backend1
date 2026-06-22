@@ -349,62 +349,6 @@ const registerStudentsBulk = async (req, res) => {
     }
 };
 
-const resetPasswordWithRecoveryKey = async (req, res) => {
-    const { username, recovery_key, new_password } = req.body;
-
-    if (!username || !recovery_key || !new_password) {
-        return res.status(400).json({ success: false, message: "username, recovery_key va new_password majburiy" });
-    }
-
-    try {
-        const userResult = await pool.query(
-            'SELECT id, username, password_reset_key_hash FROM users WHERE username = $1',
-            [String(username).trim()]
-        );
-
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ success: false, message: "Foydalanuvchi topilmadi" });
-        }
-
-        const user = userResult.rows[0];
-        if (!user.password_reset_key_hash) {
-            return res.status(400).json({ success: false, message: "Recovery key hali berilmagan. Admin orqali yangilang." });
-        }
-
-        const incomingHash = hashRecoveryKey(user.username, recovery_key);
-        if (incomingHash !== user.password_reset_key_hash) {
-            return res.status(401).json({ success: false, message: "Recovery key noto'g'ri" });
-        }
-
-        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(new_password);
-
-        // Bir martalik ishlashi uchun keyni darhol aylantiramiz (oldingi key yaroqsiz bo'ladi)
-        const nextRecoveryKey = generatePlainRecoveryKey();
-        const nextRecoveryKeyHash = hashRecoveryKey(user.username, nextRecoveryKey);
-
-        await pool.query(
-            `UPDATE users
-             SET password = $1,
-                 password_plain = $2,
-                 password_reset_key_plain = $3,
-                 password_reset_key_hash = $4,
-                 password_reset_key_rotated_at = CURRENT_TIMESTAMP
-             WHERE id = $5`,
-            [hashedPassword, passwordPlain, nextRecoveryKey, nextRecoveryKeyHash, user.id]
-        );
-
-        return res.json({
-            success: true,
-            message: "Parol muvaffaqiyatli tiklandi. Eski recovery key endi ishlamaydi.",
-            data: {
-                recovery_key: nextRecoveryKey
-            }
-        });
-    } catch (err) {
-        return res.status(500).json({ success: false, message: "Parolni tiklashda xatolik", error: err.message });
-    }
-};
-
 const changePassword = async (req, res) => {
     const { username, old_password, new_password } = req.body;
     if (!old_password || !new_password) {
@@ -447,51 +391,6 @@ const changePassword = async (req, res) => {
     }
 };
 
-// Admin tomonidan recovery keyni qayta yaratish
-const rotateRecoveryKeyByAdmin = async (req, res) => {
-    const userId = parseInt(req.params.userId);
-    if (!Number.isInteger(userId) || userId <= 0) {
-        return res.status(400).json({ success: false, message: "userId noto'g'ri" });
-    }
-
-    try {
-        const userResult = await pool.query(
-            'SELECT id, username, role FROM users WHERE id = $1',
-            [userId]
-        );
-
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ success: false, message: "Foydalanuvchi topilmadi" });
-        }
-
-        const user = userResult.rows[0];
-        const recoveryKey = generatePlainRecoveryKey();
-        const recoveryKeyHash = hashRecoveryKey(user.username, recoveryKey);
-
-        await pool.query(
-            `UPDATE users
-             SET password_reset_key_plain = $1,
-                 password_reset_key_hash = $2,
-                 password_reset_key_rotated_at = CURRENT_TIMESTAMP
-             WHERE id = $3`,
-            [recoveryKey, recoveryKeyHash, user.id]
-        );
-
-        return res.json({
-            success: true,
-            message: "Recovery key yangilandi",
-            data: {
-                user_id: user.id,
-                username: user.username,
-                role: user.role,
-                recovery_key: recoveryKey
-            }
-        });
-    } catch (err) {
-        return res.status(500).json({ success: false, message: "Recovery key yangilashda xatolik", error: err.message });
-    }
-};
-
 const resetAllStudentPasswordsToDefault = async (req, res) => {
     const defaultPassword = '123456';
 
@@ -520,6 +419,37 @@ const resetAllStudentPasswordsToDefault = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Talabalar parolini ommaviy yangilashda xatolik",
+            error: err.message
+        });
+    }
+};
+
+// Barcha o'qituvchilar parolini default (777777) ga o'zgartirish
+const resetAllTeacherPasswordsToDefault = async (req, res) => {
+    const defaultPassword = '777777';
+
+    try {
+        const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(defaultPassword);
+
+        const result = await pool.query(
+            `UPDATE users
+             SET password = $1
+                 ${hasPasswordPlainColumn ? ', password_plain = $2' : ''}
+             WHERE role = 'teacher'
+             RETURNING id`,
+            hasPasswordPlainColumn ? [hashedPassword, passwordPlain] : [hashedPassword]
+        );
+
+        return res.json({
+            success: true,
+            message: `Barcha o'qituvchilar paroli ${defaultPassword} ga o'zgartirildi`,
+            updated_count: result.rowCount
+        });
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: "O'qituvchilar parolini ommaviy yangilashda xatolik",
             error: err.message
         });
     }
@@ -1295,17 +1225,15 @@ const getAllTeachers = async (req, res) => {
     const whereClause = filters.length > 0 ? 'AND ' + filters.join(' AND ') : '';
 
     try {
-        await ensureRecoveryKeysForRole('teacher');
-
         const teachers = await pool.query(`
-            SELECT 
-                u.id, 
-                u.name, 
-                u.surname, 
+            SELECT
+                u.id,
+                u.name,
+                u.surname,
                 u.username,
-                u.phone, 
+                u.password_plain,
+                u.phone,
                 u.phone2,
-                u.password_reset_key_plain as recovery_key,
                 u.status,
                 u.start_date,
                 u.end_date,
@@ -1336,9 +1264,9 @@ const getAllTeachers = async (req, res) => {
             FROM users u
             LEFT JOIN groups g ON u.id = g.teacher_id
             WHERE u.role = 'teacher' ${whereClause}
-            GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date, 
-                     u.username,
-                     u.certificate, u.age, u.has_experience, u.experience_years, u.experience_place, 
+            GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date,
+                     u.username, u.password_plain,
+                     u.certificate, u.age, u.has_experience, u.experience_years, u.experience_place,
                      u.available_times, u.work_days_hours, u.created_at
             ORDER BY u.created_at DESC
         `, params);
@@ -1353,6 +1281,7 @@ const getAllTeachers = async (req, res) => {
                 name: teacher.name,
                 surname: teacher.surname,
                 username: teacher.username || null,
+                password: teacher.password_plain || null,
                 subjects: subjects,
                 subjects_list: subjectNames || 'Belgilanmagan',
                 subjects_count: subjects.length,
@@ -1364,7 +1293,6 @@ const getAllTeachers = async (req, res) => {
                 registrationDate: teacher.registration_date ? teacher.registration_date.toISOString().split('T')[0] : null,
                 phone: teacher.phone || '',
                 phone2: teacher.phone2 || '',
-                recovery_key: teacher.recovery_key || null,
                 certificate: teacher.certificate || '',
                 age: teacher.age || null,
                 hasExperience: teacher.has_experience || false,
@@ -2126,8 +2054,7 @@ module.exports = {
     registerStudentsBulk,
     registerTeacher, 
     registerAdmin,
-    loginStudent, 
-    resetPasswordWithRecoveryKey,
+    loginStudent,
     changePassword,
     getProfile, 
     updateProfile,
@@ -2137,8 +2064,8 @@ module.exports = {
     getAdmins,
     getEnglishTeachers,
     checkIsEnglishTeacher,
-    rotateRecoveryKeyByAdmin,
     resetAllStudentPasswordsToDefault,
+    resetAllTeacherPasswordsToDefault,
     setTeacherOnLeave,
     terminateTeacher,
     reactivateTeacher,

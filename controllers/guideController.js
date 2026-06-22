@@ -234,7 +234,7 @@ const getSpeechSettingsForUser = async (userId) => {
 
 const findLevel = async (levelId) => {
   const result = await pool.query(
-    `SELECT id, title, description, created_at, updated_at,
+    `SELECT id, title, description, icon, color, created_at, updated_at,
             banner_file_name, banner_file_size_bytes, banner_mime_type
      FROM guide_levels
      WHERE id = $1`,
@@ -266,25 +266,29 @@ const removeFileIfExists = async (filePath) => {
 
 // Level CRUD
 const createLevel = async (req, res) => {
-  if (!req.file) {
-    return sendError(res, 'banner file is required');
-  }
-
   try {
     const title = hasText(req.body?.title) ? req.body.title.trim() : 'Untitled Level';
+    const icon = hasText(req.body?.icon) ? req.body.icon.trim() : null;
+    const color = hasText(req.body?.color) ? req.body.color.trim() : null;
+    const file = req.file || null;
+
     const result = await pool.query(
       `INSERT INTO guide_levels (
-         title, description, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
+         title, description, icon, color,
+         banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
        )
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, title, description, created_at, updated_at,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, title, description, icon, color, created_at, updated_at,
                  banner_file_name, banner_file_size_bytes, banner_mime_type`,
-      [title, '', req.file.path, req.file.originalname, req.file.size, req.file.mimetype]
+      [title, '', icon, color,
+        file?.path || null, file?.originalname || null, file?.size || null, file?.mimetype || null]
     );
 
     return sendSuccess(res, {
       ...result.rows[0],
-      protected_banner_url: `/api/admin/guides/levels/${result.rows[0].id}/banner`,
+      protected_banner_url: result.rows[0].banner_file_name
+        ? `/api/admin/guides/levels/${result.rows[0].id}/banner`
+        : null,
     }, 201);
   } catch (error) {
     if (req.file?.path) await removeFileIfExists(req.file.path);
@@ -295,7 +299,7 @@ const createLevel = async (req, res) => {
 const getLevels = async (_req, res) => {
   try {
     const result = await pool.query(
-      `SELECT l.id, l.title, l.created_at, l.updated_at,
+      `SELECT l.id, l.title, l.icon, l.color, l.created_at, l.updated_at,
               l.banner_file_name, l.banner_file_size_bytes, l.banner_mime_type,
               COUNT(gl.id)::int AS lesson_count,
               CASE WHEN mp.id IS NOT NULL THEN true ELSE false END AS has_main_pdf
@@ -346,6 +350,8 @@ const getLevelById = async (req, res) => {
       level: {
         id: level.id,
         title: level.title,
+        icon: level.icon,
+        color: level.color,
         created_at: level.created_at,
         updated_at: level.updated_at,
         banner_file_name: level.banner_file_name,
@@ -374,7 +380,7 @@ const updateLevel = async (req, res) => {
 
   try {
     const existing = await pool.query(
-      `SELECT id, title, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
+      `SELECT id, title, icon, color, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
        FROM guide_levels
        WHERE id = $1`,
       [levelId]
@@ -384,6 +390,8 @@ const updateLevel = async (req, res) => {
 
     const current = existing.rows[0];
     const nextTitle = hasText(req.body?.title) ? req.body.title.trim() : current.title;
+    const nextIcon = hasText(req.body?.icon) ? req.body.icon.trim() : current.icon;
+    const nextColor = hasText(req.body?.color) ? req.body.color.trim() : current.color;
     const nextFile = req.file || null;
     const nextBannerPath = nextFile?.path || current.banner_path || null;
     const nextBannerName = nextFile?.originalname || current.banner_file_name || null;
@@ -393,15 +401,17 @@ const updateLevel = async (req, res) => {
     const result = await pool.query(
       `UPDATE guide_levels
        SET title = $1,
-           banner_path = $2,
-           banner_file_name = $3,
-           banner_file_size_bytes = $4,
-           banner_mime_type = $5,
+           icon = $2,
+           color = $3,
+           banner_path = $4,
+           banner_file_name = $5,
+           banner_file_size_bytes = $6,
+           banner_mime_type = $7,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $6
-       RETURNING id, title, created_at, updated_at,
+       WHERE id = $8
+       RETURNING id, title, icon, color, created_at, updated_at,
                  banner_file_name, banner_file_size_bytes, banner_mime_type`,
-      [nextTitle, nextBannerPath, nextBannerName, nextBannerSize, nextBannerMime, levelId]
+      [nextTitle, nextIcon, nextColor, nextBannerPath, nextBannerName, nextBannerSize, nextBannerMime, levelId]
     );
 
     if (nextFile?.path && current.banner_path && current.banner_path !== nextFile.path) {
@@ -950,6 +960,59 @@ const streamLessonPdfFile = async (req, res) => {
     return res.sendFile(path.resolve(item.file_path));
   } catch (error) {
     return sendError(res, 'Failed to open lesson PDF', 500, { detail: error.message });
+  }
+};
+
+const updateLessonPdfItem = async (req, res) => {
+  const lessonId = parseId(req.params.lessonId);
+  const pdfId = parseId(req.params.pdfId);
+  const newFile = req.file || null;
+
+  if (!lessonId || !pdfId) {
+    if (newFile?.path) await removeFileIfExists(newFile.path);
+    return sendError(res, 'Invalid id');
+  }
+
+  try {
+    const existing = await pool.query(
+      `SELECT id, title, file_path, file_name, file_size_bytes, mime_type
+       FROM guide_lesson_pdfs
+       WHERE id = $1 AND lesson_id = $2`,
+      [pdfId, lessonId]
+    );
+
+    if (existing.rows.length === 0) {
+      if (newFile?.path) await removeFileIfExists(newFile.path);
+      return sendError(res, 'Lesson PDF not found', 404);
+    }
+
+    const current = existing.rows[0];
+    const nextTitle = hasText(req.body?.title) ? req.body.title.trim() : current.title;
+    const nextPath = newFile?.path || current.file_path;
+    const nextName = newFile?.originalname || current.file_name;
+    const nextSize = newFile?.size || current.file_size_bytes;
+    const nextMime = newFile?.mimetype || current.mime_type;
+
+    const result = await pool.query(
+      `UPDATE guide_lesson_pdfs
+       SET title = $1, file_path = $2, file_name = $3, file_size_bytes = $4, mime_type = $5
+       WHERE id = $6 AND lesson_id = $7
+       RETURNING id, lesson_id, title, description, file_name, file_size_bytes, mime_type, created_by, created_at`,
+      [nextTitle, nextPath, nextName, nextSize, nextMime, pdfId, lessonId]
+    );
+
+    // Yangi fayl yuklangan bo'lsa eskisini o'chiramiz
+    if (newFile?.path && current.file_path && current.file_path !== newFile.path) {
+      await removeFileIfExists(current.file_path);
+    }
+
+    return sendSuccess(res, {
+      ...result.rows[0],
+      protected_file_url: `/api/admin/guides/lessons/${lessonId}/pdfs/${result.rows[0].id}/file`,
+    });
+  } catch (error) {
+    if (req.file?.path) await removeFileIfExists(req.file.path);
+    return sendError(res, 'Failed to update lesson PDF', 500, { detail: error.message });
   }
 };
 
@@ -1753,6 +1816,7 @@ module.exports = {
   updateLessonNote,
   deleteLessonNote,
   uploadLessonPdfItem,
+  updateLessonPdfItem,
   streamLessonPdfFile,
   deleteLessonPdfItem,
   listLessonPdfs,
