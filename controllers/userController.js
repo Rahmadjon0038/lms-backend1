@@ -391,70 +391,6 @@ const changePassword = async (req, res) => {
     }
 };
 
-const resetAllStudentPasswordsToDefault = async (req, res) => {
-    const defaultPassword = '123456';
-
-    try {
-        const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
-        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(defaultPassword);
-
-        const result = await pool.query(
-            `UPDATE users
-             SET password = $1,
-                 ${hasPasswordPlainColumn ? 'password_plain = $2,' : ''}
-                 password_reset_key_plain = NULL,
-                 password_reset_key_hash = NULL,
-                 password_reset_key_rotated_at = NULL
-             WHERE role = 'student'
-             RETURNING id`,
-            hasPasswordPlainColumn ? [hashedPassword, passwordPlain] : [hashedPassword]
-        );
-
-        return res.json({
-            success: true,
-            message: `Barcha student parollari ${defaultPassword} ga o'zgartirildi`,
-            updated_count: result.rowCount
-        });
-    } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: "Talabalar parolini ommaviy yangilashda xatolik",
-            error: err.message
-        });
-    }
-};
-
-// Barcha o'qituvchilar parolini default (777777) ga o'zgartirish
-const resetAllTeacherPasswordsToDefault = async (req, res) => {
-    const defaultPassword = '777777';
-
-    try {
-        const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
-        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(defaultPassword);
-
-        const result = await pool.query(
-            `UPDATE users
-             SET password = $1
-                 ${hasPasswordPlainColumn ? ', password_plain = $2' : ''}
-             WHERE role = 'teacher'
-             RETURNING id`,
-            hasPasswordPlainColumn ? [hashedPassword, passwordPlain] : [hashedPassword]
-        );
-
-        return res.json({
-            success: true,
-            message: `Barcha o'qituvchilar paroli ${defaultPassword} ga o'zgartirildi`,
-            updated_count: result.rowCount
-        });
-    } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: "O'qituvchilar parolini ommaviy yangilashda xatolik",
-            error: err.message
-        });
-    }
-};
-
 // 1.1. Teacher yaratish (Faqat adminlar uchun) - Ko'p fanlar bilan (primary fan yo'q)
 const registerTeacher = async (req, res) => {
     const { 
@@ -2064,8 +2000,6 @@ module.exports = {
     getAdmins,
     getEnglishTeachers,
     checkIsEnglishTeacher,
-    resetAllStudentPasswordsToDefault,
-    resetAllTeacherPasswordsToDefault,
     setTeacherOnLeave,
     terminateTeacher,
     reactivateTeacher,
