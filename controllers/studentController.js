@@ -428,13 +428,14 @@ exports.getAllStudents = async (req, res) => {
     const total = parseInt(countResult.rows[0]?.total, 10) || 0;
     const totalPages = Math.ceil(total / limitNumber);
     
-    // Har bir student uchun barcha guruh ma'lumotlarini alohida olish
-    const enrichedStudents = [];
-    
-    for (const student of studentsResult.rows) {
-      // Studentning barcha guruhlari va statuslarini olish
-      const groupsData = await pool.query(`
-        SELECT 
+    // Sahifadagi barcha studentlarning guruhlarini BITTA query bilan olamiz (N+1 muammosini oldini olish uchun)
+    const studentIds = studentsResult.rows.map(student => student.id);
+    const groupsByStudent = new Map();
+
+    if (studentIds.length > 0) {
+      const allGroupsData = await pool.query(`
+        SELECT
+          sg.student_id,
           g.id as group_id,
           g.name as group_name,
           g.subject_id,
@@ -445,15 +446,15 @@ exports.getAllStudents = async (req, res) => {
           sg.status as group_status,
           sg.joined_at as group_joined_at,
           sg.left_at as group_left_at,
-          CASE 
+          CASE
             WHEN sg.status = 'active' THEN 'Faol'
-            WHEN sg.status = 'stopped' THEN 'Nofaol' 
+            WHEN sg.status = 'stopped' THEN 'Nofaol'
             WHEN sg.status = 'finished' THEN 'Bitirgan'
             ELSE 'Belgilanmagan'
           END as group_status_description,
-          CASE 
+          CASE
             WHEN sg.status = 'finished' THEN sg.left_at
-            WHEN sg.status = 'stopped' THEN sg.left_at  
+            WHEN sg.status = 'stopped' THEN sg.left_at
             ELSE NULL
           END as status_changed_date,
           TO_CHAR(sg.left_at, 'DD.MM.YYYY') as formatted_left_date,
@@ -467,26 +468,38 @@ exports.getAllStudents = async (req, res) => {
         LEFT JOIN users t ON g.teacher_id = t.id
         LEFT JOIN subjects s ON g.subject_id = s.id
         LEFT JOIN rooms r ON g.room_id = r.id
-        WHERE sg.student_id = $1
+        WHERE sg.student_id = ANY($1::int[])
         ORDER BY sg.joined_at DESC
-      `, [student.id]);
+      `, [studentIds]);
 
-      const activeOrLatestGroup = groupsData.rows.find(group => group.group_status === 'active') || groupsData.rows[0] || null;
+      // Natijalarni student_id bo'yicha guruhlaymiz (joined_at DESC tartibi saqlanadi)
+      for (const row of allGroupsData.rows) {
+        if (!groupsByStudent.has(row.student_id)) {
+          groupsByStudent.set(row.student_id, []);
+        }
+        groupsByStudent.get(row.student_id).push(row);
+      }
+    }
+
+    const enrichedStudents = studentsResult.rows.map(student => {
+      const studentGroups = groupsByStudent.get(student.id) || [];
+
+      const activeOrLatestGroup = studentGroups.find(group => group.group_status === 'active') || studentGroups[0] || null;
       const effectiveSubjectId = activeOrLatestGroup?.subject_id || student.registered_subject_id || null;
       const effectiveSubjectName = activeOrLatestGroup?.subject_name || student.registered_subject_name || null;
-      
-      enrichedStudents.push({
+
+      return {
         ...student,
         subject_id: effectiveSubjectId,
         subject_name: effectiveSubjectName,
-        groups: groupsData.rows.map(group => ({
+        groups: studentGroups.map(group => ({
           ...group,
           // Faqat guruh active va darslar boshlangan bo'lsagina "started_at" ni ko'rsatamiz
-          started_at: (group.group_admin_status === 'active' && group.group_class_status === 'started' && group.class_start_date) 
+          started_at: (group.group_admin_status === 'active' && group.group_class_status === 'started' && group.class_start_date)
             ? group.class_start_date : null
         }))
-      });
-    }
+      };
+    });
     
     // Statistika (filter bo'yicha umumiy)
     const statsJoins = new Set(joinConditions);
