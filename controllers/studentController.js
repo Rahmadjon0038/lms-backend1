@@ -13,6 +13,17 @@ const hashRecoveryKey = (username, recoveryKey) => {
         .digest('hex');
 };
 
+const hasUsersColumn = async (columnName) => {
+    const result = await pool.query(
+        `SELECT 1
+         FROM information_schema.columns
+         WHERE table_name = 'users' AND column_name = $1
+         LIMIT 1`,
+        [columnName]
+    );
+    return result.rows.length > 0;
+};
+
 const ensureStudentRecoveryKeys = async () => {
     const usersResult = await pool.query(
         `SELECT id, username
@@ -272,7 +283,7 @@ exports.getAllStudents = async (req, res) => {
   const { teacher_id, group_id, subject_id, status, group_status, unassigned, page, limit, search } = req.query;
   
   try {
-    await ensureStudentRecoveryKeys();
+    const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
 
     const unassignedOnly = unassigned === 'true';
 
@@ -293,9 +304,9 @@ exports.getAllStudents = async (req, res) => {
         u.course_status,
         u.course_start_date,
         u.course_end_date,
+        ${hasPasswordPlainColumn ? 'u.password_plain as password,' : 'NULL::text as password,'}
         u.subject_id as registered_subject_id,
         sp.name as registered_subject_name,
-        u.password_reset_key_plain as recovery_key,
         TO_CHAR(u.course_end_date, 'DD.MM.YYYY') as formatted_course_end_date,
         u.role
       FROM users u

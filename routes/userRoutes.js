@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, rotateRecoveryKeyByAdmin, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, resetPasswordWithRecoveryKey, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, rotateRecoveryKeyByAdmin, resetAllStudentPasswordsToDefault, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -434,6 +434,22 @@ router.patch('/recovery-key/:userId/rotate', protect, roleCheck(['admin', 'super
 
 /**
  * @swagger
+ * /api/users/admin/reset-all-student-passwords:
+ *   post:
+ *     summary: Barcha student parollarini 123456 ga qaytaradi
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Student parollari yangilandi
+ *       403:
+ *         description: Faqat admin va super_admin
+ */
+router.post('/admin/reset-all-student-passwords', protect, roleCheck(['admin', 'super_admin']), resetAllStudentPasswordsToDefault);
+
+/**
+ * @swagger
  * /api/users/change-password:
  *   post:
  *     summary: Login qilingan user parolini almashtirish
@@ -685,6 +701,9 @@ router.patch('/profile', protect, updateProfile);
  *                 type: integer
  *               username:
  *                 type: string
+ *               password:
+ *                 type: string
+ *                 description: "Agar berilsa, studentning login paroli yangilanadi va password_plain ham saqlanadi"
  *     responses:
  *       200:
  *         description: Success

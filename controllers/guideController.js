@@ -46,6 +46,21 @@ const createImageUpload = (destination) => multer({
   },
 });
 
+const createBannerUpload = (destination) => multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, destination),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: MAX_PDF_SIZE },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('Only PDF or image files are allowed'));
+  },
+});
+
 const createPdfWithOptionalBannerUpload = (pdfDestination) => multer({
   storage: multer.diskStorage({
     destination: (_req, file, cb) => {
@@ -72,7 +87,7 @@ const createPdfWithOptionalBannerUpload = (pdfDestination) => multer({
 const uploadMainPdf = createPdfUpload(levelPdfDir);
 const uploadLessonPdf = createPdfUpload(lessonPdfDir);
 const uploadVocabularyImage = createImageUpload(vocabularyImageDir);
-const uploadLevelBanner = createImageUpload(levelBannerDir);
+const uploadLevelBanner = createBannerUpload(levelBannerDir);
 
 const ALLOWED_NOTE_COLORS = new Set(['blue', 'green', 'orange', 'red', 'purple', 'pink']);
 const DEFAULT_SPEECH_RATE = 1.0;
@@ -252,10 +267,11 @@ const removeFileIfExists = async (filePath) => {
 // Level CRUD
 const createLevel = async (req, res) => {
   if (!req.file) {
-    return sendError(res, 'banner image is required');
+    return sendError(res, 'banner file is required');
   }
 
   try {
+    const title = hasText(req.body?.title) ? req.body.title.trim() : 'Untitled Level';
     const result = await pool.query(
       `INSERT INTO guide_levels (
          title, description, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
@@ -263,7 +279,7 @@ const createLevel = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, title, description, created_at, updated_at,
                  banner_file_name, banner_file_size_bytes, banner_mime_type`,
-      ['Untitled Level', '', req.file.path, req.file.originalname, req.file.size, req.file.mimetype]
+      [title, '', req.file.path, req.file.originalname, req.file.size, req.file.mimetype]
     );
 
     return sendSuccess(res, {
@@ -279,7 +295,7 @@ const createLevel = async (req, res) => {
 const getLevels = async (_req, res) => {
   try {
     const result = await pool.query(
-      `SELECT l.id, l.created_at, l.updated_at,
+      `SELECT l.id, l.title, l.created_at, l.updated_at,
               l.banner_file_name, l.banner_file_size_bytes, l.banner_mime_type,
               COUNT(gl.id)::int AS lesson_count,
               CASE WHEN mp.id IS NOT NULL THEN true ELSE false END AS has_main_pdf
@@ -329,6 +345,7 @@ const getLevelById = async (req, res) => {
     return sendSuccess(res, {
       level: {
         id: level.id,
+        title: level.title,
         created_at: level.created_at,
         updated_at: level.updated_at,
         banner_file_name: level.banner_file_name,
@@ -354,7 +371,53 @@ const getLevelById = async (req, res) => {
 const updateLevel = async (req, res) => {
   const levelId = parseId(req.params.levelId);
   if (!levelId) return sendError(res, 'Invalid levelId');
-  return sendError(res, 'Level title/description update disabled. Level only has banner.', 400);
+
+  try {
+    const existing = await pool.query(
+      `SELECT id, title, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
+       FROM guide_levels
+       WHERE id = $1`,
+      [levelId]
+    );
+
+    if (existing.rows.length === 0) return sendError(res, 'Level not found', 404);
+
+    const current = existing.rows[0];
+    const nextTitle = hasText(req.body?.title) ? req.body.title.trim() : current.title;
+    const nextFile = req.file || null;
+    const nextBannerPath = nextFile?.path || current.banner_path || null;
+    const nextBannerName = nextFile?.originalname || current.banner_file_name || null;
+    const nextBannerSize = nextFile?.size || current.banner_file_size_bytes || null;
+    const nextBannerMime = nextFile?.mimetype || current.banner_mime_type || null;
+
+    const result = await pool.query(
+      `UPDATE guide_levels
+       SET title = $1,
+           banner_path = $2,
+           banner_file_name = $3,
+           banner_file_size_bytes = $4,
+           banner_mime_type = $5,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6
+       RETURNING id, title, created_at, updated_at,
+                 banner_file_name, banner_file_size_bytes, banner_mime_type`,
+      [nextTitle, nextBannerPath, nextBannerName, nextBannerSize, nextBannerMime, levelId]
+    );
+
+    if (nextFile?.path && current.banner_path && current.banner_path !== nextFile.path) {
+      await removeFileIfExists(current.banner_path);
+    }
+
+    return sendSuccess(res, {
+      ...result.rows[0],
+      protected_banner_url: result.rows[0].banner_file_name
+        ? `/api/admin/guides/levels/${levelId}/banner`
+        : null,
+    });
+  } catch (error) {
+    if (req.file?.path) await removeFileIfExists(req.file.path);
+    return sendError(res, 'Failed to update level', 500, { detail: error.message });
+  }
 };
 
 const streamLevelBanner = async (req, res) => {
