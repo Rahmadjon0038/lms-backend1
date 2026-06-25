@@ -114,27 +114,47 @@ exports.updateSubject = async (req, res) => {
 // 4. Fan o'chirish (Admin)
 exports.deleteSubject = async (req, res) => {
     const { id } = req.params;
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+
         // Avval bu fan bilan bog'liq guruhlar borligini tekshirish
-        const groupCheck = await pool.query(
+        const groupCheck = await client.query(
             'SELECT COUNT(*) FROM groups WHERE subject_id = $1',
             [id]
         );
         
         if (parseInt(groupCheck.rows[0].count) > 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ 
                 message: "Bu fan bilan bog'liq guruhlar mavjud. Avval guruhlarni o'chiring yoki boshqa fanga o'tkazing" 
             });
         }
 
-        const result = await pool.query(
+        // Eski sxemada users.subject_id FK fan o'chirishni ushlab qolishi mumkin.
+        // Shu sabab bog'lanishni oldin uzib qo'yamiz.
+        await client.query(
+            'UPDATE users SET subject_id = NULL WHERE subject_id = $1',
+            [id]
+        );
+
+        // Teacher-subject bog'lanishlarini ham tozalaymiz.
+        await client.query(
+            'DELETE FROM teacher_subjects WHERE subject_id = $1',
+            [id]
+        );
+
+        const result = await client.query(
             'DELETE FROM subjects WHERE id = $1 RETURNING *',
             [id]
         );
         
         if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: "Fan topilmadi" });
         }
+
+        await client.query('COMMIT');
         
         res.json({ 
             success: true, 
@@ -142,7 +162,16 @@ exports.deleteSubject = async (req, res) => {
             deletedSubject: result.rows[0]
         });
     } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23503') {
+            return res.status(400).json({
+                message: "Fan o'chirilmayapti: boshqa jadvalda bu fanga bog'langan ma'lumot bor.",
+                detail: err.detail || err.message
+            });
+        }
         res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
     }
 };
 
@@ -179,4 +208,3 @@ exports.getSubjectStats = async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 };
-
