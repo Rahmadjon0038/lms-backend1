@@ -47,8 +47,10 @@ const createUserTable = async () => {
     
     // Eski jadvallarga yangi ustunlarni qo'shish (agar mavjud bo'lmasa)
     try {
-      await pool.query(`
+        await pool.query(`
         DO $$ 
+        DECLARE
+          fk_constraint record;
         BEGIN 
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject') THEN
             ALTER TABLE users ADD COLUMN subject VARCHAR(255);
@@ -56,6 +58,26 @@ const createUserTable = async () => {
           IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='subjects')
              AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject_id') THEN
             ALTER TABLE users ADD COLUMN subject_id INTEGER REFERENCES subjects(id);
+          END IF;
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='subject_id') THEN
+            -- Eski FK subject o'chirilganda to'siq bo'lmasligi uchun qayta yaratamiz
+            FOR fk_constraint IN
+              SELECT conname
+              FROM pg_constraint
+              WHERE conrelid = 'users'::regclass
+                AND contype = 'f'
+                AND confrelid = 'subjects'::regclass
+            LOOP
+              EXECUTE format('ALTER TABLE users DROP CONSTRAINT IF EXISTS %I', fk_constraint.conname);
+            END LOOP;
+
+            BEGIN
+              ALTER TABLE users
+              ADD CONSTRAINT users_subject_id_fkey
+              FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE SET NULL;
+            EXCEPTION WHEN duplicate_object THEN
+              NULL;
+            END;
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='start_date') THEN
             ALTER TABLE users ADD COLUMN start_date DATE;
