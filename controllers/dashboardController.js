@@ -661,24 +661,45 @@ const getSuperAdminStats = async (req, res) => {
              AND COALESCE(ms.monthly_status, 'active') = 'active'
            GROUP BY g.subject_id
          ),
-         teacher_subject_stats AS (
+         teacher_student_counts AS (
            SELECT
              g.subject_id,
              g.teacher_id,
              CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
-             COUNT(DISTINCT sg.student_id)::int AS total_students_count,
-             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+             COUNT(DISTINCT sg.student_id)::int AS total_students_count
            FROM groups g
            LEFT JOIN users u ON u.id = g.teacher_id
            LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
-           LEFT JOIN monthly_snapshots ms
-             ON ms.group_id = g.id
-            AND ms.month = $1
-            AND COALESCE(ms.monthly_status, 'active') = 'active'
            WHERE g.status = 'active'
              AND g.class_status = 'started'
              AND g.teacher_id IS NOT NULL
            GROUP BY g.subject_id, g.teacher_id, u.surname, u.name
+         ),
+         teacher_revenue AS (
+           SELECT
+             g.subject_id,
+             g.teacher_id,
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+           FROM monthly_snapshots ms
+           JOIN groups g ON g.id = ms.group_id
+           WHERE ms.month = $1
+             AND COALESCE(ms.monthly_status, 'active') = 'active'
+             AND g.status = 'active'
+             AND g.class_status = 'started'
+             AND g.teacher_id IS NOT NULL
+           GROUP BY g.subject_id, g.teacher_id
+         ),
+         teacher_subject_stats AS (
+           SELECT
+             tsc.subject_id,
+             tsc.teacher_id,
+             tsc.teacher_name,
+             tsc.total_students_count,
+             COALESCE(tr.total_revenue, 0)::numeric AS total_revenue
+           FROM teacher_student_counts tsc
+           LEFT JOIN teacher_revenue tr
+             ON tr.subject_id = tsc.subject_id
+            AND tr.teacher_id = tsc.teacher_id
          ),
          teachers_by_subject AS (
            SELECT
