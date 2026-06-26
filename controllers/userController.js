@@ -674,6 +674,42 @@ const updateAdminStatus = async (req, res) => {
     }
 };
 
+// 5.C. Admin o'chirish (Super admin)
+const deleteAdmin = async (req, res) => {
+    const adminId = Number(req.params.adminId);
+
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+        return res.status(400).json({ success: false, message: "adminId noto'g'ri" });
+    }
+
+    if (Number(req.user?.id) === adminId) {
+        return res.status(400).json({ success: false, message: "O'zingizni o'chira olmaysiz" });
+    }
+
+    try {
+        const admin = await pool.query(
+            `SELECT id, name, surname, username, role, status
+             FROM users
+             WHERE id = $1 AND role = 'admin'`,
+            [adminId]
+        );
+
+        if (admin.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Admin topilmadi' });
+        }
+
+        await pool.query('DELETE FROM users WHERE id = $1', [adminId]);
+
+        return res.json({
+            success: true,
+            message: 'Admin muvaffaqiyatli o\'chirildi',
+            admin: admin.rows[0]
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: 'Adminni o\'chirishda xatolik', error: err.message });
+    }
+};
+
 // 2. Student Login (Access va Refresh token qaytaradi)
 const loginStudent = async (req, res) => {
     const usernameRaw = typeof req.body?.username === 'string' ? req.body.username : '';
@@ -2007,5 +2043,6 @@ module.exports = {
     patchTeacher,
     updateTeacherInfo,
     changeStudentStatus,
-    updateAdminStatus
+    updateAdminStatus,
+    deleteAdmin
 };
