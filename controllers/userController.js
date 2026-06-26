@@ -544,7 +544,7 @@ const getAdmins = async (req, res) => {
         }
         monthName = incomingMonth;
         monthParamIndex = idx;
-        filters.push(`TO_CHAR(u.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $${idx++}`);
+        filters.push(`(u.created_at AT TIME ZONE 'Asia/Tashkent') < (TO_DATE($${idx++} || '-01', 'YYYY-MM-DD') + INTERVAL '1 month')`);
         params.push(monthName);
     }
 
