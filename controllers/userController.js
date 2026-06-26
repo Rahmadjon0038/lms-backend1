@@ -536,12 +536,16 @@ const getAdmins = async (req, res) => {
     }
 
     let monthName = null;
+    let monthParamIndex = null;
     if (month_name !== undefined) {
         const incomingMonth = String(month_name).trim();
         if (!isValidMonthName(incomingMonth)) {
             return res.status(400).json({ success: false, message: "month_name 'YYYY-MM' formatida bo'lishi kerak" });
         }
         monthName = incomingMonth;
+        monthParamIndex = idx;
+        filters.push(`TO_CHAR(u.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $${idx++}`);
+        params.push(monthName);
     }
 
     const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
@@ -583,11 +587,10 @@ const getAdmins = async (req, res) => {
                        asp.month_name as salary_month
                 FROM users u
                 LEFT JOIN admin_salary_payouts asp
-                  ON asp.admin_id = u.id AND asp.month_name = $${idx}
+                  ON asp.admin_id = u.id AND asp.month_name = $${monthParamIndex}
                 ${whereClause}
                 ORDER BY u.created_at DESC
             `;
-            params.push(monthName);
         }
 
         const admins = await pool.query(queryText, params);
