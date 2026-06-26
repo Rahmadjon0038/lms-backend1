@@ -433,13 +433,13 @@ const registerTeacher = async (req, res) => {
 
         // Teacher yaratish (eski subject ustunlarini null qilamiz)
         const newTeacher = await pool.query(
-            `INSERT INTO users (name, surname, username, password, phone, phone2, role, start_date, 
+            `INSERT INTO users (name, surname, username, password, password_plain, phone, phone2, role, start_date, 
                                certificate, age, has_experience, experience_years, experience_place, 
                                available_times, work_days_hours, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, 'teacher', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'teacher', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
              RETURNING id, name, surname, username, role, start_date, certificate, age, 
-                       has_experience, experience_years, experience_place, available_times, work_days_hours`,
-            [name, surname, username, hashedPassword, phone, phone2, startDate || new Date(),
+                       has_experience, experience_years, experience_place, available_times, work_days_hours, password_plain`,
+            [name, surname, username, hashedPassword, password, phone, phone2, startDate || new Date(),
              certificate, age, has_experience || false, experience_years, experience_place, 
              available_times, work_days_hours, recoveryKey, recoveryKeyHash]
         );
