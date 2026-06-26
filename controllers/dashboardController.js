@@ -660,15 +660,52 @@ const getSuperAdminStats = async (req, res) => {
            WHERE ms.month = $1
              AND COALESCE(ms.monthly_status, 'active') = 'active'
            GROUP BY g.subject_id
+         ),
+         teacher_subject_stats AS (
+           SELECT
+             g.subject_id,
+             g.teacher_id,
+             CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
+             COUNT(DISTINCT sg.student_id)::int AS total_students_count,
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+           FROM groups g
+           LEFT JOIN users u ON u.id = g.teacher_id
+           LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
+           LEFT JOIN monthly_snapshots ms
+             ON ms.group_id = g.id
+            AND ms.month = $1
+            AND COALESCE(ms.monthly_status, 'active') = 'active'
+           WHERE g.status = 'active'
+             AND g.class_status = 'started'
+             AND g.teacher_id IS NOT NULL
+           GROUP BY g.subject_id, g.teacher_id, u.surname, u.name
+         ),
+         teachers_by_subject AS (
+           SELECT
+             subject_id,
+             json_agg(
+               json_build_object(
+                 'teacher_id', teacher_id,
+                 'teacher_name', teacher_name,
+                 'total_students_count', total_students_count,
+                 'total_revenue', total_revenue
+               )
+               ORDER BY teacher_name
+             ) AS teachers
+           FROM teacher_subject_stats
+           GROUP BY subject_id
          )
          SELECT
            s.id AS subject_id,
            s.name AS subject_name,
            COALESCE(sb.total_students_count, 0)::int AS total_students_count,
-           COALESCE(rb.total_revenue, 0)::float AS total_revenue
+           COALESCE(rb.total_revenue, 0)::float AS total_revenue,
+           COALESCE(json_array_length(tb.teachers), 0)::int AS teachers_count,
+           COALESCE(tb.teachers, '[]'::json) AS teachers
          FROM subjects s
          LEFT JOIN students_by_subject sb ON sb.subject_id = s.id
          LEFT JOIN revenue_by_subject rb ON rb.subject_id = s.id
+         LEFT JOIN teachers_by_subject tb ON tb.subject_id = s.id
          ORDER BY total_revenue DESC, total_students_count DESC, s.name ASC`,
         [currentMonth]
       ),
@@ -708,6 +745,16 @@ const getSuperAdminStats = async (req, res) => {
           subject_name: row.subject_name,
           total_students_count: toNumber(row.total_students_count),
           total_revenue: toNumber(row.total_revenue),
+          teachers_count: toNumber(row.teachers_count),
+          teachers: Array.isArray(row.teachers)
+            ? row.teachers
+            : (() => {
+                try {
+                  return row.teachers ? JSON.parse(row.teachers) : [];
+                } catch {
+                  return [];
+                }
+              })(),
         })),
         overall: {
           total_students_count: toNumber(overall.total_students_count),

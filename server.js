@@ -98,6 +98,7 @@ const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
 const { seedDefaultAdmin } = require('./scripts/seedDefaultAdmin');
+const { seedDefaultSuperAdmin } = require('./scripts/seedDefaultSuperAdmin');
 
 // Middleware-lar ostidan qo'shing
 app.use('/api/users', userRoute);
@@ -224,8 +225,9 @@ app.listen(PORT, '0.0.0.0', async () => {
 
         console.log("✅ Dastlabki DB sozlash bosqichlari muvaffaqiyatli yakunlandi.");
 
-        // Default admin yaratish va login/parolni terminalda ko'rsatish
+        // Default admin va super admin yaratish, login/parolni terminalda ko'rsatish
         await seedDefaultAdmin();
+        await seedDefaultSuperAdmin();
     } catch (error) {
         console.error("❌ Dastlabki sozlashda xatolik:", error.message);
         process.exit(1);
