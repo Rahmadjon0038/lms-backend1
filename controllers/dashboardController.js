@@ -644,11 +644,10 @@ const getSuperAdminStats = async (req, res) => {
         `WITH students_by_subject AS (
            SELECT
              g.subject_id,
-             COUNT(DISTINCT sg.student_id)::int AS total_students_count
-           FROM groups g
-           LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
-           WHERE g.status = 'active'
-             AND g.class_status = 'started'
+             COUNT(DISTINCT ms.student_id)::int AS total_students_count
+           FROM monthly_snapshots ms
+           JOIN groups g ON g.id = ms.group_id
+           WHERE ms.month = $1
            GROUP BY g.subject_id
          ),
          revenue_by_subject AS (
@@ -666,12 +665,11 @@ const getSuperAdminStats = async (req, res) => {
              g.subject_id,
              g.teacher_id,
              CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
-             COUNT(DISTINCT sg.student_id)::int AS total_students_count
-           FROM groups g
+             COUNT(DISTINCT ms.student_id)::int AS total_students_count
+           FROM monthly_snapshots ms
+           JOIN groups g ON g.id = ms.group_id
            LEFT JOIN users u ON u.id = g.teacher_id
-           LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
-           WHERE g.status = 'active'
-             AND g.class_status = 'started'
+           WHERE ms.month = $1
              AND g.teacher_id IS NOT NULL
            GROUP BY g.subject_id, g.teacher_id, u.surname, u.name
          ),
