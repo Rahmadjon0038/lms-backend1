@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus, deleteAdmin } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -305,6 +305,8 @@ router.post('/register-admin', protect, roleCheck(['super_admin']), registerAdmi
  *         description: Adminlar ro'yxati
  */
 router.get('/admins', protect, roleCheck(['super_admin']), getAdmins);
+
+router.delete('/admins/:adminId', protect, roleCheck(['super_admin']), deleteAdmin);
 
 /**
  * @swagger
