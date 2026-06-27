@@ -278,6 +278,43 @@ exports.deleteStudent = async (req, res) => {
     }
 };
 
+// Guruhga umuman biriktirilmagan studentlarni to'liq o'chirish - ADMIN
+exports.deleteUnassignedStudents = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `WITH deleted_students AS (
+         DELETE FROM users u
+         WHERE u.role = 'student'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM student_groups sg
+             WHERE sg.student_id = u.id
+           )
+         RETURNING u.id
+       )
+       SELECT COUNT(*)::int AS deleted_count
+       FROM deleted_students`
+    );
+
+    const deletedCount = Number(result.rows[0]?.deleted_count || 0);
+
+    return res.json({
+      success: true,
+      message: deletedCount > 0
+        ? `${deletedCount} ta guruhsiz talaba o'chirildi`
+        : "Guruhsiz talabalar topilmadi",
+      deleted_count: deletedCount
+    });
+  } catch (err) {
+    console.error('Guruhsiz talabalarni o\'chirishda xatolik:', err);
+    return res.status(500).json({
+      success: false,
+      message: "Guruhsiz talabalarni o'chirishda xatolik",
+      error: err.message
+    });
+  }
+};
+
 // 3. Studentlarni oy, teacher, group, subject bo'yicha filter qilish + har birining barcha guruhlari
 exports.getAllStudents = async (req, res) => {
   const { teacher_id, group_id, subject_id, status, group_status, unassigned, page, limit, search } = req.query;
