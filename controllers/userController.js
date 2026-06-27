@@ -31,6 +31,8 @@ const generatePlainRecoveryKey = () => {
     return `RK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 };
 
+const generateSixDigitPassword = () => String(Math.floor(100000 + Math.random() * 900000));
+
 const hashRecoveryKey = (username, recoveryKey) => {
     const pepper = process.env.PASSWORD_RESET_PEPPER || process.env.JWT_SECRET || 'default-pepper';
     return crypto
@@ -163,7 +165,8 @@ const registerStudent = async (req, res) => {
         }
         const selectedSubject = subjectResult.rows[0];
 
-        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(password);
+        const finalPassword = String(password ?? '').trim() || generateSixDigitPassword();
+        const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(finalPassword);
 
         const recoveryKey = generatePlainRecoveryKey();
         const recoveryKeyHash = hashRecoveryKey(username, recoveryKey);
@@ -198,7 +201,8 @@ const registerStudent = async (req, res) => {
             message: "Muvaffaqiyatli ro'yxatdan o'tdingiz",
             user: newUser.rows[0],
             selected_subject: selectedSubject,
-            recovery_key: recoveryKey
+            recovery_key: recoveryKey,
+            generated_password: passwordPlain
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -234,7 +238,7 @@ const registerStudentsBulk = async (req, res) => {
             const name = student.name;
             const surname = student.surname;
             const username = normalizeUsername(student.username);
-            const password = student.password;
+            const password = String(student.password ?? '').trim() || generateSixDigitPassword();
             const phone = student.phone;
             const phone2 = student.phone2;
             const father_name = student.father_name;
@@ -326,7 +330,8 @@ const registerStudentsBulk = async (req, res) => {
                 created.push({
                     index,
                     user: inserted,
-                    recovery_key: recoveryKey
+                    recovery_key: recoveryKey,
+                    generated_password: passwordPlain
                 });
             } catch (err) {
                 failed.push({
