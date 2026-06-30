@@ -71,7 +71,7 @@ exports.getAllSubjects = async (req, res) => {
         const result = await pool.query(`
             SELECT s.*, 
                    COUNT(DISTINCT g.id) as groups_count,
-                   COUNT(DISTINCT sg.student_id) as students_count,
+                   COUNT(sg.student_id) as students_count,
                    COUNT(DISTINCT ts.teacher_id) as teachers_count
             FROM subjects s
             LEFT JOIN groups g ON s.id = g.subject_id 
@@ -189,7 +189,7 @@ exports.getSubjectStats = async (req, res) => {
         const stats = await pool.query(`
             SELECT 
                 COUNT(DISTINCT g.id) as total_groups,
-                COUNT(DISTINCT sg.student_id) as total_students,
+                COUNT(sg.student_id) as total_students,
                 COUNT(DISTINCT g.teacher_id) as total_teachers,
                 SUM(CASE WHEN g.status = 'active' THEN 1 ELSE 0 END) as active_groups,
                 SUM(CASE WHEN g.status = 'draft' THEN 1 ELSE 0 END) as draft_groups,
