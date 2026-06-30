@@ -429,12 +429,15 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.name), NULL), ARRAY[]::text[]) as subjects,
          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT r.room_number::text), NULL), ARRAY[]::text[]) as room_numbers,
          COUNT(DISTINCT g.id) as groups_count,
-         COUNT(sg.student_id) as students_count
+         COUNT(sg.student_id) as students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'active') as active_students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM users u
        LEFT JOIN groups g ON g.teacher_id = u.id
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
-       LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
+       LEFT JOIN student_groups sg ON sg.group_id = g.id
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
@@ -523,7 +526,10 @@ exports.getTeachersAttendanceList = async (req, res) => {
         today_shift: normalizedShift || null,
         today_groups_count: scheduledCount,
         today_marked_groups_count: completion.completed_groups,
-        students_count: Number(row.students_count) || 0
+        students_count: Number(row.students_count) || 0,
+        active_students_count: Number(row.active_students_count) || 0,
+        stopped_students_count: Number(row.stopped_students_count) || 0,
+        finished_students_count: Number(row.finished_students_count) || 0
       };
     });
 
@@ -588,11 +594,14 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          s.name as subject_name,
          r.id as room_id,
          r.room_number,
-         COUNT(sg.student_id) as students_count
+         COUNT(sg.student_id) as students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'active') as active_students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
+         COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM groups g
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
-       LEFT JOIN student_groups sg ON sg.group_id = g.id AND sg.status = 'active'
+       LEFT JOIN student_groups sg ON sg.group_id = g.id
        WHERE g.teacher_id = $1
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
