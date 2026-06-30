@@ -502,7 +502,7 @@ exports.getAllStudents = async (req, res) => {
     const studentsResult = await pool.query(finalQuery, [...params, limitNumber, offsetNumber]);
 
     const countQuery = `
-      SELECT COUNT(DISTINCT u.id) as total
+      SELECT COUNT(*) as total
       FROM users u
       LEFT JOIN subjects sp ON u.subject_id = sp.id
       ${joinConditions.length > 0 ? joinConditions.join(' ') : ''}
@@ -596,8 +596,8 @@ exports.getAllStudents = async (req, res) => {
 
     const statsQuery = `
       SELECT
-        COUNT(DISTINCT u.id) as total_students,
-        COUNT(DISTINCT CASE WHEN sg.student_id IS NOT NULL THEN u.id END) as students_with_groups,
+        COUNT(*) as total_students,
+        COUNT(*) FILTER (WHERE sg.student_id IS NOT NULL) as students_with_groups,
         COUNT(DISTINCT CASE WHEN sg.student_id IS NULL THEN u.id END) as unassigned_students,
         COUNT(*) FILTER (WHERE sg.status = 'active') as active,
         COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped,
