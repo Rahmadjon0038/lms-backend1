@@ -730,7 +730,6 @@ const getSuperAdminStats = async (req, res) => {
       ),
       client.query(
         `SELECT
-           (SELECT COUNT(*) FROM users WHERE role = 'student')::int AS total_students_count,
            (SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'finished')::int AS finished_students_count,
            (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished'))::int AS inactive_students_count,
            (SELECT COUNT(*) FROM users WHERE role = 'teacher')::int AS total_teachers_count`
@@ -740,6 +739,10 @@ const getSuperAdminStats = async (req, res) => {
     const monthly = monthlyResult.rows[0] || {};
     const subjects = subjectsResult.rows || [];
     const overall = overallResult.rows[0] || {};
+    const totalStudentsFromSubjects = subjects.reduce(
+      (sum, row) => sum + toNumber(row.total_students_count),
+      0
+    );
 
     const totalRevenue = toNumber(monthly.total_revenue);
     const totalTeacherSalary = toNumber(monthly.total_teacher_salary);
@@ -776,7 +779,7 @@ const getSuperAdminStats = async (req, res) => {
               })(),
         })),
         overall: {
-          total_students_count: toNumber(overall.total_students_count),
+          total_students_count: totalStudentsFromSubjects,
           finished_students_count: toNumber(overall.finished_students_count),
           inactive_students_count: toNumber(overall.inactive_students_count),
           total_teachers_count: toNumber(overall.total_teachers_count),
