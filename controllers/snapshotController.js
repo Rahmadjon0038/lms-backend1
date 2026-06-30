@@ -1721,7 +1721,6 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         WHERE sg.joined_at > $1
           AND sg.status = 'active'
           AND g.status = 'active'
-          AND g.class_status = 'started'
           AND u.role = 'student'
           AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2 -- Faqat o'sha oyda yoki undan oldin qo'shilganlar
           AND NOT EXISTS (
@@ -1918,7 +1917,7 @@ exports.getNewStudentsNotification = async (req, res) => {
       });
     }
 
-    // Yangi talabalarni topamiz (faqat o'qishni boshlaganlar)
+    // Snapshotdan keyin qo'shilgan yozuvlarni topamiz
     let newStudentsQuery = `
       SELECT DISTINCT
         sg.student_id,
@@ -1976,7 +1975,6 @@ exports.getNewStudentsNotification = async (req, res) => {
       WHERE sg.joined_at > $1  -- Snapshot dan keyin qo'shilgan
         AND sg.status = 'active'
         AND g.status = 'active'
-        AND g.class_status = 'started'
         AND u.role = 'student'
         AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2  -- O'sha oyda qo'shilgan
         
@@ -2001,24 +1999,19 @@ exports.getNewStudentsNotification = async (req, res) => {
 
     const result = await db.query(newStudentsQuery, params);
 
-    // Faqat o'qishni boshlaganlarni filterlash
-    const startedStudents = result.rows.filter(student => student.has_started).map(student => ({
+    const allStudents = result.rows.map(student => ({
       ...student,
-      joined_at: student.joined_at_formatted // Formatted versiyani ishlatamiz
-    }));
-    const notStartedStudents = result.rows.filter(student => !student.has_started).map(student => ({
-      ...student,
-      joined_at: student.joined_at_formatted // Formatted versiyani ishlatamiz  
+      joined_at: student.joined_at_formatted
     }));
 
     res.json({
       success: true,
       data: {
         month,
-        count: startedStudents.length,
+        count: allStudents.length,
         total_new_students: result.rows.length,
-        new_students: startedStudents,
-        not_started_students: notStartedStudents,
+        new_students: allStudents,
+        not_started_students: [],
         snapshot_created_at: snapshotCreatedDate
       }
     });

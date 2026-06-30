@@ -172,6 +172,41 @@ app.listen(PORT, '0.0.0.0', async () => {
               ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
         `);
         await pool.query(`
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'monthly_snapshots'
+                      AND constraint_type = 'UNIQUE'
+                      AND constraint_name = 'monthly_snapshots_student_id_month_key'
+                ) THEN
+                    ALTER TABLE monthly_snapshots DROP CONSTRAINT monthly_snapshots_student_id_month_key;
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'monthly_snapshots'
+                      AND constraint_type = 'UNIQUE'
+                      AND constraint_name = 'monthly_snapshots_month_student_id_key'
+                ) THEN
+                    ALTER TABLE monthly_snapshots DROP CONSTRAINT monthly_snapshots_month_student_id_key;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'monthly_snapshots'
+                      AND constraint_type = 'UNIQUE'
+                      AND constraint_name = 'monthly_snapshots_month_student_id_group_id_key'
+                ) THEN
+                    ALTER TABLE monthly_snapshots
+                      ADD CONSTRAINT monthly_snapshots_month_student_id_group_id_key UNIQUE (month, student_id, group_id);
+                END IF;
+            END $$;
+        `);
+        await pool.query(`
             UPDATE monthly_snapshots
             SET discount_amount = 0
             WHERE discount_amount IS NULL;
