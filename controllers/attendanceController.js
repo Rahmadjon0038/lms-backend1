@@ -429,7 +429,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.name), NULL), ARRAY[]::text[]) as subjects,
          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT r.room_number::text), NULL), ARRAY[]::text[]) as room_numbers,
          COUNT(DISTINCT g.id) as groups_count,
-         COUNT(DISTINCT sg.student_id) as students_count
+         COUNT(sg.student_id) as students_count
        FROM users u
        LEFT JOIN groups g ON g.teacher_id = u.id
          AND g.class_status = 'started'
@@ -588,7 +588,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          s.name as subject_name,
          r.id as room_id,
          r.room_number,
-         COUNT(DISTINCT sg.student_id) as students_count
+         COUNT(sg.student_id) as students_count
        FROM groups g
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
@@ -799,7 +799,7 @@ exports.getGroupsForAttendance = async (req, res) => {
         g.class_status,
         s.name as subject_name,
         COALESCE(CONCAT(t.name, ' ', t.surname), 'O''qituvchi yo''q') as teacher_name,
-        COUNT(DISTINCT sg.student_id) as students_count,
+        COUNT(sg.student_id) as students_count,
         g.class_start_date,
         g.schedule,
         r.room_number

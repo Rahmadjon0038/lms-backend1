@@ -644,7 +644,7 @@ const getSuperAdminStats = async (req, res) => {
         `WITH students_by_subject AS (
            SELECT
              g.subject_id,
-             COUNT(DISTINCT ms.student_id)::int AS total_students_count
+             COUNT(*)::int AS total_students_count
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            WHERE ms.month = $1
@@ -665,7 +665,7 @@ const getSuperAdminStats = async (req, res) => {
              g.subject_id,
              g.teacher_id,
              CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
-             COUNT(DISTINCT ms.student_id)::int AS total_students_count
+             COUNT(*)::int AS total_students_count
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            LEFT JOIN users u ON u.id = g.teacher_id
