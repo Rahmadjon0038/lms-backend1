@@ -46,6 +46,53 @@ const ensureStudentRecoveryKeys = async () => {
     }
 };
 
+const normalizeDuplicateDigits = (value) => String(value || '').replace(/\D/g, '');
+const normalizeDuplicateText = (value) => String(value || '').toLowerCase().trim();
+
+const buildDuplicateGroups = (students = []) => {
+    const fields = [
+        { key: 'phone', label: 'Telefon', getValue: (s) => normalizeDuplicateDigits(s?.phone) },
+        { key: 'phone2', label: "Qo'shimcha telefon", getValue: (s) => normalizeDuplicateDigits(s?.phone2) },
+        { key: 'father_phone', label: "Ota telefoni", getValue: (s) => normalizeDuplicateDigits(s?.father_phone) },
+        { key: 'username', label: 'Foydalanuvchi nomi', getValue: (s) => normalizeDuplicateText(s?.username) },
+    ];
+
+    const groups = [];
+
+    fields.forEach((field) => {
+        const map = new Map();
+
+        students.forEach((student, index) => {
+            const value = field.getValue(student);
+            if (!value || value.length < 3) return;
+
+            if (!map.has(value)) {
+                map.set(value, []);
+            }
+
+            map.get(value).push({
+                ...student,
+                _rowKey: `${student.id}-${field.key}-${index}`,
+            });
+        });
+
+        map.forEach((items, value) => {
+            if (items.length < 2) return;
+
+            groups.push({
+                id: `${field.key}-${value}`,
+                field_key: field.key,
+                field_label: field.label,
+                field_value: value,
+                students: items,
+                count: items.length,
+            });
+        });
+    });
+
+    return groups.sort((a, b) => b.count - a.count);
+};
+
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
 // Agar student guruhda bo'lmasa, uni guruhga qo'shadi va status beradi
@@ -591,6 +638,134 @@ exports.getAllStudents = async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: err.message 
+    });
+  }
+};
+
+exports.getDuplicateStudents = async (req, res) => {
+  try {
+    const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
+
+    const studentsResult = await pool.query(
+      `SELECT
+         u.id,
+         u.name,
+         u.surname,
+         u.username,
+         u.phone,
+         u.phone2,
+         u.father_name,
+         u.father_phone,
+         u.address,
+         u.age,
+         u.status as student_status,
+         u.created_at as registration_date,
+         u.course_status,
+         u.course_start_date,
+         u.course_end_date,
+         ${hasPasswordPlainColumn ? 'u.password_plain as password,' : 'NULL::text as password,'}
+         u.subject_id as registered_subject_id,
+         sp.name as registered_subject_name,
+         u.role
+       FROM users u
+       LEFT JOIN subjects sp ON u.subject_id = sp.id
+       WHERE u.role = 'student'
+       ORDER BY u.name, u.surname, u.id`
+    );
+
+    const students = studentsResult.rows || [];
+    const studentIds = students.map((student) => student.id);
+    const groupsByStudent = new Map();
+
+    if (studentIds.length > 0) {
+      const allGroupsData = await pool.query(
+        `SELECT
+           sg.student_id,
+           g.id as group_id,
+           g.name as group_name,
+           g.subject_id,
+           g.status as group_admin_status,
+           g.class_status as group_class_status,
+           g.class_start_date,
+           g.price,
+           sg.status as group_status,
+           sg.joined_at as group_joined_at,
+           sg.left_at as group_left_at,
+           CASE
+             WHEN sg.status = 'active' THEN 'Faol'
+             WHEN sg.status = 'stopped' THEN 'Nofaol'
+             WHEN sg.status = 'finished' THEN 'Bitirgan'
+             ELSE 'Belgilanmagan'
+           END as group_status_description,
+           CASE
+             WHEN sg.status = 'finished' THEN sg.left_at
+             WHEN sg.status = 'stopped' THEN sg.left_at
+             ELSE NULL
+           END as status_changed_date,
+           TO_CHAR(sg.left_at, 'DD.MM.YYYY') as formatted_left_date,
+           CONCAT(t.name, ' ', t.surname) as teacher_name,
+           s.name as subject_name,
+           r.room_number,
+           r.capacity as room_capacity,
+           r.has_projector
+         FROM student_groups sg
+         JOIN groups g ON sg.group_id = g.id
+         LEFT JOIN users t ON g.teacher_id = t.id
+         LEFT JOIN subjects s ON g.subject_id = s.id
+         LEFT JOIN rooms r ON g.room_id = r.id
+         WHERE sg.student_id = ANY($1::int[])
+         ORDER BY sg.joined_at DESC`,
+        [studentIds]
+      );
+
+      for (const row of allGroupsData.rows) {
+        if (!groupsByStudent.has(row.student_id)) {
+          groupsByStudent.set(row.student_id, []);
+        }
+        groupsByStudent.get(row.student_id).push(row);
+      }
+    }
+
+    const enrichedStudents = students.map((student) => {
+      const studentGroups = groupsByStudent.get(student.id) || [];
+      const activeOrLatestGroup = studentGroups.find((group) => group.group_status === 'active') || studentGroups[0] || null;
+
+      return {
+        ...student,
+        subject_id: activeOrLatestGroup?.subject_id || student.registered_subject_id || null,
+        subject_name: activeOrLatestGroup?.subject_name || student.registered_subject_name || null,
+        group_id: activeOrLatestGroup?.group_id || null,
+        group_name: activeOrLatestGroup?.group_name || null,
+        group_status: activeOrLatestGroup?.group_status || null,
+        group_status_description: activeOrLatestGroup?.group_status_description || null,
+        teacher_name: activeOrLatestGroup?.teacher_name || null,
+        groups: studentGroups.map((group) => ({
+          ...group,
+          started_at: (group.group_admin_status === 'active' && group.group_class_status === 'started' && group.class_start_date)
+            ? group.class_start_date
+            : null,
+        })),
+      };
+    });
+
+    const duplicateGroups = buildDuplicateGroups(enrichedStudents);
+    const duplicateStudentsCount = duplicateGroups.reduce((sum, group) => sum + group.count, 0);
+
+    return res.json({
+      success: true,
+      message: 'Takroriy studentlar topildi',
+      stats: {
+        duplicate_groups: duplicateGroups.length,
+        duplicate_students: duplicateStudentsCount,
+      },
+      groups: duplicateGroups,
+    });
+  } catch (err) {
+    console.error('Duplicate studentlarni olishda xatolik:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Duplicate studentlarni olishda xatolik',
+      error: err.message,
     });
   }
 };
