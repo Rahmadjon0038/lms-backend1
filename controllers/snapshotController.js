@@ -414,6 +414,7 @@ exports.getMonthlySnapshots = async (req, res) => {
       SELECT 
         COUNT(*) as total_students,
         COUNT(CASE WHEN ms.monthly_status = 'active' THEN 1 END) as active_students,
+        COUNT(CASE WHEN ms.monthly_status = 'stopped' THEN 1 END) as stopped_students,
         COUNT(CASE WHEN ms.payment_status = 'paid' THEN 1 END) as paid_students,
         COUNT(CASE WHEN ms.payment_status = 'partial' THEN 1 END) as partial_students,
         COUNT(CASE WHEN ms.payment_status = 'unpaid' THEN 1 END) as unpaid_students,
