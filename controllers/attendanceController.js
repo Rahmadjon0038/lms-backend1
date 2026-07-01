@@ -431,6 +431,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
     const monthEnd = formatDateUtc(monthEndObj);
     const attendanceDate = normalizedDate || monthEnd;
     const attendanceMonth = attendanceDate.slice(0, 7);
+    const targetWeekday = new Date(`${attendanceDate}T00:00:00.000Z`).getUTCDay();
 
     const result = await pool.query(
       `SELECT
@@ -461,34 +462,56 @@ exports.getTeachersAttendanceList = async (req, res) => {
       [attendanceDate]
     );
 
-    const todayLessonsResult = await pool.query(
-      `SELECT
-         l.group_id,
-         l.teacher_id
-       FROM lessons l
-       JOIN groups g ON g.id = l.group_id
-       WHERE l.date = $1::date
-         AND COALESCE(l.is_holiday, false) = false
-         AND g.class_status = 'started'
+    const groupsForSchedule = await pool.query(
+      `SELECT g.id, g.teacher_id, g.schedule
+       FROM groups g
+       WHERE g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
-         ${normalizedShift === 'morning'
-           ? `AND l.start_time < '13:00:00'::time`
-           : normalizedShift === 'evening'
-             ? `AND l.start_time >= '13:00:00'::time`
-             : ''}
-       GROUP BY l.group_id, l.teacher_id`,
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
       [attendanceDate]
     );
 
     const todayGroupsCount = new Map();
-    for (const row of todayLessonsResult.rows) {
-      const teacherKey = String(row.teacher_id);
+    for (const group of groupsForSchedule.rows) {
+      let dayOk = true;
+      let shiftOk = true;
+
+      const rawDays = Array.isArray(group.schedule?.days) ? group.schedule.days : [];
+      const groupWeekdays = rawDays
+        .map((d) => String(d || '').trim().toLowerCase())
+        .map((d) => WEEKDAY_MAP[d])
+        .filter((d) => Number.isInteger(d));
+      dayOk = groupWeekdays.includes(targetWeekday);
+
+      if (normalizedShift) {
+        const slot = parseScheduleTimeRange(group.schedule);
+        const groupShift = getShiftFromTime(slot.start_time);
+        shiftOk = groupShift === normalizedShift;
+      }
+
+      if (!dayOk || !shiftOk) continue;
+
+      const teacherKey = String(group.teacher_id);
       todayGroupsCount.set(teacherKey, (todayGroupsCount.get(teacherKey) || 0) + 1);
     }
 
-    const allTodayGroupIds = todayLessonsResult.rows.map((row) => Number(row.group_id));
+    const allTodayGroupIds = groupsForSchedule.rows
+      .filter((group) => {
+        const rawDays = Array.isArray(group.schedule?.days) ? group.schedule.days : [];
+        const groupWeekdays = rawDays
+          .map((d) => String(d || '').trim().toLowerCase())
+          .map((d) => WEEKDAY_MAP[d])
+          .filter((d) => Number.isInteger(d));
+        if (!groupWeekdays.includes(targetWeekday)) return false;
+        if (normalizedShift) {
+          const slot = parseScheduleTimeRange(group.schedule);
+          const groupShift = getShiftFromTime(slot.start_time);
+          return groupShift === normalizedShift;
+        }
+        return true;
+      })
+      .map((group) => Number(group.id));
     const scheduledStudentCounts = new Map();
     if (allTodayGroupIds.length > 0) {
       const scheduledStudentsResult = await pool.query(
