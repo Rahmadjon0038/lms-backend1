@@ -461,33 +461,36 @@ exports.getTeachersAttendanceList = async (req, res) => {
       [attendanceDate]
     );
 
-    const groupsForSchedule = await pool.query(
-      `SELECT g.id, g.teacher_id, g.schedule
-       FROM groups g
-       WHERE g.class_status = 'started'
+    const todayLessonsResult = await pool.query(
+      `SELECT
+         l.group_id,
+         l.teacher_id
+       FROM lessons l
+       JOIN groups g ON g.id = l.group_id
+       WHERE l.date = $1::date
+         AND COALESCE(l.is_holiday, false) = false
+         AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+         ${normalizedShift === 'morning'
+           ? `AND l.start_time < '13:00:00'::time`
+           : normalizedShift === 'evening'
+             ? `AND l.start_time >= '13:00:00'::time`
+             : ''}
+       GROUP BY l.group_id, l.teacher_id`,
       [attendanceDate]
     );
 
-    const scheduledGroupsCount = new Map();
-    for (const group of groupsForSchedule.rows) {
-      if (normalizedShift) {
-        const slot = parseScheduleTimeRange(group.schedule);
-        const groupShift = getShiftFromTime(slot.start_time);
-        if (groupShift !== normalizedShift) {
-          continue;
-        }
-      }
-
-      const teacherKey = String(group.teacher_id);
-      scheduledGroupsCount.set(teacherKey, (scheduledGroupsCount.get(teacherKey) || 0) + 1);
+    const todayGroupsCount = new Map();
+    for (const row of todayLessonsResult.rows) {
+      const teacherKey = String(row.teacher_id);
+      todayGroupsCount.set(teacherKey, (todayGroupsCount.get(teacherKey) || 0) + 1);
     }
 
-    const scheduledGroupIds = groupsForSchedule.rows.map((group) => group.id);
+    const allTodayGroupIds = todayLessonsResult.rows.map((row) => Number(row.group_id));
     const scheduledStudentCounts = new Map();
-    if (scheduledGroupIds.length > 0) {
+    if (allTodayGroupIds.length > 0) {
       const scheduledStudentsResult = await pool.query(
        `SELECT
            g.teacher_id,
@@ -500,17 +503,17 @@ exports.getTeachersAttendanceList = async (req, res) => {
        WHERE g.id = ANY($1::int[])
           AND DATE(sg.joined_at) <= $2::date
         GROUP BY g.teacher_id`,
-        [scheduledGroupIds, attendanceDate]
+        [allTodayGroupIds, attendanceDate]
       );
 
-    for (const row of scheduledStudentsResult.rows) {
-      scheduledStudentCounts.set(String(row.teacher_id), {
-        students_count: Number(row.students_count) || 0,
-        active_students_count: Number(row.active_students_count) || 0,
-        stopped_students_count: Number(row.stopped_students_count) || 0,
-        finished_students_count: Number(row.finished_students_count) || 0,
-      });
-    }
+      for (const row of scheduledStudentsResult.rows) {
+        scheduledStudentCounts.set(String(row.teacher_id), {
+          students_count: Number(row.students_count) || 0,
+          active_students_count: Number(row.active_students_count) || 0,
+          stopped_students_count: Number(row.stopped_students_count) || 0,
+          finished_students_count: Number(row.finished_students_count) || 0,
+        });
+      }
     }
 
     const shiftSql = normalizedShift === 'morning'
@@ -557,7 +560,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
 
     const enriched = result.rows.map((row) => {
       const teacherKey = String(row.teacher_id);
-      const scheduledCount = scheduledGroupsCount.get(teacherKey) || 0;
+      const todayCount = todayGroupsCount.get(teacherKey) || 0;
       const scheduledStudents = scheduledStudentCounts.get(teacherKey) || {
         students_count: 0,
         active_students_count: 0,
@@ -569,8 +572,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
         ...row,
         today_date: attendanceDate,
         today_shift: normalizedShift || null,
-        groups_count: scheduledCount,
-        today_groups_count: scheduledCount,
+        groups_count: Number(row.groups_count) || 0,
+        today_groups_count: todayCount,
         today_marked_groups_count: completion.completed_groups,
         students_count: scheduledStudents.students_count,
         active_students_count: scheduledStudents.active_students_count,
