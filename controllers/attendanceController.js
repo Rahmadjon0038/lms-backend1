@@ -436,10 +436,11 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
          COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM users u
-       LEFT JOIN groups g ON g.teacher_id = u.id
+      LEFT JOIN groups g ON g.teacher_id = u.id
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
-       LEFT JOIN student_groups sg ON sg.group_id = g.id
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+      LEFT JOIN student_groups sg ON sg.group_id = g.id
          AND DATE(sg.joined_at) <= $1::date
          AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)
        LEFT JOIN subjects s ON s.id = g.subject_id
@@ -457,7 +458,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
        FROM groups g
        WHERE g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
-         AND g.teacher_id IS NOT NULL`
+         AND g.teacher_id IS NOT NULL
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
+      [selectedDate]
     );
 
     const scheduledGroupsCount = new Map();
@@ -561,7 +564,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
 // ============================================================================
 exports.getTeacherGroupsForAttendance = async (req, res) => {
   const { teacher_id } = req.params;
-  const { date, day, shift } = req.query;
+  const { date, month, day, shift } = req.query;
 
   try {
     const teacherIdNum = Number(teacher_id);
@@ -586,12 +589,27 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
       });
     }
 
-    const attendanceDate = date || new Date().toISOString().slice(0, 10);
-    if (date && !isValidDate(date)) {
-      return res.status(400).json({
-        success: false,
-        message: "date YYYY-MM-DD formatida bo'lishi kerak"
-      });
+    let attendanceDate = null;
+    if (date) {
+      if (!isValidDate(date)) {
+        return res.status(400).json({
+          success: false,
+          message: "date YYYY-MM-DD formatida bo'lishi kerak"
+        });
+      }
+      attendanceDate = date;
+    } else if (month) {
+      const normalizedMonth = normalizeMonthParam(month);
+      if (!normalizedMonth) {
+        return res.status(400).json({
+          success: false,
+          message: "month YYYY-MM formatida bo'lishi kerak"
+        });
+      }
+      const { end } = getMonthStartEnd(normalizedMonth);
+      attendanceDate = formatDateUtc(end);
+    } else {
+      attendanceDate = new Date().toISOString().slice(0, 10);
     }
 
     const groupsResult = await pool.query(
@@ -620,6 +638,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
        WHERE g.teacher_id = $1
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $2::date
        GROUP BY g.id, s.id, s.name, r.id, r.room_number
        ORDER BY g.name`,
       [teacherIdNum, attendanceDate]
@@ -628,7 +647,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
     let targetWeekday = null;
     if (date) {
       targetWeekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-    } else if (day) {
+    } else if (!month && day) {
       const normalizedDay = String(day).trim().toLowerCase();
       if (!Object.prototype.hasOwnProperty.call(WEEKDAY_MAP, normalizedDay)) {
         return res.status(400).json({
