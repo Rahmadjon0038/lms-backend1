@@ -445,9 +445,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
-      LEFT JOIN student_groups sg ON sg.group_id = g.id
+       LEFT JOIN student_groups sg ON sg.group_id = g.id
          AND DATE(sg.joined_at) <= $1::date
-         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
@@ -496,7 +495,6 @@ exports.getTeachersAttendanceList = async (req, res) => {
          JOIN groups g ON g.id = sg.group_id
          WHERE g.id = ANY($1::int[])
            AND DATE(sg.joined_at) <= $2::date
-           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $3::date)
          GROUP BY g.teacher_id`,
         [scheduledGroupIds, attendanceDate, activeUntilDate]
       );
