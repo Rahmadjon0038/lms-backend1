@@ -824,9 +824,10 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
 // ============================================================================
 exports.getGroupsForAttendance = async (req, res) => {
   const { role, id: userId } = req.user;
-  const { teacher_id, subject_id, status_filter = 'all', date, day, shift } = req.query;
+  const { teacher_id, subject_id, status_filter = 'all', date, day, shift, count_mode } = req.query;
   
   try {
+    const countAllStudents = String(count_mode || '').trim().toLowerCase() === 'all';
     const attendanceDate = date || new Date().toISOString().slice(0, 10);
     let targetWeekday = null;
     if (date) {
@@ -879,16 +880,18 @@ exports.getGroupsForAttendance = async (req, res) => {
       LEFT JOIN subjects s ON g.subject_id = s.id
       LEFT JOIN users t ON g.teacher_id = t.id
       LEFT JOIN student_groups sg ON g.id = sg.group_id
-        AND DATE(sg.joined_at) <= $1::date
-        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)
+        AND sg.status = 'active'
+        ${countAllStudents ? '' : 'AND DATE(sg.joined_at) <= $1::date AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)'}
       LEFT JOIN rooms r ON g.room_id = r.id
       WHERE g.class_status = 'started'
     `;
     
     const params = [];
     let paramIndex = 1;
-    params.push(attendanceDate);
-    paramIndex++;
+    if (!countAllStudents) {
+      params.push(attendanceDate);
+      paramIndex++;
+    }
     
     // Status filter
     if (status_filter === 'active') {
