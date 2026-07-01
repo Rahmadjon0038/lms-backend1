@@ -396,15 +396,8 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { date, month, shift } = req.query;
-    const normalizedDate = date && isValidDate(date) ? date : null;
-    const normalizedMonth = normalizeMonthParam(month) || (normalizedDate ? normalizedDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
-    if (!normalizedMonth) {
-      return res.status(400).json({
-        success: false,
-        message: "month YYYY-MM formatida bo'lishi kerak"
-      });
-    }
+    const { date, shift } = req.query;
+    const normalizedDate = date ? (isValidDate(date) ? date : null) : null;
     if (date && !normalizedDate) {
       return res.status(400).json({
         success: false,
@@ -427,11 +420,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
-    const useMonthMode = true;
-    const { start: monthStartObj, end: monthEndObj } = getMonthStartEnd(normalizedMonth);
-    const monthStart = formatDateUtc(monthStartObj);
-    const monthEnd = formatDateUtc(monthEndObj);
-    const attendanceDate = normalizedDate || monthEnd;
+    const attendanceDate = normalizedDate || formatDateUtc(new Date());
+    const attendanceMonth = attendanceDate.slice(0, 7);
 
     const result = await pool.query(
       `SELECT
@@ -450,19 +440,18 @@ exports.getTeachersAttendanceList = async (req, res) => {
        LEFT JOIN groups g ON g.teacher_id = u.id
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $2::date
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
        LEFT JOIN student_groups sg ON sg.group_id = g.id
-         AND DATE(sg.joined_at) <= $2::date
+         AND DATE(sg.joined_at) <= $1::date
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [monthEnd, attendanceDate]
+      [attendanceDate]
     );
 
-    const targetWeekday = null;
     const groupsForSchedule = await pool.query(
       `SELECT g.id, g.teacher_id, g.schedule
        FROM groups g
@@ -497,11 +486,11 @@ exports.getTeachersAttendanceList = async (req, res) => {
            COUNT(*) FILTER (WHERE sg.status = 'active') as active_students_count,
            COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
            COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
-         FROM student_groups sg
-         JOIN groups g ON g.id = sg.group_id
-         WHERE g.id = ANY($1::int[])
-           AND DATE(sg.joined_at) <= $2::date
-         GROUP BY g.teacher_id`,
+       FROM student_groups sg
+       JOIN groups g ON g.id = sg.group_id
+       WHERE g.id = ANY($1::int[])
+          AND DATE(sg.joined_at) <= $2::date
+        GROUP BY g.teacher_id`,
         [scheduledGroupIds, attendanceDate]
       );
 
@@ -535,7 +524,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
+         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1::text
            AND COALESCE(l.is_holiday, false) = false
            ${shiftSql}
          GROUP BY l.id, l.group_id, l.teacher_id
@@ -546,7 +535,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [normalizedMonth]
+      [attendanceMonth]
     );
 
     const completedMap = new Map();
@@ -585,8 +574,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
       success: true,
       data: enriched,
       meta: {
-        month: normalizedMonth,
-        date: normalizedDate || null,
+        month: attendanceMonth,
+        date: attendanceDate,
         shift: normalizedShift || null
       }
     });
