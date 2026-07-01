@@ -568,7 +568,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [attendanceMonth]
+      [attendanceDate]
     );
 
     const completedMap = new Map();
