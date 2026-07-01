@@ -1325,7 +1325,7 @@ exports.getLessonStudents = async (req, res) => {
          a.student_id,
          u.name,
          u.surname,
-         u.name || ' ' || u.surname as student_name,
+         u.surname || ' ' || u.name as student_name,
          u.phone,
          TO_CHAR(DATE(sg.joined_at), 'YYYY-MM-DD') as joined_at,
          CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END as status,
@@ -1616,7 +1616,7 @@ exports.getMonthlyAttendance = async (req, res) => {
     const attendance = await pool.query(
       `SELECT 
          a.student_id,
-         u.name || ' ' || u.surname as student_name,
+         u.surname || ' ' || u.name as student_name,
          u.phone,
          a.monthly_status,
          json_agg(
