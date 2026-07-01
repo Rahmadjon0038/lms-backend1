@@ -425,7 +425,6 @@ exports.getTeachersAttendanceList = async (req, res) => {
     const monthStart = formatDateUtc(monthStartObj);
     const monthEnd = formatDateUtc(monthEndObj);
     const attendanceDate = monthEnd;
-    const activeUntilDate = monthStart;
 
     const result = await pool.query(
       `SELECT
@@ -453,7 +452,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [attendanceDate, activeUntilDate]
+      [attendanceDate]
     );
 
     const targetWeekday = null;
@@ -496,7 +495,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          WHERE g.id = ANY($1::int[])
            AND DATE(sg.joined_at) <= $2::date
          GROUP BY g.teacher_id`,
-        [scheduledGroupIds, attendanceDate, activeUntilDate]
+        [scheduledGroupIds, attendanceDate]
       );
 
     for (const row of scheduledStudentsResult.rows) {
