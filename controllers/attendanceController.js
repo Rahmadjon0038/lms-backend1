@@ -482,6 +482,35 @@ exports.getTeachersAttendanceList = async (req, res) => {
       scheduledGroupsCount.set(teacherKey, (scheduledGroupsCount.get(teacherKey) || 0) + 1);
     }
 
+    const scheduledGroupIds = groupsForSchedule.rows.map((group) => group.id);
+    const scheduledStudentCounts = new Map();
+    if (scheduledGroupIds.length > 0) {
+      const scheduledStudentsResult = await pool.query(
+        `SELECT
+           g.teacher_id,
+           COUNT(sg.student_id) as students_count,
+           COUNT(*) FILTER (WHERE sg.status = 'active') as active_students_count,
+           COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
+           COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
+         FROM student_groups sg
+         JOIN groups g ON g.id = sg.group_id
+         WHERE g.id = ANY($1::int[])
+           AND DATE(sg.joined_at) <= $2::date
+           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
+         GROUP BY g.teacher_id`,
+        [scheduledGroupIds, selectedDate]
+      );
+
+    for (const row of scheduledStudentsResult.rows) {
+      scheduledStudentCounts.set(String(row.teacher_id), {
+        students_count: Number(row.students_count) || 0,
+        active_students_count: Number(row.active_students_count) || 0,
+        stopped_students_count: Number(row.stopped_students_count) || 0,
+        finished_students_count: Number(row.finished_students_count) || 0,
+      });
+    }
+    }
+
     const shiftSql = normalizedShift === 'morning'
       ? `AND l.start_time < '13:00:00'::time`
       : normalizedShift === 'evening'
@@ -527,17 +556,24 @@ exports.getTeachersAttendanceList = async (req, res) => {
     const enriched = result.rows.map((row) => {
       const teacherKey = String(row.teacher_id);
       const scheduledCount = scheduledGroupsCount.get(teacherKey) || 0;
+      const scheduledStudents = scheduledStudentCounts.get(teacherKey) || {
+        students_count: 0,
+        active_students_count: 0,
+        stopped_students_count: 0,
+        finished_students_count: 0
+      };
       const completion = completedMap.get(teacherKey) || { completed_groups: 0, groups_with_lessons: 0 };
       return {
         ...row,
         today_date: selectedDate,
         today_shift: normalizedShift || null,
+        groups_count: scheduledCount,
         today_groups_count: scheduledCount,
         today_marked_groups_count: completion.completed_groups,
-        students_count: Number(row.students_count) || 0,
-        active_students_count: Number(row.active_students_count) || 0,
-        stopped_students_count: Number(row.stopped_students_count) || 0,
-        finished_students_count: Number(row.finished_students_count) || 0
+        students_count: scheduledStudents.students_count,
+        active_students_count: scheduledStudents.active_students_count,
+        stopped_students_count: scheduledStudents.stopped_students_count,
+        finished_students_count: scheduledStudents.finished_students_count
       };
     });
 
