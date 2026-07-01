@@ -396,16 +396,9 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { date, month, shift } = req.query;
-    const normalizedMonth = normalizeMonthParam(month);
-    const selectedDate = date || new Date().toISOString().slice(0, 10);
-    if (!isValidDate(selectedDate)) {
-      return res.status(400).json({
-        success: false,
-        message: "date YYYY-MM-DD formatida bo'lishi kerak"
-      });
-    }
-    if (month && !normalizedMonth) {
+    const { month, shift } = req.query;
+    const normalizedMonth = normalizeMonthParam(month) || new Date().toISOString().slice(0, 7);
+    if (!normalizedMonth) {
       return res.status(400).json({
         success: false,
         message: "month YYYY-MM formatida bo'lishi kerak"
@@ -427,15 +420,12 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
-    const useMonthMode = Boolean(normalizedMonth);
-    const { start: monthStartObj, end: monthEndObj } = useMonthMode
-      ? getMonthStartEnd(normalizedMonth)
-      : { start: null, end: null };
-    const monthStart = useMonthMode ? formatDateUtc(monthStartObj) : null;
-    const monthEnd = useMonthMode ? formatDateUtc(monthEndObj) : null;
-    const attendanceDate = useMonthMode ? monthEnd : selectedDate;
-    const activeSinceDate = useMonthMode ? monthEnd : selectedDate;
-    const activeUntilDate = useMonthMode ? monthStart : selectedDate;
+    const useMonthMode = true;
+    const { start: monthStartObj, end: monthEndObj } = getMonthStartEnd(normalizedMonth);
+    const monthStart = formatDateUtc(monthStartObj);
+    const monthEnd = formatDateUtc(monthEndObj);
+    const attendanceDate = monthEnd;
+    const activeUntilDate = monthStart;
 
     const result = await pool.query(
       `SELECT
@@ -467,7 +457,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
       [attendanceDate, activeUntilDate]
     );
 
-    const targetWeekday = useMonthMode ? null : new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
+    const targetWeekday = null;
     const groupsForSchedule = await pool.query(
       `SELECT g.id, g.teacher_id, g.schedule
        FROM groups g
@@ -480,13 +470,6 @@ exports.getTeachersAttendanceList = async (req, res) => {
 
     const scheduledGroupsCount = new Map();
     for (const group of groupsForSchedule.rows) {
-      if (!useMonthMode) {
-        const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
-        if (!weekdays.includes(targetWeekday)) {
-          continue;
-        }
-      }
-
       if (normalizedShift) {
         const slot = parseScheduleTimeRange(group.schedule);
         const groupShift = getShiftFromTime(slot.start_time);
@@ -548,7 +531,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE ${useMonthMode ? 'TO_CHAR(l.date, \'YYYY-MM\') = $1' : 'l.date = $1::date'}
+         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
            AND COALESCE(l.is_holiday, false) = false
            ${shiftSql}
          GROUP BY l.id, l.group_id, l.teacher_id
@@ -559,7 +542,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [useMonthMode ? normalizedMonth : selectedDate]
+      [normalizedMonth]
     );
 
     const completedMap = new Map();
@@ -598,7 +581,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
       success: true,
       data: enriched,
       meta: {
-        date: selectedDate,
+        month: normalizedMonth,
         shift: normalizedShift || null
       }
     });
