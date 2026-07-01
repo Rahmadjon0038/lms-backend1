@@ -440,15 +440,15 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
        LEFT JOIN student_groups sg ON sg.group_id = g.id
-         AND DATE(sg.joined_at) <= $2::date
-         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
+         AND DATE(sg.joined_at) <= $1::date
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [selectedDate, selectedDate]
+      [selectedDate]
     );
 
     const targetWeekday = new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
