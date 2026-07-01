@@ -396,12 +396,19 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { date, shift } = req.query;
+    const { date, month, shift } = req.query;
+    const normalizedMonth = normalizeMonthParam(month);
     const selectedDate = date || new Date().toISOString().slice(0, 10);
     if (!isValidDate(selectedDate)) {
       return res.status(400).json({
         success: false,
         message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+    if (month && !normalizedMonth) {
+      return res.status(400).json({
+        success: false,
+        message: "month YYYY-MM formatida bo'lishi kerak"
       });
     }
 
@@ -420,7 +427,15 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
-    const attendanceDate = selectedDate;
+    const useMonthMode = Boolean(normalizedMonth);
+    const { start: monthStartObj, end: monthEndObj } = useMonthMode
+      ? getMonthStartEnd(normalizedMonth)
+      : { start: null, end: null };
+    const monthStart = useMonthMode ? formatDateUtc(monthStartObj) : null;
+    const monthEnd = useMonthMode ? formatDateUtc(monthEndObj) : null;
+    const attendanceDate = useMonthMode ? monthEnd : selectedDate;
+    const activeSinceDate = useMonthMode ? monthEnd : selectedDate;
+    const activeUntilDate = useMonthMode ? monthStart : selectedDate;
 
     const result = await pool.query(
       `SELECT
@@ -442,32 +457,41 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
       LEFT JOIN student_groups sg ON sg.group_id = g.id
          AND DATE(sg.joined_at) <= $1::date
-         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [selectedDate]
+      [attendanceDate, activeUntilDate]
     );
 
-    const targetWeekday = new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
+    const targetWeekday = useMonthMode ? null : new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
     const groupsForSchedule = await pool.query(
       `SELECT g.id, g.teacher_id, g.schedule
        FROM groups g
        WHERE g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
-      [selectedDate]
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+         AND (
+           $2::boolean = true
+           OR (
+             g.schedule IS NOT NULL
+             AND g.schedule <> ''
+           )
+         )`,
+      [attendanceDate, useMonthMode]
     );
 
     const scheduledGroupsCount = new Map();
     for (const group of groupsForSchedule.rows) {
-      const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
-      if (!weekdays.includes(targetWeekday)) {
-        continue;
+      if (!useMonthMode) {
+        const weekdays = normalizeScheduleDaysToWeekdays(group.schedule);
+        if (!weekdays.includes(targetWeekday)) {
+          continue;
+        }
       }
 
       if (normalizedShift) {
@@ -496,9 +520,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
          JOIN groups g ON g.id = sg.group_id
          WHERE g.id = ANY($1::int[])
            AND DATE(sg.joined_at) <= $2::date
-           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
+           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $3::date)
          GROUP BY g.teacher_id`,
-        [scheduledGroupIds, selectedDate]
+        [scheduledGroupIds, attendanceDate, activeUntilDate]
       );
 
     for (const row of scheduledStudentsResult.rows) {
@@ -531,7 +555,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE l.date = $1::date
+         WHERE ${useMonthMode ? 'TO_CHAR(l.date, \'YYYY-MM\') = $1' : 'l.date = $1::date'}
            AND COALESCE(l.is_holiday, false) = false
            ${shiftSql}
          GROUP BY l.id, l.group_id, l.teacher_id
@@ -542,7 +566,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [selectedDate]
+      [useMonthMode ? normalizedMonth : selectedDate]
     );
 
     const completedMap = new Map();
@@ -565,7 +589,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
       const completion = completedMap.get(teacherKey) || { completed_groups: 0, groups_with_lessons: 0 };
       return {
         ...row,
-        today_date: selectedDate,
+        today_date: attendanceDate,
         today_shift: normalizedShift || null,
         groups_count: scheduledCount,
         today_groups_count: scheduledCount,
