@@ -396,8 +396,15 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { date, shift } = req.query;
+    const { date, month, shift } = req.query;
     const normalizedDate = date ? (isValidDate(date) ? date : null) : null;
+    const normalizedMonth = normalizeMonthParam(month) || (normalizedDate ? normalizedDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
+    if (!normalizedMonth) {
+      return res.status(400).json({
+        success: false,
+        message: "month YYYY-MM formatida bo'lishi kerak"
+      });
+    }
     if (date && !normalizedDate) {
       return res.status(400).json({
         success: false,
@@ -420,7 +427,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
-    const attendanceDate = normalizedDate || formatDateUtc(new Date());
+    const { end: monthEndObj } = getMonthStartEnd(normalizedMonth);
+    const monthEnd = formatDateUtc(monthEndObj);
+    const attendanceDate = normalizedDate || monthEnd;
     const attendanceMonth = attendanceDate.slice(0, 7);
 
     const result = await pool.query(
