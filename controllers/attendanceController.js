@@ -539,12 +539,6 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
-    const shiftSql = normalizedShift === 'morning'
-      ? `AND l.start_time < '13:00:00'::time`
-      : normalizedShift === 'evening'
-        ? `AND l.start_time >= '13:00:00'::time`
-        : '';
-
     const completedResult = await pool.query(
       `WITH lesson_attendance AS (
          SELECT
@@ -559,9 +553,13 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
-         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1::text
+         WHERE l.date = $1::date
            AND COALESCE(l.is_holiday, false) = false
-           ${shiftSql}
+           ${normalizedShift === 'morning'
+             ? `AND l.start_time < '13:00:00'::time`
+             : normalizedShift === 'evening'
+               ? `AND l.start_time >= '13:00:00'::time`
+               : ''}
          GROUP BY l.id, l.group_id, l.teacher_id
        )
        SELECT
