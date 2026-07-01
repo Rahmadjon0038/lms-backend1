@@ -420,6 +420,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
       }
     }
 
+    const attendanceDate = selectedDate;
+
     const result = await pool.query(
       `SELECT
          u.id as teacher_id,
@@ -438,12 +440,15 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
        LEFT JOIN student_groups sg ON sg.group_id = g.id
+         AND DATE(sg.joined_at) <= $2::date
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
-       ORDER BY u.name, u.surname`
+       ORDER BY u.name, u.surname`,
+      [selectedDate, selectedDate]
     );
 
     const targetWeekday = new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay();
@@ -581,6 +586,14 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
       });
     }
 
+    const attendanceDate = date || new Date().toISOString().slice(0, 10);
+    if (date && !isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
+      });
+    }
+
     const groupsResult = await pool.query(
       `SELECT
          g.id as group_id,
@@ -602,21 +615,15 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        LEFT JOIN student_groups sg ON sg.group_id = g.id
+         AND DATE(sg.joined_at) <= $2::date
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        WHERE g.teacher_id = $1
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
        GROUP BY g.id, s.id, s.name, r.id, r.room_number
        ORDER BY g.name`,
-      [teacherIdNum]
+      [teacherIdNum, attendanceDate]
     );
-
-    const attendanceDate = date || new Date().toISOString().slice(0, 10);
-    if (date && !isValidDate(date)) {
-      return res.status(400).json({
-        success: false,
-        message: "date YYYY-MM-DD formatida bo'lishi kerak"
-      });
-    }
 
     let targetWeekday = null;
     if (date) {
@@ -765,6 +772,7 @@ exports.getGroupsForAttendance = async (req, res) => {
   const { teacher_id, subject_id, status_filter = 'all', date, day, shift } = req.query;
   
   try {
+    const attendanceDate = date || new Date().toISOString().slice(0, 10);
     let targetWeekday = null;
     if (date) {
       if (!isValidDate(date)) {
@@ -816,12 +824,16 @@ exports.getGroupsForAttendance = async (req, res) => {
       LEFT JOIN subjects s ON g.subject_id = s.id
       LEFT JOIN users t ON g.teacher_id = t.id
       LEFT JOIN student_groups sg ON g.id = sg.group_id
+        AND DATE(sg.joined_at) <= $1::date
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)
       LEFT JOIN rooms r ON g.room_id = r.id
       WHERE g.class_status = 'started'
     `;
     
     const params = [];
     let paramIndex = 1;
+    params.push(attendanceDate);
+    paramIndex++;
     
     // Status filter
     if (status_filter === 'active') {
@@ -881,7 +893,6 @@ exports.getGroupsForAttendance = async (req, res) => {
       return dayOk && shiftOk;
     });
     
-    const attendanceDate = date || new Date().toISOString().slice(0, 10);
     let attendanceStatsMap = new Map();
 
     if (filteredGroups.length > 0) {
