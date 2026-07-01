@@ -474,15 +474,8 @@ exports.getTeachersAttendanceList = async (req, res) => {
        WHERE g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
-         AND (
-           $2::boolean = true
-           OR (
-             g.schedule IS NOT NULL
-             AND g.schedule <> ''
-           )
-         )`,
-      [attendanceDate, useMonthMode]
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
+      [attendanceDate]
     );
 
     const scheduledGroupsCount = new Map();
