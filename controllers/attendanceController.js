@@ -1346,7 +1346,7 @@ exports.getLessonStudents = async (req, res) => {
          ) as debt_amount
        FROM attendance a
        JOIN users u ON a.student_id = u.id
-       LEFT JOIN student_groups sg
+       JOIN student_groups sg
          ON sg.student_id = a.student_id
         AND sg.group_id = a.group_id
         AND DATE(sg.joined_at) <= $2::date
