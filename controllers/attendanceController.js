@@ -396,12 +396,19 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { month, shift } = req.query;
-    const normalizedMonth = normalizeMonthParam(month) || new Date().toISOString().slice(0, 7);
+    const { date, month, shift } = req.query;
+    const normalizedDate = date && isValidDate(date) ? date : null;
+    const normalizedMonth = normalizeMonthParam(month) || (normalizedDate ? normalizedDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
     if (!normalizedMonth) {
       return res.status(400).json({
         success: false,
         message: "month YYYY-MM formatida bo'lishi kerak"
+      });
+    }
+    if (date && !normalizedDate) {
+      return res.status(400).json({
+        success: false,
+        message: "date YYYY-MM-DD formatida bo'lishi kerak"
       });
     }
 
@@ -424,7 +431,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
     const { start: monthStartObj, end: monthEndObj } = getMonthStartEnd(normalizedMonth);
     const monthStart = formatDateUtc(monthStartObj);
     const monthEnd = formatDateUtc(monthEndObj);
-    const attendanceDate = monthEnd;
+    const attendanceDate = normalizedDate || monthEnd;
 
     const result = await pool.query(
       `SELECT
@@ -440,19 +447,19 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
          COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM users u
-      LEFT JOIN groups g ON g.teacher_id = u.id
+       LEFT JOIN groups g ON g.teacher_id = u.id
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $2::date
        LEFT JOIN student_groups sg ON sg.group_id = g.id
-         AND DATE(sg.joined_at) <= $1::date
+         AND DATE(sg.joined_at) <= $2::date
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN rooms r ON r.id = g.room_id
        WHERE u.role = 'teacher'
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [attendanceDate]
+      [monthEnd, attendanceDate]
     );
 
     const targetWeekday = null;
@@ -484,7 +491,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
     const scheduledStudentCounts = new Map();
     if (scheduledGroupIds.length > 0) {
       const scheduledStudentsResult = await pool.query(
-        `SELECT
+       `SELECT
            g.teacher_id,
            COUNT(sg.student_id) as students_count,
            COUNT(*) FILTER (WHERE sg.status = 'active') as active_students_count,
@@ -579,6 +586,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
       data: enriched,
       meta: {
         month: normalizedMonth,
+        date: normalizedDate || null,
         shift: normalizedShift || null
       }
     });
