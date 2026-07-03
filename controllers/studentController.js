@@ -93,6 +93,14 @@ const buildDuplicateGroups = (students = []) => {
     return groups.sort((a, b) => b.count - a.count);
 };
 
+const buildImageUrl = (filePath) => {
+    if (!filePath) return null;
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        return filePath;
+    }
+    return filePath.startsWith('/') ? filePath : `/${filePath}`;
+};
+
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
 // Agar student guruhda bo'lmasa, uni guruhga qo'shadi va status beradi
@@ -1044,6 +1052,7 @@ exports.getMyGroups = async (req, res) => {
                 g.status as group_status,
                 g.class_status,
                 TO_CHAR(g.start_date, 'DD.MM.YYYY') as group_start_date,
+                TO_CHAR(g.created_at, 'DD.MM.YYYY') as group_created_date,
                 
                 -- Guruh a'zolari soni
                 (
@@ -1070,7 +1079,7 @@ exports.getMyGroups = async (req, res) => {
         `, [studentId]);
 
         const groupsData = myGroups.rows.map(group => ({
-            group_info: {
+                group_info: {
                 id: group.group_id,
                 name: group.group_name,
                 unique_code: group.unique_code,
@@ -1078,6 +1087,7 @@ exports.getMyGroups = async (req, res) => {
                 status: group.group_status,
                 class_status: group.class_status,
                 start_date: group.group_start_date,
+                created_date: group.group_created_date,
                 total_students: parseInt(group.total_students),
                 schedule: group.schedule || null
             },
@@ -1154,7 +1164,11 @@ exports.getMyGroupInfo = async (req, res) => {
                 g.status as group_status,
                 g.class_status,
                 TO_CHAR(g.start_date, 'DD.MM.YYYY') as start_date,
-                TO_CHAR(g.created_at, 'DD.MM.YYYY') as created_date,
+                COALESCE(
+                    TO_CHAR(g.created_at, 'DD.MM.YYYY'),
+                    TO_CHAR(g.start_date, 'DD.MM.YYYY'),
+                    TO_CHAR(sg.joined_at, 'DD.MM.YYYY')
+                ) as created_date,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as student_joined_date,
                 
                 s.name as subject_name,
@@ -1183,6 +1197,9 @@ exports.getMyGroupInfo = async (req, res) => {
                 u.name,
                 u.surname,
                 u.phone,
+                u.avatar_key,
+                pa.name as avatar_name,
+                pa.image_path as avatar_url,
                 sg.status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
@@ -1194,9 +1211,11 @@ exports.getMyGroupInfo = async (req, res) => {
                     WHEN sg.status = 'finished' THEN 'Bitirgan'
                     ELSE 'Nomaʻlum'
                 END as status_description
-                
+            
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
+            LEFT JOIN profile_avatars pa
+              ON LOWER(BTRIM(COALESCE(u.avatar_key, ''))) = LOWER(BTRIM(COALESCE(pa.avatar_key, '')))
             WHERE sg.group_id = $1
             ORDER BY 
                 CASE sg.status 
@@ -1259,6 +1278,9 @@ exports.getMyGroupInfo = async (req, res) => {
                 name: mate.name,
                 surname: mate.surname,
                 phone: mate.phone,
+                avatar_key: mate.avatar_key,
+                avatar_name: mate.avatar_name,
+                avatar_url: buildImageUrl(mate.avatar_url),
                 status: mate.status,
                 status_description: mate.status_description,
                 join_date: mate.join_date,
