@@ -26,6 +26,7 @@ const createUserTable = async () => {
       experience_place TEXT, -- Qayerda tajriba to'plagan
       available_times VARCHAR(100), -- Qaysi vaqtlarda ishlay oladi
       work_days_hours TEXT, -- Ish kunlari va soatlari
+      avatar_key VARCHAR(100), -- Profil avatari kaliti
       group_id INTEGER,
       group_name VARCHAR(255),
       teacher_id INTEGER,
@@ -126,6 +127,9 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='work_days_hours') THEN
             ALTER TABLE users ADD COLUMN work_days_hours TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='avatar_key') THEN
+            ALTER TABLE users ADD COLUMN avatar_key VARCHAR(100);
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='termination_date') THEN
             ALTER TABLE users ADD COLUMN termination_date DATE;

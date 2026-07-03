@@ -1,16 +1,19 @@
 const express = require('express');
 const pool = require('./config/db'); // Baza ulanishini chaqirish
 require('dotenv').config();
+const path = require('path');
 const { swaggerUi, specs } = require('./config/swagger');
 const cors = require('cors');
 const { createUserTable } = require('./models/userModel'); // Jadval yaratish funksiyasini chaqirish
 
 const app = express();
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://api.taraqqiyot-teaching-center.uz';
+const PORT = process.env.PORT || 5000;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 
 // Middleware: JSON formatdagi ma'lumotlarni qabul qilish
 app.use(express.json());
 app.use(cors());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
 /**
@@ -82,6 +85,7 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const snapshotRoutes = require('./routes/snapshotRoutes');
 const teacherGuideRoutes = require('./routes/teacherGuideRoutes');
 const adminGuideRoutes = require('./routes/adminGuideRoutes');
+const profileAvatarRoutes = require('./routes/profileAvatarRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
 const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
@@ -94,6 +98,7 @@ const { createGuideTables } = require('./models/guideModel');
 const { createExpenseTable } = require('./models/expenseModel');
 const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
 const { createAdminSalaryTables } = require('./models/adminSalaryModel');
+const { createProfileAvatarTable } = require('./models/profileAvatarModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -112,14 +117,13 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/snapshots', snapshotRoutes);
 app.use('/api/teacher/guides', teacherGuideRoutes);
 app.use('/api/admin/guides', adminGuideRoutes);
+app.use('/api/profile-avatars', profileAvatarRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
 app.use('/api/admin-salary', adminSalaryRoutes);
 
 // createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
-const PORT = process.env.PORT || 5000;
-
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server ${PORT}-portda ishga tushdi...`);
     console.log(`Swagger: ${PUBLIC_BASE_URL}/api-docs/`);
@@ -146,6 +150,7 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['holidays', createHolidaysTable],
             ['attendance', createAttendanceTable],
             ['guides', createGuideTables],
+            ['profile_avatars', createProfileAvatarTable],
             ['center_expenses', createExpenseTable],
             ['group_monthly_settings', createGroupMonthlySettingsTable],
             ['payments', createPaymentTables],

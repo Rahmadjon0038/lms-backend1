@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'http://localhost:5000';
 const { 
     addSubjectToTeacher, 
     getTeacherSubjects, 
@@ -113,6 +114,52 @@ const normalizeAgeValue = (age) => {
     }
     return { value: normalizedAge, error: null };
 };
+
+const profileSelectColumns = `
+    u.id,
+    u.name,
+    u.surname,
+    u.username,
+    u.role,
+    u.status,
+    u.phone,
+    u.phone2,
+    u.father_name,
+    u.father_phone,
+    u.address,
+    u.age,
+    u.avatar_key,
+    CASE
+      WHEN pa.image_path IS NULL THEN NULL
+      WHEN pa.image_path ~ '^https?://' THEN pa.image_path
+      ELSE CONCAT('${PUBLIC_BASE_URL}', pa.image_path)
+    END AS avatar_url,
+    pa.name AS avatar_name,
+    u.subject,
+    u.start_date,
+    u.end_date,
+    u.certificate,
+    u.has_experience,
+    u.experience_years,
+    u.experience_place,
+    u.available_times,
+    u.work_days_hours,
+    u.created_at,
+    g.id as group_id,
+    g.name as group_name,
+    g.status as group_status,
+    r.room_number,
+    r.capacity as room_capacity,
+    r.has_projector,
+    COALESCE(s.name, ss.name) as subject_name,
+    CONCAT(t.name, ' ', t.surname) as teacher_name
+`;
+
+const loginSelectColumns = `
+    ${profileSelectColumns},
+    u.password,
+    u.password_plain
+`;
 
 const generateUniqueUsername = async (baseUsername, usedUsernames) => {
     const base = normalizeUsername(baseUsername);
@@ -730,16 +777,9 @@ const loginStudent = async (req, res) => {
 
     try {
         const result = await pool.query(
-            `SELECT u.*, 
-                    g.id as group_id,
-                    g.name as group_name,
-                    g.status as group_status,
-                    r.room_number,
-                    r.capacity as room_capacity,
-                    r.has_projector,
-                    COALESCE(s.name, ss.name) as subject_name,
-                    CONCAT(t.name, ' ', t.surname) as teacher_name
+            `SELECT ${loginSelectColumns}
              FROM users u
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
              LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
              LEFT JOIN groups g ON sg.group_id = g.id
              LEFT JOIN rooms r ON g.room_id = r.id
@@ -752,8 +792,21 @@ const loginStudent = async (req, res) => {
             [username]
         );
         const user = result.rows[0];
+        const storedPassword = typeof user?.password === 'string' ? user.password : '';
+        const plainPassword = typeof user?.password_plain === 'string' ? user.password_plain : '';
 
-        if (user && (await bcrypt.compare(password, user.password))) {
+        if (!user) {
+            return res.status(401).json({ message: "Username yoki parol xato!" });
+        }
+
+        let passwordMatches = false;
+        if (storedPassword.startsWith('$2')) {
+            passwordMatches = await bcrypt.compare(password, storedPassword);
+        } else if (plainPassword) {
+            passwordMatches = password === plainPassword;
+        }
+
+        if (passwordMatches) {
             // Ikkala tokenni ham yaratamiz
             const accessToken = generateAccessToken(user);
             const refreshToken = generateRefreshToken(user);
@@ -768,12 +821,15 @@ const loginStudent = async (req, res) => {
                     role: user.role,
                     group_id: user.group_id,
                     group_name: user.group_name,
-                    group_status: user.group_status,
-                    room_number: user.room_number,
-                    room_capacity: user.room_capacity,
-                    has_projector: user.has_projector,
-                    subject_name: user.subject_name,
-                    teacher_name: user.teacher_name
+                group_status: user.group_status,
+                room_number: user.room_number,
+                room_capacity: user.room_capacity,
+                has_projector: user.has_projector,
+                subject_name: user.subject_name,
+                teacher_name: user.teacher_name,
+                avatar_key: user.avatar_key,
+                avatar_url: user.avatar_url,
+                avatar_name: user.avatar_name
                 }
             });
         } else {
@@ -818,6 +874,7 @@ const getProfile = async (req, res) => {
     try {
         const user = await pool.query(
             `SELECT u.id, u.name, u.surname, u.username, u.role, u.status, u.phone, u.phone2, u.father_name, u.father_phone, u.address, u.age, 
+                    u.avatar_key, pa.image_path AS avatar_url, pa.name AS avatar_name,
                     u.subject, u.start_date, u.end_date, u.certificate, u.has_experience, u.experience_years, u.experience_place, 
                     u.available_times, u.work_days_hours, u.created_at,
                     -- Guruh va xona ma'lumotlari (faqat student uchun)
@@ -830,6 +887,7 @@ const getProfile = async (req, res) => {
                     COALESCE(s.name, ss.name) as subject_name,
                     CONCAT(t.name, ' ', t.surname) as teacher_name
              FROM users u
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
              LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
              LEFT JOIN groups g ON sg.group_id = g.id
              LEFT JOIN rooms r ON g.room_id = r.id
@@ -862,7 +920,8 @@ const updateProfile = async (req, res) => {
         'experience_years',
         'experience_place',
         'available_times',
-        'work_days_hours'
+        'work_days_hours',
+        'avatar_key'
     ];
 
     const incoming = req.body && typeof req.body === 'object' ? req.body : {};
@@ -969,7 +1028,7 @@ const updateProfile = async (req, res) => {
              SET ${setClauses.join(', ')}
              WHERE id = $${index}
              RETURNING id, name, surname, username, role, status, phone, phone2, father_name, father_phone, address, age,
-                       certificate, has_experience, experience_years, experience_place, available_times, work_days_hours, created_at`
+                       certificate, has_experience, experience_years, experience_place, available_times, work_days_hours, avatar_key, created_at`
             ,
             values
         );
@@ -981,11 +1040,25 @@ const updateProfile = async (req, res) => {
             });
         }
 
+        const profile = await pool.query(
+            `SELECT ${profileSelectColumns}
+             FROM users u
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
+             LEFT JOIN groups g ON sg.group_id = g.id
+             LEFT JOIN rooms r ON g.room_id = r.id
+             LEFT JOIN subjects s ON g.subject_id = s.id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id
+             LEFT JOIN users t ON g.teacher_id = t.id
+             WHERE u.id = $1`,
+            [req.user.id]
+        );
+
         return res.json({
             success: true,
             message: "Profil ma'lumotlari yangilandi",
             updated_fields: setClauses.map((part) => part.split(' = ')[0]),
-            user: updated.rows[0]
+            user: profile.rows[0] || updated.rows[0]
         });
     } catch (err) {
         return res.status(500).json({
