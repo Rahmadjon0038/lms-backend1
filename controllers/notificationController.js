@@ -61,6 +61,9 @@ const sendNotificationToUser = async ({
   const fcmToken = tokenResult.rows[0]?.fcm_token?.toString().trim() ?? '';
 
   if (fcmToken) {
+    console.log(
+      `🔔 Push yuborilmoqda: user_id=${userId}, token_prefix=${fcmToken.slice(0, 18)}..., type=${type}`
+    );
     await sendUserPushNotification({
       token: fcmToken,
       title: pushTitle || 'Taraqqiyot Teaching Center',

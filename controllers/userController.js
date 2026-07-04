@@ -1085,6 +1085,10 @@ const updatePushToken = async (req, res) => {
             });
         }
 
+        console.log(
+            `🔔 Push token update: user_id=${req.user.id}, token_prefix=${rawToken.slice(0, 18)}...`
+        );
+
         await pool.query(
             'UPDATE users SET fcm_token = $1 WHERE id = $2',
             [rawToken, req.user.id]
