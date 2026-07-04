@@ -1039,7 +1039,14 @@ exports.giveSnapshotDiscount = async (req, res) => {
     }
 
     const discountTitle = 'Chegirma berildi';
-    const discountBody = `${month} oyi uchun chegirma berildi. Admin: ${adminName}.`;
+    const discountReason = String(description ?? '').trim();
+    const discountBodyParts = [
+      `${month} oyi uchun ${discountAmount.toLocaleString('en-US')} so'm chegirma berildi.`,
+    ];
+    if (discountReason) {
+      discountBodyParts.push(`Sabab: ${discountReason}.`);
+    }
+    const discountBody = discountBodyParts.join(' ');
     const discountNotificationData = {
       route: '/notification-detail',
       type: 'discount',
@@ -1057,6 +1064,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
       subject_name: snapshot.subject_name || '',
       admin_id: String(adminId),
       admin_name: adminName,
+      description: discountReason,
       title: discountTitle,
       body: discountBody,
     };
