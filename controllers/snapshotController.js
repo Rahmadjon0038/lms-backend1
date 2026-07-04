@@ -866,6 +866,8 @@ exports.makeSnapshotPayment = async (req, res) => {
         type: 'payment',
         title: paymentTitle,
         body: paymentBody,
+        pushTitle: 'Taraqqiyot Teaching Center',
+        pushBody: paymentBody,
         data: notificationData,
         createdBy: adminId,
       });

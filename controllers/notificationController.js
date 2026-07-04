@@ -40,6 +40,8 @@ const sendNotificationToUser = async ({
   type = 'payment',
   title,
   body,
+  pushTitle,
+  pushBody,
   data = {},
   createdBy = null,
 }) => {
@@ -61,8 +63,8 @@ const sendNotificationToUser = async ({
   if (fcmToken) {
     await sendUserPushNotification({
       token: fcmToken,
-      title,
-      body,
+      title: pushTitle || 'Taraqqiyot Teaching Center',
+      body: pushBody || body,
       data: {
         ...data,
         route: data.route || '/notification-detail',
