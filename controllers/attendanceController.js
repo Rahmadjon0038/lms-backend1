@@ -1795,9 +1795,16 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
     let mode;
 
     const scope = String(apply_scope || '').trim().toLowerCase();
-    const useFromMonth = scope === 'from_month' && typeof from_month === 'string' && from_month.trim().length > 0;
-    const useMonths = scope === 'months' && Array.isArray(months) && months.length > 0;
-    const useSingleMonth = typeof month === 'string' && month.trim().length > 0 && (!scope || scope === 'single_month' || scope === 'month');
+    const hasFromMonth = typeof from_month === 'string' && from_month.trim().length > 0;
+    const hasMonths = Array.isArray(months) && months.length > 0;
+    const hasSingleMonth = typeof month === 'string' && month.trim().length > 0;
+
+    // Backward compatible:
+    // - apply_scope yuborilsa, shu ishlaydi
+    // - apply_scope yuborilmasa ham from_month / months bo'lsa avtomatik scope tanlanadi
+    const useFromMonth = hasFromMonth && (scope === 'from_month' || !scope);
+    const useMonths = hasMonths && (scope === 'months' || !scope);
+    const useSingleMonth = hasSingleMonth && (!scope || scope === 'single_month' || scope === 'month');
 
     if (useFromMonth) {
       // Variant 3: Shu oydan keyingi barcha oylar
@@ -1827,7 +1834,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
     } else {
       return res.status(400).json({
         success: false,
-        message: 'month yuboring yoki apply_scope bilan months/from_month ni tanlang'
+        message: 'month yuboring yoki months/from_month parametrlaridan birini tanlang'
       });
     }
 
