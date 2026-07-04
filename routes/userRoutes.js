@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus, deleteAdmin } = require('../controllers/userController');
+const { registerStudent, registerStudentsBulk, registerTeacher, registerAdmin, loginStudent, changePassword, getProfile, updateProfile, updatePushToken, updateStudentInfo, refreshAccessToken, getAllTeachers, getAdmins, getEnglishTeachers, checkIsEnglishTeacher, setTeacherOnLeave, terminateTeacher, reactivateTeacher, deleteTeacher, patchTeacher, updateTeacherInfo, changeStudentStatus, updateAdminStatus, deleteAdmin } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -588,6 +588,7 @@ router.get('/profile', protect, getProfile);
  *         description: Avtorizatsiya xatosi
  */
 router.patch('/profile', protect, updateProfile);
+router.patch('/push-token', protect, updatePushToken);
 
 /**
  * @swagger

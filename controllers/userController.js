@@ -1069,6 +1069,40 @@ const updateProfile = async (req, res) => {
     }
 };
 
+const updatePushToken = async (req, res) => {
+    try {
+        const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+        const rawToken = typeof incoming.fcm_token === 'string'
+            ? incoming.fcm_token.trim()
+            : typeof incoming.token === 'string'
+                ? incoming.token.trim()
+                : '';
+
+        if (!rawToken) {
+            return res.status(400).json({
+                success: false,
+                message: 'fcm_token majburiy'
+            });
+        }
+
+        await pool.query(
+            'UPDATE users SET fcm_token = $1 WHERE id = $2',
+            [rawToken, req.user.id]
+        );
+
+        res.json({
+            success: true,
+            message: 'Push token yangilandi'
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: 'Push tokenni saqlashda xatolik',
+            error: err.message
+        });
+    }
+};
+
 // 4.2. Student ma'lumotlarini yangilash (Admin yoki Teacher)
 const updateStudentInfo = async (req, res) => {
     const studentId = parseInt(req.params.studentId, 10);
@@ -2111,6 +2145,7 @@ module.exports = {
     changePassword,
     getProfile, 
     updateProfile,
+    updatePushToken,
     updateStudentInfo,
     refreshAccessToken,
     getAllTeachers,
