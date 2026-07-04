@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const XLSX = require('xlsx');
+const { notifyUser } = require('./notificationController');
 
 /**
  * YANGI ATTENDANCE TIZIMI
@@ -1397,9 +1398,20 @@ exports.markAttendance = async (req, res) => {
     }
 
     const lessonAccess = await pool.query(
-      `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id, l.status, COALESCE(l.is_holiday, false) as is_holiday
+      `SELECT
+         l.id,
+         l.date,
+         l.group_id,
+         COALESCE(l.teacher_id, g.teacher_id) as teacher_id,
+         l.status,
+         COALESCE(l.is_holiday, false) as is_holiday,
+         g.name as group_name,
+         CONCAT(COALESCE(t.name, ''), ' ', COALESCE(t.surname, '')) as teacher_name,
+         COALESCE(s.name, '') as subject_name
        FROM lessons l
        LEFT JOIN groups g ON g.id = l.group_id
+       LEFT JOIN users t ON t.id = COALESCE(l.teacher_id, g.teacher_id)
+       LEFT JOIN subjects s ON s.id = g.subject_id
        WHERE l.id = $1`,
       [lesson_id]
     );
@@ -1485,6 +1497,42 @@ exports.markAttendance = async (req, res) => {
         }
       } else {
         updatedCount += result.rowCount;
+
+        const updatedStudentId = result.rows[0]?.student_id;
+        if (updatedStudentId) {
+          const statusLabels = {
+            keldi: 'Keldi',
+            kelmadi: 'Kelmadi',
+            kechikdi: 'Kechikdi'
+          };
+          const humanStatus = statusLabels[record.status] || record.status;
+          try {
+            await notifyUser({
+              userId: updatedStudentId,
+              type: 'attendance',
+              title: 'Davomat yangilandi',
+              body: `${lesson.date} kuni ${lesson.group_name || 'guruh'} uchun davomat: ${humanStatus}`,
+              pushTitle: 'Taraqqiyot Teaching Center',
+              pushBody: `${lesson.date} kuni davomat: ${humanStatus}`,
+              data: {
+                route: '/notification-detail',
+                type: 'attendance',
+                lesson_id: String(lesson.id),
+                lesson_date: String(lesson.date),
+                group_id: String(lesson.group_id),
+                group_name: lesson.group_name || '',
+                teacher_name: lesson.teacher_name || '',
+                subject_name: lesson.subject_name || '',
+                attendance_status: record.status,
+              },
+              createdBy: userId,
+            });
+          } catch (notificationError) {
+            console.warn(
+              `⚠️ Attendance notification yuborilmadi: ${notificationError.message}`
+            );
+          }
+        }
       }
     }
 
@@ -1712,11 +1760,19 @@ exports.getMonthlyAttendance = async (req, res) => {
 // ============================================================================
 // 6. STUDENT OYLIK STATUSINI O'ZGARTIRISH (3 ta variant!)
 // ============================================================================
-// Variant 1: { month: "2026-02" } - Faqat bitta oy
-// Variant 2: { months: ["2026-02", "2026-03", "2026-04"] } - Bir necha oylar
-// Variant 3: { from_month: "2026-02" } - Shu oydan keyingi barcha oylar
+// Default: { month: "2026-02" } - Faqat bitta oy
+// Optional: { apply_scope: "months", months: ["2026-02", "2026-03"] } - Bir necha oylar
+// Optional: { apply_scope: "from_month", from_month: "2026-02" } - Shu oydan keyingi barcha oylar
 exports.updateStudentMonthlyStatus = async (req, res) => {
-  const { student_id, group_id, monthly_status, month, months, from_month } = req.body;
+  const {
+    student_id,
+    group_id,
+    monthly_status,
+    month,
+    months,
+    from_month,
+    apply_scope,
+  } = req.body;
   
   try {
     if (!student_id || !group_id || !monthly_status) {
@@ -1738,7 +1794,12 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
     let params;
     let mode;
 
-    if (from_month) {
+    const scope = String(apply_scope || '').trim().toLowerCase();
+    const useFromMonth = scope === 'from_month' && typeof from_month === 'string' && from_month.trim().length > 0;
+    const useMonths = scope === 'months' && Array.isArray(months) && months.length > 0;
+    const useSingleMonth = typeof month === 'string' && month.trim().length > 0 && (!scope || scope === 'single_month' || scope === 'month');
+
+    if (useFromMonth) {
       // Variant 3: Shu oydan keyingi barcha oylar
       mode = 'from_month_onwards';
       query = `UPDATE attendance 
@@ -1746,7 +1807,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
                WHERE student_id = $2 AND group_id = $3 AND month >= $4
                RETURNING id, month, monthly_status`;
       params = [monthly_status, student_id, group_id, from_month];
-    } else if (months && Array.isArray(months) && months.length > 0) {
+    } else if (useMonths) {
       // Variant 2: Bir necha oylar
       mode = 'multiple_months';
       const monthPlaceholders = months.map((_, i) => `$${i + 4}`).join(', ');
@@ -1755,7 +1816,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
                WHERE student_id = $2 AND group_id = $3 AND month IN (${monthPlaceholders})
                RETURNING id, month, monthly_status`;
       params = [monthly_status, student_id, group_id, ...months];
-    } else if (month) {
+    } else if (useSingleMonth) {
       // Variant 1: Faqat bitta oy
       mode = 'single_month';
       query = `UPDATE attendance 
@@ -1766,7 +1827,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
     } else {
       return res.status(400).json({
         success: false,
-        message: 'month, months yoki from_month dan bittasini yuboring'
+        message: 'month yuboring yoki apply_scope bilan months/from_month ni tanlang'
       });
     }
 
@@ -1785,7 +1846,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
       let normalizeQuery;
       let normalizeParams;
 
-      if (from_month) {
+      if (useFromMonth) {
         normalizeQuery = `
           UPDATE attendance a
           SET is_marked = false
@@ -1799,7 +1860,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
             AND l.status IN ('not_started', 'open')
         `;
         normalizeParams = [student_id, group_id, from_month];
-      } else if (months && Array.isArray(months) && months.length > 0) {
+      } else if (useMonths) {
         const monthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
         normalizeQuery = `
           UPDATE attendance a
@@ -1814,7 +1875,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
             AND l.status IN ('not_started', 'open')
         `;
         normalizeParams = [student_id, group_id, ...months];
-      } else if (month) {
+      } else if (useSingleMonth) {
         normalizeQuery = `
           UPDATE attendance a
           SET is_marked = false
@@ -1844,7 +1905,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
         let paymentUpdateQuery;
         let paymentParams;
         
-        if (from_month) {
+        if (useFromMonth) {
           // Shu oydan keyingi barcha oylar uchun
           paymentUpdateQuery = `
             UPDATE student_payments 
@@ -1852,7 +1913,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
             WHERE student_id = $1 AND group_id = $2 AND month >= $3
           `;
           paymentParams = [student_id, group_id, from_month];
-        } else if (months && Array.isArray(months) && months.length > 0) {
+        } else if (useMonths) {
           // Bir necha oylar uchun
           const paymentMonthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
           paymentUpdateQuery = `
@@ -1861,7 +1922,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
             WHERE student_id = $1 AND group_id = $2 AND month IN (${paymentMonthPlaceholders})
           `;
           paymentParams = [student_id, group_id, ...months];
-        } else if (month) {
+        } else if (useSingleMonth) {
           // Faqat bitta oy uchun
           paymentUpdateQuery = `
             UPDATE student_payments 
@@ -1885,14 +1946,14 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
         let paymentReactivateQuery;
         let paymentParams;
         
-        if (from_month) {
+        if (useFromMonth) {
           paymentReactivateQuery = `
             UPDATE student_payments 
             SET status = 'active', updated_at = CURRENT_TIMESTAMP
             WHERE student_id = $1 AND group_id = $2 AND month >= $3 AND status = 'inactive'
           `;
           paymentParams = [student_id, group_id, from_month];
-        } else if (months && Array.isArray(months) && months.length > 0) {
+        } else if (useMonths) {
           const paymentMonthPlaceholders = months.map((_, i) => `$${i + 3}`).join(', ');
           paymentReactivateQuery = `
             UPDATE student_payments 
@@ -1900,7 +1961,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
             WHERE student_id = $1 AND group_id = $2 AND month IN (${paymentMonthPlaceholders}) AND status = 'inactive'
           `;
           paymentParams = [student_id, group_id, ...months];
-        } else if (month) {
+        } else if (useSingleMonth) {
           paymentReactivateQuery = `
             UPDATE student_payments 
             SET status = 'active', updated_at = CURRENT_TIMESTAMP
@@ -1923,7 +1984,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
       let snapshotUpdateQuery;
       let snapshotParams;
       
-      if (from_month) {
+      if (useFromMonth) {
         snapshotUpdateQuery = `
           UPDATE monthly_snapshots 
           SET monthly_status = $1::varchar, 
@@ -1940,7 +2001,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
           WHERE student_id = $2 AND group_id = $3 AND month >= $4::varchar
         `;
         snapshotParams = [monthly_status, student_id, group_id, from_month];
-      } else if (months && Array.isArray(months) && months.length > 0) {
+      } else if (useMonths) {
         const snapshotMonthPlaceholders = months.map((_, i) => `$${i + 4}::varchar`).join(', ');
         snapshotUpdateQuery = `
           UPDATE monthly_snapshots 
@@ -1958,7 +2019,7 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
           WHERE student_id = $2 AND group_id = $3 AND month IN (${snapshotMonthPlaceholders})
         `;
         snapshotParams = [monthly_status, student_id, group_id, ...months];
-      } else if (month) {
+      } else if (useSingleMonth) {
         snapshotUpdateQuery = `
           UPDATE monthly_snapshots 
           SET monthly_status = $1::varchar, 
@@ -2005,9 +2066,10 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
         group_id,
         monthly_status,
         updated_count: result.rowCount,
-        ...(month && { month }),
-        ...(months && { months }),
-        ...(from_month && { from_month })
+        ...(useSingleMonth && { month }),
+        ...(useMonths && { months }),
+        ...(useFromMonth && { from_month }),
+        apply_scope: useFromMonth ? 'from_month' : useMonths ? 'months' : 'single_month'
       },
       affected_months: summary.rows
     });

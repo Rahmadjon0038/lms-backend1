@@ -1,6 +1,34 @@
 const db = require('../config/db');
 const { notifyUser } = require('./notificationController');
 
+const UZBEK_MONTHS = [
+  'yanvar',
+  'fevral',
+  'mart',
+  'aprel',
+  'may',
+  'iyun',
+  'iyul',
+  'avgust',
+  'sentabr',
+  'oktabr',
+  'noyabr',
+  'dekabr',
+];
+
+const formatMonthLabel = (month) => {
+  const text = String(month ?? '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    return text;
+  }
+
+  const year = match[1];
+  const monthIndex = parseInt(match[2], 10) - 1;
+  const monthName = UZBEK_MONTHS[monthIndex] || match[2];
+  return `${year} yil ${monthName}`;
+};
+
 const getUserDisplayName = async (userId) => {
   const result = await db.query(
     `
@@ -864,11 +892,14 @@ exports.makeSnapshotPayment = async (req, res) => {
     `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month]);
 
     const paymentTitle = 'To\'lov qabul qilindi';
-    const paymentBody = `${month} oyi uchun ${amount} so'm to'lov qabul qilindi. Admin: ${adminName}.`;
+    const monthLabel = formatMonthLabel(month);
+    const amountLabel = Number(amount).toLocaleString('en-US');
+    const paymentBody = `${monthLabel} uchun ${amountLabel} so'm to'lov qabul qilindi. To'lov qabul qiluvchi: ${adminName}.`;
     const notificationData = {
       route: '/notification-detail',
       type: 'payment',
       month,
+      month_label: monthLabel,
       student_id: String(student_id),
       group_id: String(group_id),
       amount: String(amount),
@@ -879,6 +910,7 @@ exports.makeSnapshotPayment = async (req, res) => {
       subject_name: snapshot.subject_name || '',
       admin_id: String(adminId),
       admin_name: adminName,
+      payment_receiver_name: adminName,
       title: paymentTitle,
       body: paymentBody,
     };
@@ -1040,8 +1072,9 @@ exports.giveSnapshotDiscount = async (req, res) => {
 
     const discountTitle = 'Chegirma berildi';
     const discountReason = String(description ?? '').trim();
+    const monthLabel = formatMonthLabel(month);
     const discountBodyParts = [
-      `Chegirma: ${discountAmount.toLocaleString('en-US')} so'm.`,
+      `${monthLabel} uchun chegirma: ${discountAmount.toLocaleString('en-US')} so'm.`,
     ];
     if (discountReason) {
       discountBodyParts.push(`Sabab: ${discountReason}.`);
@@ -1051,6 +1084,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
       route: '/notification-detail',
       type: 'discount',
       month,
+      month_label: monthLabel,
       student_id: String(student_id),
       group_id: String(group_id),
       discount_type,
@@ -1065,6 +1099,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
       admin_id: String(adminId),
       admin_name: adminName,
       description: discountReason,
+      discount_reason: discountReason,
       title: discountTitle,
       body: discountBody,
     };
