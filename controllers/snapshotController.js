@@ -1041,7 +1041,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
     const discountTitle = 'Chegirma berildi';
     const discountReason = String(description ?? '').trim();
     const discountBodyParts = [
-      `${month} oyi uchun ${discountAmount.toLocaleString('en-US')} so'm chegirma berildi.`,
+      `Chegirma: ${discountAmount.toLocaleString('en-US')} so'm.`,
     ];
     if (discountReason) {
       discountBodyParts.push(`Sabab: ${discountReason}.`);
