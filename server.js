@@ -5,6 +5,7 @@ const path = require('path');
 const { swaggerUi, specs } = require('./config/swagger');
 const cors = require('cors');
 const { createUserTable } = require('./models/userModel'); // Jadval yaratish funksiyasini chaqirish
+const { createNotificationTable } = require('./models/notificationModel');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -86,6 +87,7 @@ const snapshotRoutes = require('./routes/snapshotRoutes');
 const teacherGuideRoutes = require('./routes/teacherGuideRoutes');
 const adminGuideRoutes = require('./routes/adminGuideRoutes');
 const profileAvatarRoutes = require('./routes/profileAvatarRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
 const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
@@ -118,6 +120,7 @@ app.use('/api/snapshots', snapshotRoutes);
 app.use('/api/teacher/guides', teacherGuideRoutes);
 app.use('/api/admin/guides', adminGuideRoutes);
 app.use('/api/profile-avatars', profileAvatarRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
 app.use('/api/admin-salary', adminSalaryRoutes);
@@ -151,6 +154,7 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['attendance', createAttendanceTable],
             ['guides', createGuideTables],
             ['profile_avatars', createProfileAvatarTable],
+            ['notifications', createNotificationTable],
             ['center_expenses', createExpenseTable],
             ['group_monthly_settings', createGroupMonthlySettingsTable],
             ['payments', createPaymentTables],

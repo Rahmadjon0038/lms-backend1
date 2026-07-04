@@ -27,6 +27,7 @@ const createUserTable = async () => {
       available_times VARCHAR(100), -- Qaysi vaqtlarda ishlay oladi
       work_days_hours TEXT, -- Ish kunlari va soatlari
       avatar_key VARCHAR(100), -- Profil avatari kaliti
+      fcm_token TEXT, -- Mobil push notification tokeni
       group_id INTEGER,
       group_name VARCHAR(255),
       teacher_id INTEGER,
@@ -130,6 +131,9 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='avatar_key') THEN
             ALTER TABLE users ADD COLUMN avatar_key VARCHAR(100);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='fcm_token') THEN
+            ALTER TABLE users ADD COLUMN fcm_token TEXT;
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='termination_date') THEN
             ALTER TABLE users ADD COLUMN termination_date DATE;

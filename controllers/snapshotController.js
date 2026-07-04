@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { notifyUser } = require('./notificationController');
 
 /**
  * ===================================================================
@@ -840,6 +841,37 @@ exports.makeSnapshotPayment = async (req, res) => {
         updated_at = CURRENT_TIMESTAMP
       WHERE student_id = $5 AND group_id = $6 AND month = $7
     `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month]);
+
+    const paymentTitle = 'To\'lov qabul qilindi';
+    const paymentBody = `${month} oyi uchun ${amount} so'm to'lov qabul qilindi.`;
+    const notificationData = {
+      route: '/notification-detail',
+      type: 'payment',
+      month,
+      student_id: String(student_id),
+      group_id: String(group_id),
+      amount: String(amount),
+      required_amount: String(effectiveRequired),
+      paid_amount: String(newPaidAmount),
+      debt_amount: String(newDebtAmount),
+      group_name: snapshot.group_name || '',
+      subject_name: snapshot.subject_name || '',
+      title: paymentTitle,
+      body: paymentBody,
+    };
+
+    try {
+      await notifyUser({
+        userId: student_id,
+        type: 'payment',
+        title: paymentTitle,
+        body: paymentBody,
+        data: notificationData,
+        createdBy: adminId,
+      });
+    } catch (notificationError) {
+      console.warn('⚠️ Payment notification yuborilmadi:', notificationError.message);
+    }
 
     res.json({
       success: true,
