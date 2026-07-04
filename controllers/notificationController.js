@@ -241,5 +241,46 @@ exports.markAllNotificationsAsRead = async (req, res) => {
   }
 };
 
+exports.deleteNotification = async (req, res) => {
+  try {
+    const notificationId = toInt(req.params.id, 0);
+    if (!notificationId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notification ID noto‘g‘ri',
+      });
+    }
+
+    const result = await db.query(
+      `
+        DELETE FROM notifications
+        WHERE id = $1 AND user_id = $2
+        RETURNING id
+      `,
+      [notificationId, req.user.id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Bildirishnoma topilmadi',
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        deleted_id: notificationId,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Bildirishnomani o‘chirishda xatolik',
+      error: error.message,
+    });
+  }
+};
+
 exports.notifyUser = sendNotificationToUser;
 exports.createNotificationRecord = createNotificationRecord;

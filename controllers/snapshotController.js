@@ -1,6 +1,26 @@
 const db = require('../config/db');
 const { notifyUser } = require('./notificationController');
 
+const getUserDisplayName = async (userId) => {
+  const result = await db.query(
+    `
+      SELECT name, surname, username
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [userId]
+  );
+
+  const user = result.rows[0];
+  if (!user) {
+    return 'Admin';
+  }
+
+  const fullName = [user.name, user.surname].filter(Boolean).join(' ').trim();
+  return fullName || user.username || 'Admin';
+};
+
 /**
  * ===================================================================
  * MONTHLY SNAPSHOT CONTROLLER
@@ -795,6 +815,7 @@ exports.makeSnapshotPayment = async (req, res) => {
     }
 
     const snapshot = snapshotCheck.rows[0];
+    const adminName = await getUserDisplayName(adminId);
 
     // To'lov transaction yaratish
     await db.query(`
@@ -843,7 +864,7 @@ exports.makeSnapshotPayment = async (req, res) => {
     `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month]);
 
     const paymentTitle = 'To\'lov qabul qilindi';
-    const paymentBody = `${month} oyi uchun ${amount} so'm to'lov qabul qilindi.`;
+    const paymentBody = `${month} oyi uchun ${amount} so'm to'lov qabul qilindi. Admin: ${adminName}.`;
     const notificationData = {
       route: '/notification-detail',
       type: 'payment',
@@ -856,6 +877,8 @@ exports.makeSnapshotPayment = async (req, res) => {
       debt_amount: String(newDebtAmount),
       group_name: snapshot.group_name || '',
       subject_name: snapshot.subject_name || '',
+      admin_id: String(adminId),
+      admin_name: adminName,
       title: paymentTitle,
       body: paymentBody,
     };
@@ -936,6 +959,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
     }
 
     const snapshot = snapshotCheck.rows[0];
+    const adminName = await getUserDisplayName(adminId);
 
     // Chegirma miqdorini hisoblash
     const basePrice = snapshot.group_price != null ? parseFloat(snapshot.group_price) : parseFloat(snapshot.required_amount);
@@ -1012,6 +1036,44 @@ exports.giveSnapshotDiscount = async (req, res) => {
         success: false,
         message: `${month} oy uchun To'lov jadvali topilmadi yoki yangilanmadi`
       });
+    }
+
+    const discountTitle = 'Chegirma berildi';
+    const discountBody = `${month} oyi uchun chegirma berildi. Admin: ${adminName}.`;
+    const discountNotificationData = {
+      route: '/notification-detail',
+      type: 'discount',
+      month,
+      student_id: String(student_id),
+      group_id: String(group_id),
+      discount_type,
+      discount_value: String(discount_value),
+      discount_amount: String(discountAmount),
+      required_amount: String(originalRequired),
+      effective_required: String(effectiveRequired),
+      paid_amount: String(paidAmount),
+      debt_amount: String(newDebtAmount),
+      group_name: snapshot.group_name || '',
+      subject_name: snapshot.subject_name || '',
+      admin_id: String(adminId),
+      admin_name: adminName,
+      title: discountTitle,
+      body: discountBody,
+    };
+
+    try {
+      await notifyUser({
+        userId: student_id,
+        type: 'discount',
+        title: discountTitle,
+        body: discountBody,
+        pushTitle: 'Taraqqiyot Teaching Center',
+        pushBody: discountBody,
+        data: discountNotificationData,
+        createdBy: adminId,
+      });
+    } catch (notificationError) {
+      console.warn('⚠️ Discount notification yuborilmadi:', notificationError.message);
     }
 
     res.json({
