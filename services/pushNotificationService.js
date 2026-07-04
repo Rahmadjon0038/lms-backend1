@@ -76,8 +76,16 @@ function initializeFirebaseAdmin() {
     return false;
   }
 
+  const credentialFactory =
+    firebaseAdmin.credential?.cert || firebaseAdmin.cert;
+
+  if (typeof credentialFactory !== 'function') {
+    console.warn('⚠️ Firebase Admin credential topilmadi, push yuborish o‘tkazib yuborildi.');
+    return false;
+  }
+
   firebaseAdmin.initializeApp({
-    credential: firebaseAdmin.credential.cert(serviceAccount),
+    credential: credentialFactory(serviceAccount),
   });
   initialized = true;
   return true;
