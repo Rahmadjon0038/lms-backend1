@@ -2,13 +2,21 @@ const fs = require('fs');
 const path = require('path');
 
 let firebaseAdmin = null;
+let firebaseMessaging = null;
 try {
   firebaseAdmin = require('firebase-admin');
 } catch (_error) {
   firebaseAdmin = null;
 }
 
+try {
+  firebaseMessaging = require('firebase-admin/messaging');
+} catch (_error) {
+  firebaseMessaging = null;
+}
+
 let initialized = false;
+let firebaseAppInstance = null;
 
 function parseServiceAccount() {
   const inlineJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -87,6 +95,7 @@ function initializeFirebaseAdmin() {
   firebaseAdmin.initializeApp({
     credential: credentialFactory(serviceAccount),
   });
+  firebaseAppInstance = firebaseAdmin.getApp();
   initialized = true;
   return true;
 }
@@ -110,8 +119,17 @@ async function sendUserPushNotification({ token, title, body, data = {} }) {
     return false;
   }
 
+  const getMessaging =
+    firebaseMessaging?.getMessaging ||
+    firebaseMessaging?.Messaging?.getMessaging;
+
+  if (typeof getMessaging !== 'function') {
+    console.warn('⚠️ Firebase Messaging topilmadi, push yuborish o‘tkazib yuborildi.');
+    return false;
+  }
+
   try {
-    await firebaseAdmin.messaging().send({
+    await getMessaging(firebaseAppInstance).send({
       token,
       notification: {
         title: String(title ?? 'Bildirishnoma'),
