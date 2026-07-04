@@ -34,11 +34,14 @@ services:
       DB_NAME: lms
       JWT_SECRET: maxfiy_kalit_123@
       REFRESH_TOKEN_SECRET: refresh_uchun_maxfiy_kalit_456!
+      FIREBASE_SERVICE_ACCOUNT_PATH: /app/taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json
+      FIREBASE_PROJECT_ID: taraqqiyot-teaching-center
     ports:
       - "3001:3001"
     volumes:
       - ./uploads:/app/uploads
       - ./private_uploads:/app/private_uploads
+      - ./taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:/app/taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:ro
 
 volumes:
   lms_pgdata:
