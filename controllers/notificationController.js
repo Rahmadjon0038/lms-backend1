@@ -71,7 +71,9 @@ const sendNotificationToUser = async ({
         notification_id: String(notification.id),
         type,
       },
-    });
+      });
+  } else {
+    console.warn(`⚠️ FCM token topilmadi: user_id=${userId}. Push yuborilmadi, faqat notification bazaga yozildi.`);
   }
 
   return notification;

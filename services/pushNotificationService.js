@@ -26,8 +26,14 @@ function parseServiceAccount() {
 
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
   if (serviceAccountPath && serviceAccountPath.trim()) {
-    const resolvedPath = path.resolve(serviceAccountPath.trim());
-    if (fs.existsSync(resolvedPath)) {
+    const trimmedPath = serviceAccountPath.trim();
+    const candidatePaths = [
+      path.resolve(trimmedPath),
+      path.resolve(__dirname, '..', trimmedPath),
+    ];
+
+    for (const resolvedPath of candidatePaths) {
+      if (!fs.existsSync(resolvedPath)) continue;
       try {
         const parsed = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
         if (parsed.private_key) {
