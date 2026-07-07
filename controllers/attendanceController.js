@@ -56,6 +56,22 @@ const isValidMonth = (value) => /^\d{4}-\d{2}$/.test(String(value || ''));
 const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 const isValidTime = (value) => /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(value || ''));
 
+const formatTashkentDateTimeLabel = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const tashkentDate = new Date(date.getTime() + 5 * 60 * 60 * 1000);
+  const year = tashkentDate.getUTCFullYear().toString().padStart(4, '0');
+  const month = String(tashkentDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(tashkentDate.getUTCDate()).padStart(2, '0');
+  const hour = String(tashkentDate.getUTCHours()).padStart(2, '0');
+  const minute = String(tashkentDate.getUTCMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+};
+
 const normalizeMonthParam = (value) => {
   if (!value) return null;
   const raw = String(value).trim();
@@ -1506,14 +1522,16 @@ exports.markAttendance = async (req, res) => {
             kechikdi: 'Kechikdi'
           };
           const humanStatus = statusLabels[record.status] || record.status;
+          const markedAtLabel = formatTashkentDateTimeLabel();
+          const pushBody = `${humanStatus}\n${markedAtLabel}`;
           try {
             await notifyUser({
               userId: updatedStudentId,
               type: 'attendance',
-              title: 'Davomat yangilandi',
-              body: `${lesson.date} kuni ${lesson.group_name || 'guruh'} uchun davomat: ${humanStatus}`,
-              pushTitle: 'Taraqqiyot Teaching Center',
-              pushBody: `${lesson.date} kuni davomat: ${humanStatus}`,
+              title: 'Davomat belgilandi',
+              body: humanStatus,
+              pushTitle: 'Davomat belgilandi',
+              pushBody,
               data: {
                 route: '/notification-detail',
                 type: 'attendance',
@@ -1524,6 +1542,7 @@ exports.markAttendance = async (req, res) => {
                 teacher_name: lesson.teacher_name || '',
                 subject_name: lesson.subject_name || '',
                 attendance_status: record.status,
+                attendance_marked_at: markedAtLabel,
               },
               createdBy: userId,
             });
