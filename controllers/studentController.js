@@ -950,6 +950,22 @@ exports.getMyPointReports = async (req, res) => {
             baseParams
         );
 
+        const dailyBreakdownResult = await pool.query(
+            `
+            SELECT
+                TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
+                COALESCE(SUM(spe.points), 0)::int AS total_points,
+                COUNT(*)::int AS total_events,
+                MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS first_time,
+                MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS last_time
+            FROM student_point_events spe
+            WHERE ${whereParts.join(' AND ')}
+            GROUP BY DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
+            ORDER BY day_key DESC
+            `,
+            baseParams
+        );
+
         const eventsResult = await pool.query(
             `
             SELECT
@@ -964,7 +980,9 @@ exports.getMyPointReports = async (req, res) => {
                 spe.title,
                 spe.description,
                 spe.metadata,
-                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at
+                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
+                TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
+                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
             FROM student_point_events spe
             LEFT JOIN groups g ON g.id = spe.group_id
             WHERE ${whereParts.join(' AND ')}
@@ -990,6 +1008,13 @@ exports.getMyPointReports = async (req, res) => {
                 total_points: row.total_points,
                 total_events: row.total_events,
             })),
+            daily_breakdown: dailyBreakdownResult.rows.map((row) => ({
+                day_key: row.day_key,
+                total_points: row.total_points,
+                total_events: row.total_events,
+                first_time: row.first_time,
+                last_time: row.last_time,
+            })),
             events: eventsResult.rows.map((row) => ({
                 id: row.id,
                 group_id: row.group_id,
@@ -1002,6 +1027,8 @@ exports.getMyPointReports = async (req, res) => {
                 description: row.description,
                 metadata: row.metadata,
                 created_at: row.created_at,
+                day_key: row.day_key,
+                created_time: row.created_time,
             })),
         };
 
