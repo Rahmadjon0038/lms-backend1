@@ -101,6 +101,22 @@ const buildImageUrl = (filePath) => {
     return filePath.startsWith('/') ? filePath : `/${filePath}`;
 };
 
+const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
+
+const normalizeMonthKey = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const monthMatch = text.match(/^(\d{4})-(\d{2})$/);
+    if (monthMatch) {
+        return `${monthMatch[1]}-${monthMatch[2]}`;
+    }
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const buildMonthFilter = (month) => normalizeMonthKey(month) || getCurrentMonthKey();
+
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
 // Agar student guruhda bo'lmasa, uni guruhga qo'shadi va status beradi
@@ -885,6 +901,251 @@ exports.getMyGroupInfo = async (req, res) => {
     }
 };
 
+exports.getMyPointReports = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const month = buildMonthFilter(req.query.month);
+        const groupId = req.query.group_id ? parseInt(req.query.group_id) : null;
+
+        if (!month) {
+            return res.status(400).json({
+                success: false,
+                message: 'month YYYY-MM formatida bo\'lishi kerak'
+            });
+        }
+
+        const baseParams = [studentId, month];
+        const whereParts = ['spe.student_id = $1', 'spe.month_name = $2'];
+        if (groupId) {
+            baseParams.push(groupId);
+            whereParts.push(`spe.group_id = $${baseParams.length}`);
+        }
+
+        const summaryResult = await pool.query(
+            `
+            SELECT
+                COALESCE(SUM(points), 0)::int AS total_points,
+                COUNT(*)::int AS total_events,
+                COUNT(CASE WHEN source_type = 'attendance' THEN 1 END)::int AS attendance_events,
+                COUNT(CASE WHEN source_type IN ('bonus', 'report') THEN 1 END)::int AS manual_events
+            FROM student_point_events spe
+            WHERE ${whereParts.join(' AND ')}
+            `,
+            baseParams
+        );
+
+        const breakdownResult = await pool.query(
+            `
+            SELECT
+                spe.group_id,
+                COALESCE(g.name, 'Guruh') AS group_name,
+                COALESCE(SUM(spe.points), 0)::int AS total_points,
+                COUNT(*)::int AS total_events
+            FROM student_point_events spe
+            LEFT JOIN groups g ON g.id = spe.group_id
+            WHERE ${whereParts.join(' AND ')}
+            GROUP BY spe.group_id, g.name
+            ORDER BY total_points DESC, group_name ASC
+            `,
+            baseParams
+        );
+
+        const eventsResult = await pool.query(
+            `
+            SELECT
+                spe.id,
+                spe.student_id,
+                spe.group_id,
+                COALESCE(g.name, '') AS group_name,
+                spe.lesson_id,
+                spe.month_name,
+                spe.points,
+                spe.source_type,
+                spe.title,
+                spe.description,
+                spe.metadata,
+                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at
+            FROM student_point_events spe
+            LEFT JOIN groups g ON g.id = spe.group_id
+            WHERE ${whereParts.join(' AND ')}
+            ORDER BY spe.created_at DESC, spe.id DESC
+            `,
+            baseParams
+        );
+
+        const responseData = {
+            month,
+            filter: {
+                group_id: groupId,
+            },
+            summary: {
+                total_points: summaryResult.rows[0]?.total_points || 0,
+                total_events: summaryResult.rows[0]?.total_events || 0,
+                attendance_events: summaryResult.rows[0]?.attendance_events || 0,
+                manual_events: summaryResult.rows[0]?.manual_events || 0,
+            },
+            breakdown: breakdownResult.rows.map((row) => ({
+                group_id: row.group_id,
+                group_name: row.group_name,
+                total_points: row.total_points,
+                total_events: row.total_events,
+            })),
+            events: eventsResult.rows.map((row) => ({
+                id: row.id,
+                group_id: row.group_id,
+                group_name: row.group_name,
+                lesson_id: row.lesson_id,
+                month_name: row.month_name,
+                points: row.points,
+                source_type: row.source_type,
+                title: row.title,
+                description: row.description,
+                metadata: row.metadata,
+                created_at: row.created_at,
+            })),
+        };
+
+        res.json({
+            success: true,
+            message: 'Ballar tarixi muvaffaqiyatli olindi',
+            data: responseData
+        });
+    } catch (error) {
+        console.error('❌ Student ballar tarixini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ballar tarixini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+exports.createStudentPointEvent = async (req, res) => {
+    try {
+        const { role, id: actorId } = req.user;
+        const {
+            student_id,
+            group_id,
+            lesson_id,
+            points,
+            title,
+            description,
+            source_type,
+            month_name,
+            metadata,
+        } = req.body;
+
+        if (!student_id || !group_id || typeof points === 'undefined' || !title) {
+            return res.status(400).json({
+                success: false,
+                message: 'student_id, group_id, points va title majburiy'
+            });
+        }
+
+        const studentId = parseInt(student_id);
+        const groupId = parseInt(group_id);
+        const lessonId = lesson_id ? parseInt(lesson_id) : null;
+        const pointsValue = Number.parseInt(points, 10);
+        const eventMonth = buildMonthFilter(month_name);
+
+        if (Number.isNaN(studentId) || Number.isNaN(groupId) || Number.isNaN(pointsValue)) {
+            return res.status(400).json({
+                success: false,
+                message: 'student_id, group_id va points son bo\'lishi kerak'
+            });
+        }
+
+        const allowedTypes = ['attendance', 'bonus', 'report', 'adjustment'];
+        const normalizedType = allowedTypes.includes(String(source_type || '').trim())
+            ? String(source_type || '').trim()
+            : 'bonus';
+
+        const studentCheck = await pool.query(
+            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
+            [studentId, 'student']
+        );
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student topilmadi'
+            });
+        }
+
+        const groupCheck = await pool.query(
+            'SELECT id, name, teacher_id FROM groups WHERE id = $1',
+            [groupId]
+        );
+        if (groupCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Guruh topilmadi'
+            });
+        }
+
+        const membershipCheck = await pool.query(
+            'SELECT id, status FROM student_groups WHERE student_id = $1 AND group_id = $2',
+            [studentId, groupId]
+        );
+        if (membershipCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student ushbu guruhga biriktirilmagan'
+            });
+        }
+
+        const group = groupCheck.rows[0];
+        if (role === 'teacher' && String(group.teacher_id || '') !== String(actorId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Siz faqat o\'zingizning guruhingiz uchun ball qo\'sha olasiz'
+            });
+        }
+
+        const inserted = await pool.query(
+            `
+            INSERT INTO student_point_events (
+                student_id,
+                group_id,
+                lesson_id,
+                month_name,
+                points,
+                source_type,
+                title,
+                description,
+                metadata,
+                created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::jsonb, '{}'::jsonb), $10)
+            RETURNING *
+            `,
+            [
+                studentId,
+                groupId,
+                lessonId,
+                eventMonth,
+                pointsValue,
+                normalizedType,
+                title.trim(),
+                description?.trim() || null,
+                metadata ? JSON.stringify(metadata) : '{}',
+                actorId,
+            ]
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'Ball muvaffaqiyatli qo\'shildi',
+            data: inserted.rows[0]
+        });
+    } catch (error) {
+        console.error('❌ Student ballini qo\'shishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ball qo\'shishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
 /**
  * Studentning oylik to'lovlari (faqat o'zi uchun)
  * Query:
@@ -1028,10 +1289,38 @@ exports.getMyMonthlyPayments = async (req, res) => {
 exports.getMyGroups = async (req, res) => {
     try {
         const studentId = req.user.id;
+        const currentMonth = getCurrentMonthKey();
 
         console.log(`🎓 Student ${studentId} o'z guruhlarini so'ramoqda`);
 
         const myGroups = await pool.query(`
+            WITH month_points AS (
+                SELECT
+                    student_id,
+                    COALESCE(SUM(points), 0)::int AS month_points
+                FROM student_point_events
+                WHERE month_name = $2
+                GROUP BY student_id
+            ),
+            group_points AS (
+                SELECT
+                    sg.group_id,
+                    sg.student_id,
+                    COALESCE(mp.month_points, 0)::int AS month_points
+                FROM student_groups sg
+                LEFT JOIN month_points mp ON mp.student_id = sg.student_id
+            ),
+            ranked_points AS (
+                SELECT
+                    group_id,
+                    student_id,
+                    month_points,
+                    DENSE_RANK() OVER (
+                        PARTITION BY group_id
+                        ORDER BY month_points DESC, student_id ASC
+                    ) AS rank_in_group
+                FROM group_points
+            )
             SELECT 
                 g.id as group_id,
                 g.name as group_name,
@@ -1059,13 +1348,18 @@ exports.getMyGroups = async (req, res) => {
                     SELECT COUNT(*) 
                     FROM student_groups sg2 
                     WHERE sg2.group_id = g.id AND sg2.status = 'active'
-                ) as total_students
+                ) as total_students,
+                COALESCE(rp.month_points, 0) as month_points,
+                COALESCE(rp.rank_in_group, 0) as rank_in_group
                 
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
             LEFT JOIN rooms r ON g.room_id = r.id
+            LEFT JOIN ranked_points rp
+              ON rp.group_id = sg.group_id
+             AND rp.student_id = sg.student_id
             
             WHERE sg.student_id = $1
             ORDER BY 
@@ -1075,8 +1369,9 @@ exports.getMyGroups = async (req, res) => {
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
+                COALESCE(rp.month_points, 0) DESC,
                 g.name
-        `, [studentId]);
+        `, [studentId, currentMonth]);
 
         const groupsData = myGroups.rows.map(group => ({
                 group_info: {
@@ -1089,7 +1384,9 @@ exports.getMyGroups = async (req, res) => {
                 start_date: group.group_start_date,
                 created_date: group.group_created_date,
                 total_students: parseInt(group.total_students),
-                schedule: group.schedule || null
+                schedule: group.schedule || null,
+                monthly_points: parseInt(group.month_points || 0),
+                monthly_rank: parseInt(group.rank_in_group || 0)
             },
             subject_info: {
                 name: group.subject_name
@@ -1104,7 +1401,9 @@ exports.getMyGroups = async (req, res) => {
             my_status: {
                 status: group.my_status,
                 join_date: group.my_join_date,
-                leave_date: group.my_leave_date
+                leave_date: group.my_leave_date,
+                monthly_points: parseInt(group.month_points || 0),
+                monthly_rank: parseInt(group.rank_in_group || 0)
             }
         }));
 
@@ -1137,6 +1436,7 @@ exports.getMyGroupInfo = async (req, res) => {
     try {
         const studentId = req.user.id;
         const groupId = parseInt(req.params.group_id);
+        const currentMonth = getCurrentMonthKey();
 
         console.log(`📚 Student ${studentId} guruh ${groupId} ma'lumotlarini so'ramoqda`);
 
@@ -1156,6 +1456,14 @@ exports.getMyGroupInfo = async (req, res) => {
 
         // Guruh to'liq ma'lumotlari va student qo'shilgan sana
         const groupInfo = await pool.query(`
+            WITH month_points AS (
+                SELECT
+                    student_id,
+                    COALESCE(SUM(points), 0)::int AS month_points
+                FROM student_point_events
+                WHERE month_name = $3
+                GROUP BY student_id
+            )
             SELECT 
                 g.id,
                 g.name,
@@ -1174,14 +1482,16 @@ exports.getMyGroupInfo = async (req, res) => {
                 s.name as subject_name,
                 
                 u.name || ' ' || u.surname as teacher_name,
-                u.phone as teacher_phone
+                u.phone as teacher_phone,
+                COALESCE(mp.month_points, 0)::int as my_month_points
                 
             FROM groups g
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
             JOIN student_groups sg ON g.id = sg.group_id AND sg.student_id = $2
+            LEFT JOIN month_points mp ON mp.student_id = sg.student_id
             WHERE g.id = $1
-        `, [groupId, studentId]);
+        `, [groupId, studentId, currentMonth]);
 
         if (groupInfo.rows.length === 0) {
             return res.status(404).json({
@@ -1192,6 +1502,28 @@ exports.getMyGroupInfo = async (req, res) => {
 
         // Guruh a'zolari (guruh doshlari)
         const groupmates = await pool.query(`
+            WITH month_points AS (
+                SELECT
+                    student_id,
+                    COALESCE(SUM(points), 0)::int AS month_points
+                FROM student_point_events
+                WHERE month_name = $2
+                GROUP BY student_id
+            ),
+            ranked_points AS (
+                SELECT
+                    sg.group_id,
+                    sg.student_id,
+                    COALESCE(mp.month_points, 0)::int AS month_points,
+                    DENSE_RANK() OVER (
+                        PARTITION BY sg.group_id
+                        ORDER BY COALESCE(mp.month_points, 0) DESC, u.surname, u.name, sg.student_id
+                    ) AS rank_in_group
+                FROM student_groups sg
+                LEFT JOIN month_points mp ON mp.student_id = sg.student_id
+                JOIN users u ON sg.student_id = u.id
+                WHERE sg.group_id = $1
+            )
             SELECT 
                 u.id,
                 u.name,
@@ -1203,6 +1535,8 @@ exports.getMyGroupInfo = async (req, res) => {
                 sg.status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
+                COALESCE(rp.month_points, 0)::int as month_points,
+                COALESCE(rp.rank_in_group, 0)::int as rank_in_group,
                 
                 -- Status tavsifi
                 CASE 
@@ -1216,16 +1550,20 @@ exports.getMyGroupInfo = async (req, res) => {
             JOIN users u ON sg.student_id = u.id
             LEFT JOIN profile_avatars pa
               ON LOWER(BTRIM(COALESCE(u.avatar_key, ''))) = LOWER(BTRIM(COALESCE(pa.avatar_key, '')))
+            LEFT JOIN ranked_points rp
+              ON rp.group_id = sg.group_id
+             AND rp.student_id = sg.student_id
             WHERE sg.group_id = $1
             ORDER BY 
+                COALESCE(rp.month_points, 0) DESC,
                 CASE sg.status 
                     WHEN 'active' THEN 1
                     WHEN 'stopped' THEN 2  
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
-                u.name, u.surname
-        `, [groupId]);
+                u.surname, u.name, u.id
+        `, [groupId, currentMonth]);
 
         // Mening to'lov ma'lumotlarim
         const myPayment = await pool.query(`
@@ -1270,7 +1608,13 @@ exports.getMyGroupInfo = async (req, res) => {
             },
             group_statistics: {
                 total_members: groupmates.rows.length,
-                active_members: groupmates.rows.filter(m => m.status === 'active').length
+                active_members: groupmates.rows.filter(m => m.status === 'active').length,
+                monthly_points: group.my_month_points || 0,
+                top_points: groupmates.rows[0]?.month_points || 0
+            },
+            my_rating: {
+                monthly_points: parseInt(group.my_month_points || 0),
+                rank_in_group: groupmates.rows.find(m => m.id === studentId)?.rank_in_group || 0
             },
             groupmates: groupmates.rows.map(mate => ({
                 id: mate.id,
@@ -1284,7 +1628,9 @@ exports.getMyGroupInfo = async (req, res) => {
                 status: mate.status,
                 status_description: mate.status_description,
                 join_date: mate.join_date,
-                leave_date: mate.leave_date
+                leave_date: mate.leave_date,
+                monthly_points: parseInt(mate.month_points || 0),
+                rank_in_group: parseInt(mate.rank_in_group || 0)
             }))
         };
 

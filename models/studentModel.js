@@ -69,6 +69,22 @@ const createStudentAdditionalTables = async () => {
       UNIQUE(student_id, group_id, month)
     );
 
+    -- Student ballari / reportlar tarixi
+    CREATE TABLE IF NOT EXISTS student_point_events (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+      lesson_id INTEGER REFERENCES lessons(id) ON DELETE SET NULL,
+      month_name VARCHAR(7) NOT NULL, -- Format: '2026-01'
+      points INTEGER NOT NULL DEFAULT 0,
+      source_type VARCHAR(30) NOT NULL DEFAULT 'manual', -- attendance, bonus, report, adjustment
+      title VARCHAR(255) NOT NULL,
+      description TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- To'lov tranzaksiyalari jadvali (Har bir to'lov alohida)
     CREATE TABLE IF NOT EXISTS payment_transactions (
       id SERIAL PRIMARY KEY,
@@ -179,12 +195,51 @@ const createStudentAdditionalTables = async () => {
           ) THEN
             ALTER TABLE student_payments ADD CONSTRAINT student_payments_student_month_group_unique UNIQUE (student_id, group_id, month);
           END IF;
+
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='group_id') THEN
+            ALTER TABLE student_point_events ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='lesson_id') THEN
+            ALTER TABLE student_point_events ADD COLUMN lesson_id INTEGER REFERENCES lessons(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='month_name') THEN
+            ALTER TABLE student_point_events ADD COLUMN month_name VARCHAR(7);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='points') THEN
+            ALTER TABLE student_point_events ADD COLUMN points INTEGER NOT NULL DEFAULT 0;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='source_type') THEN
+            ALTER TABLE student_point_events ADD COLUMN source_type VARCHAR(30) NOT NULL DEFAULT 'manual';
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='title') THEN
+            ALTER TABLE student_point_events ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT 'Ball qo'shildi';
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='description') THEN
+            ALTER TABLE student_point_events ADD COLUMN description TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='metadata') THEN
+            ALTER TABLE student_point_events ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='created_by') THEN
+            ALTER TABLE student_point_events ADD COLUMN created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+
+          UPDATE student_point_events
+          SET month_name = TO_CHAR(created_at, 'YYYY-MM')
+          WHERE month_name IS NULL OR TRIM(month_name) = '';
         END $$;
       `);
       console.log("✅ Barcha jadvallar group_id bilan yangilandi.");
     } catch (alterErr) {
       console.log("⚠️ Jadvallarni yangilashda xatolik:", alterErr.message);
     }
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_point_events_student_month
+        ON student_point_events(student_id, month_name, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_student_point_events_group_month
+        ON student_point_events(group_id, month_name, created_at DESC);
+    `);
 
     try {
       

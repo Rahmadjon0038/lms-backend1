@@ -1414,9 +1414,10 @@ exports.markAttendance = async (req, res) => {
     }
 
     const lessonAccess = await pool.query(
-      `SELECT
+       `SELECT
          l.id,
-         l.date,
+         TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date,
+         TO_CHAR(l.date, 'YYYY-MM') as lesson_month,
          l.group_id,
          COALESCE(l.teacher_id, g.teacher_id) as teacher_id,
          l.status,
@@ -1536,7 +1537,8 @@ exports.markAttendance = async (req, res) => {
                 route: '/notification-detail',
                 type: 'attendance',
                 lesson_id: String(lesson.id),
-                lesson_date: String(lesson.date),
+                lesson_date: String(lesson.lesson_date),
+                lesson_month: String(lesson.lesson_month || String(lesson.lesson_date).slice(0, 7)),
                 group_id: String(lesson.group_id),
                 group_name: lesson.group_name || '',
                 teacher_name: lesson.teacher_name || '',
@@ -1549,6 +1551,53 @@ exports.markAttendance = async (req, res) => {
           } catch (notificationError) {
             console.warn(
               `⚠️ Attendance notification yuborilmadi: ${notificationError.message}`
+            );
+          }
+
+          try {
+            const attendancePoints = {
+              keldi: 10,
+              kechikdi: 5,
+              kelmadi: 0,
+            };
+            const awardedPoints = attendancePoints[record.status] ?? 0;
+            await pool.query(
+              `
+              INSERT INTO student_point_events (
+                student_id,
+                group_id,
+                lesson_id,
+                month_name,
+                points,
+                source_type,
+                title,
+                description,
+                metadata,
+                created_by
+              ) VALUES ($1, $2, $3, $4, $5, 'attendance', $6, $7, $8::jsonb, $9)
+              `,
+              [
+                updatedStudentId,
+                lesson.group_id,
+                lesson.id,
+                lesson.lesson_month || String(lesson.lesson_date).slice(0, 7),
+                awardedPoints,
+                'Davomat belgilandi',
+                `${humanStatus} - ${awardedPoints} ball`,
+                JSON.stringify({
+                  status: record.status,
+                  lesson_date: lesson.lesson_date,
+                  group_name: lesson.group_name || '',
+                  teacher_name: lesson.teacher_name || '',
+                  subject_name: lesson.subject_name || '',
+                  awarded_points: awardedPoints,
+                }),
+                userId,
+              ]
+            );
+          } catch (pointsError) {
+            console.warn(
+              `⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`
             );
           }
         }
