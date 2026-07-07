@@ -477,6 +477,8 @@ router.get("/:student_id/groups", protect, roleCheck(['admin']), studentControll
  *         description: Ruxsat berilmadi (token kerak)
  */
 router.get("/my-groups", protect, studentController.getMyGroups);
+router.get("/my-point-reports", protect, studentController.getMyPointReports);
+router.post("/point-events", protect, roleCheck(['teacher', 'admin', 'super_admin']), studentController.createStudentPointEvent);
 
 /**
  * @swagger
