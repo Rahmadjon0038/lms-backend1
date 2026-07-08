@@ -412,6 +412,7 @@ exports.getAllStudents = async (req, res) => {
         u.course_status,
         u.course_start_date,
         u.course_end_date,
+        COALESCE(NULLIF(BTRIM(u.unassigned_reason), ''), 'Yangi qo''shilgan') as unassigned_reason,
         ${hasPasswordPlainColumn ? 'u.password_plain as password,' : 'NULL::text as password,'}
         u.subject_id as registered_subject_id,
         sp.name as registered_subject_name,

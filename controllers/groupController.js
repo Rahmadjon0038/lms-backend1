@@ -99,6 +99,11 @@ const normalizeStudentIds = (studentIds) => {
     return [...new Set(normalized)];
 };
 
+const normalizeUnassignedReason = (reason) => {
+    const normalized = String(reason || '').trim();
+    return normalized || "Sabab ko'rsatilmagan";
+};
+
 const getGroupMembershipMeta = async (groupId) => {
     const groupRes = await pool.query(
         `SELECT g.id, g.name as group_name, g.teacher_id, g.status, g.is_active,
@@ -111,7 +116,7 @@ const getGroupMembershipMeta = async (groupId) => {
     return groupRes.rows[0] || null;
 };
 
-const syncStudentPrimaryGroup = async (studentId) => {
+const syncStudentPrimaryGroup = async (studentId, unassignedReason = null) => {
     const activeGroupRes = await pool.query(
         `SELECT sg.group_id,
                 g.name as group_name,
@@ -135,7 +140,8 @@ const syncStudentPrimaryGroup = async (studentId) => {
              SET group_id = $1,
                  group_name = $2,
                  teacher_id = $3,
-                 teacher_name = $4
+                 teacher_name = $4,
+                 unassigned_reason = NULL
              WHERE id = $5`,
             [current.group_id, current.group_name, current.teacher_id, current.teacher_name, studentId]
         );
@@ -147,9 +153,10 @@ const syncStudentPrimaryGroup = async (studentId) => {
          SET group_id = NULL,
              group_name = NULL,
              teacher_id = NULL,
-             teacher_name = NULL
+             teacher_name = NULL,
+             unassigned_reason = $2
          WHERE id = $1`,
-        [studentId]
+        [studentId, normalizeUnassignedReason(unassignedReason)]
     );
     return null;
 };
@@ -813,6 +820,7 @@ exports.updateGroupStatus = async (req, res) => {
 exports.removeStudentFromGroup = async (req, res) => {
     const group_id = parseInt(req.params.group_id);
     const student_id = parseInt(req.params.student_id);
+    const reason = normalizeUnassignedReason(req.body?.reason || req.body?.unassigned_reason);
     try {
         const groupRes = await pool.query(
             'SELECT id, teacher_id FROM groups WHERE id = $1',
@@ -830,6 +838,7 @@ exports.removeStudentFromGroup = async (req, res) => {
             [group_id, student_id]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Bu student guruhda topilmadi" });
+        await syncStudentPrimaryGroup(student_id, reason);
         res.json({ success: true, message: "Student guruhdan o'chirildi" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
@@ -911,7 +920,8 @@ exports.adminAddStudentToGroup = async (req, res) => {
             `UPDATE users SET 
               group_id = $1, 
               group_name = $2, 
-              teacher_id = $3
+              teacher_id = $3,
+              unassigned_reason = NULL
              WHERE id = $4
              RETURNING id, name, surname, group_id, group_name, teacher_id`,
             [groupData.id, groupData.group_name, groupData.teacher_id, student_id]
@@ -1024,7 +1034,8 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
                 `UPDATE users
                  SET group_id = $1,
                      group_name = $2,
-                     teacher_id = $3
+                     teacher_id = $3,
+                     unassigned_reason = NULL
                  WHERE id = $4`,
                 [groupData.id, groupData.group_name, groupData.teacher_id, studentId]
             );
@@ -1071,6 +1082,7 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
 exports.bulkRemoveStudentsFromGroup = async (req, res) => {
     const groupId = parseInt(req.params.group_id, 10);
     const studentIds = normalizeStudentIds(req.body.student_ids);
+    const reason = normalizeUnassignedReason(req.body?.reason || req.body?.unassigned_reason);
 
     if (!Number.isInteger(groupId) || groupId <= 0) {
         return res.status(400).json({ message: "group_id to'g'ri raqam bo'lishi kerak" });
@@ -1115,7 +1127,7 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
                 continue;
             }
 
-            await syncStudentPrimaryGroup(studentId);
+            await syncStudentPrimaryGroup(studentId, reason);
 
             const member = memberMap.get(studentId);
             removed.push({
@@ -1261,7 +1273,8 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                  SET group_id = $1,
                      group_name = $2,
                      teacher_id = $3,
-                     teacher_name = $4
+                     teacher_name = $4,
+                     unassigned_reason = NULL
                  WHERE id = $5`,
                 [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, studentId]
             );
@@ -1341,7 +1354,8 @@ exports.studentJoinByCode = async (req, res) => {
             `UPDATE users SET 
               group_id = $1, 
               group_name = $2, 
-              teacher_id = $3
+              teacher_id = $3,
+              unassigned_reason = NULL
              WHERE id = $4`,
             [groupData.id, groupData.group_name, groupData.teacher_id, req.user.id]
         );
@@ -1723,7 +1737,8 @@ exports.changeStudentGroup = async (req, res) => {
               group_id = $1, 
               group_name = $2, 
               teacher_id = $3, 
-              teacher_name = $4
+              teacher_name = $4,
+              unassigned_reason = NULL
              WHERE id = $5
              RETURNING id, name, surname, group_id, group_name, teacher_id, teacher_name`,
             [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, student_id]

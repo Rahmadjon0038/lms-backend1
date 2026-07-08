@@ -221,9 +221,9 @@ const registerStudent = async (req, res) => {
         const newUser = await pool.query(
             `INSERT INTO users (
                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
-                password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
+                unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             ) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP) 
              RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
             [
                 name,
@@ -239,6 +239,7 @@ const registerStudent = async (req, res) => {
                 normalizedAge,
                 selectedSubject.name,
                 normalizedSubjectId,
+                "Yangi qo'shilgan",
                 recoveryKey,
                 recoveryKeyHash
             ]
@@ -336,9 +337,9 @@ const registerStudentsBulk = async (req, res) => {
                         const newUser = await pool.query(
                             `INSERT INTO users (
                                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
-                                password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
+                                unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
                             ) 
-                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP) 
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP) 
                              RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
                             [
                                 name,
@@ -354,6 +355,7 @@ const registerStudentsBulk = async (req, res) => {
                                 normalizedAge,
                                 subject.name,
                                 subjectId,
+                                "Yangi qo'shilgan",
                                 recoveryKey,
                                 recoveryKeyHash
                             ]

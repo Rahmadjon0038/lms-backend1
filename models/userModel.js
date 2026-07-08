@@ -28,6 +28,7 @@ const createUserTable = async () => {
       work_days_hours TEXT, -- Ish kunlari va soatlari
       avatar_key VARCHAR(100), -- Profil avatari kaliti
       fcm_token TEXT, -- Mobil push notification tokeni
+      unassigned_reason TEXT DEFAULT 'Yangi qo''shilgan', -- Guruhsiz bo'lish sababi
       group_id INTEGER,
       group_name VARCHAR(255),
       teacher_id INTEGER,
@@ -134,6 +135,9 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='fcm_token') THEN
             ALTER TABLE users ADD COLUMN fcm_token TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='unassigned_reason') THEN
+            ALTER TABLE users ADD COLUMN unassigned_reason TEXT DEFAULT 'Yangi qo''shilgan';
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='termination_date') THEN
             ALTER TABLE users ADD COLUMN termination_date DATE;
