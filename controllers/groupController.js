@@ -126,8 +126,8 @@ const syncStudentPrimaryGroup = async (studentId, unassignedReason = null) => {
          JOIN groups g ON g.id = sg.group_id
          LEFT JOIN users t ON g.teacher_id = t.id
          WHERE sg.student_id = $1
-         ORDER BY CASE WHEN sg.status = 'active' THEN 0 ELSE 1 END,
-                  sg.joined_at DESC NULLS LAST,
+           AND sg.status = 'active'
+         ORDER BY sg.joined_at DESC NULLS LAST,
                   sg.group_id DESC
          LIMIT 1`,
         [studentId]
@@ -820,7 +820,9 @@ exports.updateGroupStatus = async (req, res) => {
 exports.removeStudentFromGroup = async (req, res) => {
     const group_id = parseInt(req.params.group_id);
     const student_id = parseInt(req.params.student_id);
-    const reason = normalizeUnassignedReason(req.body?.reason || req.body?.unassigned_reason);
+    const reason = normalizeUnassignedReason(
+        req.body?.reason || req.body?.unassigned_reason || req.query?.reason || req.query?.unassigned_reason
+    );
     try {
         const groupRes = await pool.query(
             'SELECT id, teacher_id FROM groups WHERE id = $1',
@@ -1082,7 +1084,9 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
 exports.bulkRemoveStudentsFromGroup = async (req, res) => {
     const groupId = parseInt(req.params.group_id, 10);
     const studentIds = normalizeStudentIds(req.body.student_ids);
-    const reason = normalizeUnassignedReason(req.body?.reason || req.body?.unassigned_reason);
+    const reason = normalizeUnassignedReason(
+        req.body?.reason || req.body?.unassigned_reason || req.query?.reason || req.query?.unassigned_reason
+    );
 
     if (!Number.isInteger(groupId) || groupId <= 0) {
         return res.status(400).json({ message: "group_id to'g'ri raqam bo'lishi kerak" });
