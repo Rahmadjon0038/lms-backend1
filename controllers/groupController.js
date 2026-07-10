@@ -1277,7 +1277,9 @@ exports.bulkChangeStudentGroup = async (req, res) => {
 
             if (sourceGroupId) {
                 await pool.query(
-                    `DELETE FROM student_groups
+                    `UPDATE student_groups
+                     SET status = 'stopped',
+                         left_at = CURRENT_TIMESTAMP
                      WHERE student_id = $1 AND group_id = $2`,
                     [studentId, sourceGroupId]
                 );
@@ -1748,7 +1750,10 @@ exports.changeStudentGroup = async (req, res) => {
         // Eski guruhdan o'chirish (agar mavjud bo'lsa)
         if (oldGroupId) {
             await pool.query(
-                'DELETE FROM student_groups WHERE student_id = $1 AND group_id = $2',
+                `UPDATE student_groups
+                 SET status = 'stopped',
+                     left_at = CURRENT_TIMESTAMP
+                 WHERE student_id = $1 AND group_id = $2`,
                 [student_id, oldGroupId]
             );
         }

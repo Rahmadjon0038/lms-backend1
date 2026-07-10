@@ -1858,10 +1858,11 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         JOIN groups g ON sg.group_id = g.id
         JOIN subjects sub ON g.subject_id = sub.id
         LEFT JOIN users t ON g.teacher_id = t.id
-        WHERE sg.status = 'active'
+        WHERE sg.status IN ('active', 'stopped', 'finished')
           AND g.status = 'active'
           AND u.role = 'student'
-          AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1 -- Faqat o'sha oyda yoki undan oldin qo'shilganlar
+          AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
+          AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
           AND NOT EXISTS (
             SELECT 1 FROM monthly_snapshots ms 
             WHERE ms.student_id = sg.student_id 
@@ -2167,10 +2168,11 @@ exports.getNewStudentsNotification = async (req, res) => {
       ) attendance_count ON attendance_count.student_id = sg.student_id 
                          AND attendance_count.group_id = sg.group_id
       
-      WHERE sg.status = 'active'
+      WHERE sg.status IN ('active', 'stopped', 'finished')
         AND g.status = 'active'
         AND u.role = 'student'
-        AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1  -- O'sha oyda yoki undan oldin qo'shilgan
+        AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
         
         -- Snapshot da yo'qligini tekshirish
         AND NOT EXISTS (
