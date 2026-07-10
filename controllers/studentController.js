@@ -175,6 +175,10 @@ exports.updateStudentGroupStatus = async (req, res) => {
             result = await pool.query(
                 `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
                  VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
+                 ON CONFLICT (student_id, group_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    joined_at = CURRENT_TIMESTAMP,
+                    left_at = EXCLUDED.left_at
                  RETURNING student_id, group_id, status, joined_at, left_at`,
                 [student_id, group_id, status, left_at]
             );
