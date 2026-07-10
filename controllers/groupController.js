@@ -913,9 +913,23 @@ exports.adminAddStudentToGroup = async (req, res) => {
         }
         
         const result = await pool.query(
-            "INSERT INTO student_groups (student_id, group_id, status) VALUES ($1, $2, $3) RETURNING *",
+            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)
+             ON CONFLICT (student_id, group_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                joined_at = CURRENT_TIMESTAMP,
+                left_at = NULL
+             WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
+             RETURNING *`,
             [student_id, group_id, studentGroupStatus]
         );
+
+        if (result.rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: `${student.name} ${student.surname} allaqachon ushbu guruhda faol`
+            });
+        }
 
         // Users jadvalida studentning ma'lumotlarini yangilash
         const updateResult = await pool.query(
@@ -1016,9 +1030,13 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
             }
 
             const insertResult = await pool.query(
-                `INSERT INTO student_groups (student_id, group_id, status)
-                 VALUES ($1, $2, 'active')
-                 ON CONFLICT (student_id, group_id) DO NOTHING
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
+                 VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, NULL)
+                 ON CONFLICT (student_id, group_id) DO UPDATE SET
+                    status = 'active',
+                    joined_at = CURRENT_TIMESTAMP,
+                    left_at = NULL
+                 WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
                  RETURNING student_id`,
                 [studentId, groupId]
             );
@@ -1268,7 +1286,10 @@ exports.bulkChangeStudentGroup = async (req, res) => {
             await pool.query(
                 `INSERT INTO student_groups (student_id, group_id, status)
                  VALUES ($1, $2, 'active')
-                 ON CONFLICT (student_id, group_id) DO NOTHING`,
+                 ON CONFLICT (student_id, group_id) DO UPDATE SET
+                    status = 'active',
+                    joined_at = CURRENT_TIMESTAMP,
+                    left_at = NULL`,
                 [studentId, newGroupId]
             );
 
@@ -1349,9 +1370,23 @@ exports.studentJoinByCode = async (req, res) => {
         
         // Student_groups jadvaliga qo'shish
         const result = await pool.query(
-            "INSERT INTO student_groups (student_id, group_id, status) VALUES ($1, $2, $3) RETURNING *",
+            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)
+             ON CONFLICT (student_id, group_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                joined_at = CURRENT_TIMESTAMP,
+                left_at = NULL
+             WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
+             RETURNING *`,
             [req.user.id, groupData.id, studentGroupStatus]
         );
+
+        if (result.rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Siz allaqachon ushbu guruhda faolsiz"
+            });
+        }
 
         // Users jadvalida studentning ma'lumotlarini yangilash
         await pool.query(
@@ -1731,7 +1766,10 @@ exports.changeStudentGroup = async (req, res) => {
         
         await pool.query(
             `INSERT INTO student_groups (student_id, group_id, status) \n             VALUES ($1, $2, $3)
-             ON CONFLICT (student_id, group_id) DO NOTHING`,
+             ON CONFLICT (student_id, group_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                joined_at = CURRENT_TIMESTAMP,
+                left_at = NULL`,
             [student_id, new_group_id, studentGroupStatus]
         );
 
