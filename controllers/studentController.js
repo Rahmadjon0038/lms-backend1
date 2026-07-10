@@ -1350,10 +1350,11 @@ exports.getMyGroups = async (req, res) => {
                     DENSE_RANK() OVER (
                         PARTITION BY group_id
                         ORDER BY month_points DESC, student_id ASC
-                    ) AS rank_in_group
+                    ) AS rank_in_group,
+                    MAX(month_points) OVER (PARTITION BY group_id) AS group_max_points
                 FROM group_points
             )
-            SELECT 
+            SELECT
                 g.id as group_id,
                 g.name as group_name,
                 g.unique_code,
@@ -1382,7 +1383,8 @@ exports.getMyGroups = async (req, res) => {
                     WHERE sg2.group_id = g.id AND sg2.status = 'active'
                 ) as total_students,
                 COALESCE(rp.month_points, 0) as month_points,
-                COALESCE(rp.rank_in_group, 0) as rank_in_group
+                COALESCE(rp.rank_in_group, 0) as rank_in_group,
+                COALESCE(rp.group_max_points, 0) as group_max_points
                 
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
@@ -1418,7 +1420,8 @@ exports.getMyGroups = async (req, res) => {
                 total_students: parseInt(group.total_students),
                 schedule: group.schedule || null,
                 monthly_points: parseInt(group.month_points || 0),
-                monthly_rank: parseInt(group.rank_in_group || 0)
+                monthly_rank: parseInt(group.rank_in_group || 0),
+                group_max_points: parseInt(group.group_max_points || 0)
             },
             subject_info: {
                 name: group.subject_name
