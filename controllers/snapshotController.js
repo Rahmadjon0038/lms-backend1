@@ -1859,7 +1859,8 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         JOIN subjects sub ON g.subject_id = sub.id
         LEFT JOIN users t ON g.teacher_id = t.id
         WHERE sg.status IN ('active', 'stopped', 'finished')
-          AND g.status = 'active'
+          AND COALESCE(g.is_active, true) = true
+          AND COALESCE(g.status, 'draft') <> 'blocked'
           AND u.role = 'student'
           AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
@@ -2169,7 +2170,8 @@ exports.getNewStudentsNotification = async (req, res) => {
                          AND attendance_count.group_id = sg.group_id
       
       WHERE sg.status IN ('active', 'stopped', 'finished')
-        AND g.status = 'active'
+        AND COALESCE(g.is_active, true) = true
+        AND COALESCE(g.status, 'draft') <> 'blocked'
         AND u.role = 'student'
         AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
