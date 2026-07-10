@@ -1823,8 +1823,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
       });
     }
 
-    // Oyning birinchi snapshot sanasi bazaviy nuqta bo'ladi.
-    // MAX ishlatilsa keyinroq qo'shilgan snapshotlar hali qo'shilmagan eski yozuvlarni yashirib qo'yishi mumkin.
+    // To'lov jadvali mavjudligini tekshiramiz.
     const snapshotCreatedQuery = `
       SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
@@ -1859,25 +1858,23 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         JOIN groups g ON sg.group_id = g.id
         JOIN subjects sub ON g.subject_id = sub.id
         LEFT JOIN users t ON g.teacher_id = t.id
-        WHERE sg.joined_at > $1
-          AND sg.status = 'active'
+        WHERE sg.status = 'active'
           AND g.status = 'active'
-          AND g.class_status = 'started'
           AND u.role = 'student'
-          AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2 -- Faqat o'sha oyda yoki undan oldin qo'shilganlar
+          AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1 -- Faqat o'sha oyda yoki undan oldin qo'shilganlar
           AND NOT EXISTS (
             SELECT 1 FROM monthly_snapshots ms 
             WHERE ms.student_id = sg.student_id 
               AND ms.group_id = sg.group_id 
-              AND ms.month = $2
+              AND ms.month = $1
           )
     `; 
 
-    let params = [snapshotCreatedDate, month];
+    let params = [month];
 
     // Role-based access control
     if (userRole === 'teacher') {
-      newStudentsQuery += ` AND g.teacher_id = $3`;
+      newStudentsQuery += ` AND g.teacher_id = $2`;
       params.push(userId);
     }
 
@@ -2094,7 +2091,7 @@ exports.getNewStudentsNotification = async (req, res) => {
       });
     }
 
-    // Oyning birinchi snapshot sanasidan keyin qo'shilgan, lekin hali jadvalga kirmaganlarni ko'rsatamiz.
+    // To'lov jadvali mavjudligini tekshiramiz.
     const snapshotCreatedQuery = `
       SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
@@ -2150,7 +2147,7 @@ exports.getNewStudentsNotification = async (req, res) => {
           l.group_id,
           COUNT(l.id) as total_lessons
         FROM lessons l
-        WHERE TO_CHAR(l.date, 'YYYY-MM') = $2
+        WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
           AND COALESCE(l.is_holiday, false) = false
         GROUP BY l.group_id
       ) lesson_count ON lesson_count.group_id = g.id
@@ -2163,34 +2160,32 @@ exports.getNewStudentsNotification = async (req, res) => {
           COUNT(a.id) as attended
         FROM attendance a
         JOIN lessons l ON a.lesson_id = l.id
-        WHERE TO_CHAR(l.date, 'YYYY-MM') = $2
+        WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
           AND COALESCE(l.is_holiday, false) = false
           AND (a.status = 'keldi' OR a.status = 'present')
         GROUP BY a.student_id, l.group_id
       ) attendance_count ON attendance_count.student_id = sg.student_id 
                          AND attendance_count.group_id = sg.group_id
       
-      WHERE sg.joined_at > $1  -- Snapshot dan keyin qo'shilgan
-        AND sg.status = 'active'
+      WHERE sg.status = 'active'
         AND g.status = 'active'
-        AND g.class_status = 'started'
         AND u.role = 'student'
-        AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2  -- O'sha oyda qo'shilgan
+        AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1  -- O'sha oyda yoki undan oldin qo'shilgan
         
         -- Snapshot da yo'qligini tekshirish
         AND NOT EXISTS (
           SELECT 1 FROM monthly_snapshots ms 
           WHERE ms.student_id = sg.student_id 
             AND ms.group_id = sg.group_id 
-            AND ms.month = $2
+            AND ms.month = $1
         )
     `;
 
-    let params = [snapshotCreatedDate, month];
+    let params = [month];
 
     // Teacher faqat o'z guruhlarini ko'radi
     if (userRole === 'teacher') {
-      newStudentsQuery += ` AND g.teacher_id = $3`;
+      newStudentsQuery += ` AND g.teacher_id = $2`;
       params.push(userId);
     }
 
