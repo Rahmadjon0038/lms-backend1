@@ -1823,14 +1823,15 @@ exports.createSnapshotForNewStudents = async (req, res) => {
       });
     }
 
-    // Snapshot yaratilgan vaqtni topamiz
+    // Oyning birinchi snapshot sanasi bazaviy nuqta bo'ladi.
+    // MAX ishlatilsa keyinroq qo'shilgan snapshotlar hali qo'shilmagan eski yozuvlarni yashirib qo'yishi mumkin.
     const snapshotCreatedQuery = `
-      SELECT MAX(snapshot_created_at) as latest_snapshot_date
+      SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
       WHERE month = $1
     `;
     const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month]);
-    const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.latest_snapshot_date;
+    const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.initial_snapshot_date;
 
     if (!snapshotCreatedDate) {
       return res.status(400).json({
@@ -1861,6 +1862,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         WHERE sg.joined_at > $1
           AND sg.status = 'active'
           AND g.status = 'active'
+          AND g.class_status = 'started'
           AND u.role = 'student'
           AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2 -- Faqat o'sha oyda yoki undan oldin qo'shilganlar
           AND NOT EXISTS (
@@ -1971,7 +1973,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         ? Math.round((attendance.attended_lessons / attendance.total_lessons) * 100)
         : 0;
 
-      // Snapshot yaratamiz
+      // Snapshot yaratamiz yoki mavjud bo'lsa yangilaymiz.
       const insertQuery = `
         INSERT INTO monthly_snapshots (
           month, student_id, group_id, student_name, student_surname,
@@ -1984,7 +1986,29 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW()
-        ) RETURNING id
+        )
+        ON CONFLICT (month, student_id, group_id) DO UPDATE SET
+          student_name = EXCLUDED.student_name,
+          student_surname = EXCLUDED.student_surname,
+          student_phone = EXCLUDED.student_phone,
+          student_father_name = EXCLUDED.student_father_name,
+          student_father_phone = EXCLUDED.student_father_phone,
+          group_name = EXCLUDED.group_name,
+          group_price = EXCLUDED.group_price,
+          subject_name = EXCLUDED.subject_name,
+          teacher_name = EXCLUDED.teacher_name,
+          monthly_status = EXCLUDED.monthly_status,
+          payment_status = EXCLUDED.payment_status,
+          required_amount = EXCLUDED.required_amount,
+          paid_amount = EXCLUDED.paid_amount,
+          discount_amount = EXCLUDED.discount_amount,
+          debt_amount = EXCLUDED.debt_amount,
+          last_payment_date = EXCLUDED.last_payment_date,
+          total_lessons = EXCLUDED.total_lessons,
+          attended_lessons = EXCLUDED.attended_lessons,
+          attendance_percentage = EXCLUDED.attendance_percentage,
+          snapshot_updated_at = NOW()
+        RETURNING id
       `;
 
       const insertParams = [
@@ -1998,15 +2022,49 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         attendance.attended_lessons, attendancePercentage
       ];
 
-      return db.query(insertQuery, insertParams);
+      const snapshotResult = await db.query(insertQuery, insertParams);
+
+      // To'lov sahifasidagi amallar student_payments bilan ham ishlaydi.
+      // Shu sabab yangi snapshot qo'shilganda student_payments yozuvini ham sinxron saqlaymiz.
+      await db.query(
+        `
+          INSERT INTO student_payments (
+            student_id, group_id, month, required_amount, paid_amount,
+            discount_amount, last_payment_date, created_by, updated_by,
+            created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $8, NOW(), NOW()
+          )
+          ON CONFLICT (student_id, group_id, month) DO UPDATE SET
+            required_amount = EXCLUDED.required_amount,
+            paid_amount = EXCLUDED.paid_amount,
+            discount_amount = EXCLUDED.discount_amount,
+            last_payment_date = EXCLUDED.last_payment_date,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = NOW()
+        `,
+        [
+          student.student_id,
+          student.group_id,
+          month,
+          requiredAmount,
+          paidAmount,
+          discountAmount,
+          payment.last_payment_date,
+          userId
+        ]
+      );
+
+      return snapshotResult;
     });
 
-    await Promise.all(snapshotPromises);
+    const snapshotResults = await Promise.all(snapshotPromises);
+    const affectedCount = snapshotResults.reduce((sum, result) => sum + (result.rowCount || 0), 0);
 
     res.json({
       success: true,
-      message: `${newStudentsResult.rows.length} ta yangi talaba uchun To'lov jadvali yaratildi`,
-      count: newStudentsResult.rows.length
+      message: `${affectedCount} ta yangi talaba uchun To'lov jadvali yaratildi`,
+      count: affectedCount
     });
 
   } catch (error) {
@@ -2036,14 +2094,14 @@ exports.getNewStudentsNotification = async (req, res) => {
       });
     }
 
-    // Snapshot yaratilgan vaqtni topamiz
+    // Oyning birinchi snapshot sanasidan keyin qo'shilgan, lekin hali jadvalga kirmaganlarni ko'rsatamiz.
     const snapshotCreatedQuery = `
-      SELECT MAX(snapshot_created_at) as latest_snapshot_date
+      SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
       WHERE month = $1
     `;
     const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month]);
-    const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.latest_snapshot_date;
+    const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.initial_snapshot_date;
 
     if (!snapshotCreatedDate) {
       return res.status(400).json({
@@ -2115,6 +2173,7 @@ exports.getNewStudentsNotification = async (req, res) => {
       WHERE sg.joined_at > $1  -- Snapshot dan keyin qo'shilgan
         AND sg.status = 'active'
         AND g.status = 'active'
+        AND g.class_status = 'started'
         AND u.role = 'student'
         AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $2  -- O'sha oyda qo'shilgan
         
