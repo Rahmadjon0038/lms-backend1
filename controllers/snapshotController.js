@@ -1862,7 +1862,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
           AND COALESCE(g.is_active, true) = true
           AND COALESCE(g.status, 'draft') <> 'blocked'
           AND u.role = 'student'
-          AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
+          AND COALESCE(DATE(sg.joined_at), ($1 || '-01')::date) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
           AND NOT EXISTS (
             SELECT 1 FROM monthly_snapshots ms 
@@ -2173,7 +2173,7 @@ exports.getNewStudentsNotification = async (req, res) => {
         AND COALESCE(g.is_active, true) = true
         AND COALESCE(g.status, 'draft') <> 'blocked'
         AND u.role = 'student'
-        AND DATE(sg.joined_at) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
+        AND COALESCE(DATE(sg.joined_at), ($1 || '-01')::date) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= ($1 || '-01')::date)
         
         -- Snapshot da yo'qligini tekshirish
