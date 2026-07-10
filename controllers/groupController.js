@@ -1253,7 +1253,18 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                 continue;
             }
 
-            const sourceGroupId = fromGroupId || student.group_id;
+            let sourceGroupId = fromGroupId || student.group_id;
+            if (!sourceGroupId) {
+                // users.group_id bo'sh bo'lsa, yagona faol a'zolikni manba deb olamiz
+                const activeMemberships = await pool.query(
+                    `SELECT group_id FROM student_groups
+                     WHERE student_id = $1 AND status = 'active'`,
+                    [studentId]
+                );
+                if (activeMemberships.rows.length === 1) {
+                    sourceGroupId = activeMemberships.rows[0].group_id;
+                }
+            }
             if (sourceGroupId && sourceGroupId === newGroupId) {
                 skipped.push({
                     student_id: studentId,
@@ -1668,12 +1679,19 @@ exports.getGroupViewForStudent = async (req, res) => {
 
 // 11. Studentni boshqa guruhga o'tkazish (Admin)
 exports.changeStudentGroup = async (req, res) => {
-    const { student_id, new_group_id } = req.body;
+    const { student_id, new_group_id, old_group_id } = req.body;
 
     if (!student_id || !new_group_id) {
-        return res.status(400).json({ 
-            message: "student_id va new_group_id majburiy" 
+        return res.status(400).json({
+            message: "student_id va new_group_id majburiy"
         });
+    }
+
+    const requestedOldGroupId = old_group_id !== undefined && old_group_id !== null
+        ? parseInt(old_group_id, 10)
+        : null;
+    if (old_group_id !== undefined && old_group_id !== null && (!Number.isInteger(requestedOldGroupId) || requestedOldGroupId <= 0)) {
+        return res.status(400).json({ message: "old_group_id to'g'ri raqam bo'lishi kerak" });
     }
 
     try {
@@ -1710,7 +1728,28 @@ exports.changeStudentGroup = async (req, res) => {
             });
         }
 
-        const oldGroupId = student.group_id;
+        // Qaysi guruhdan ko'chirilayotganini aniqlaymiz:
+        // 1) frontend yuborgan old_group_id (admin aynan shu qatordan o'zgartirgan)
+        // 2) users.group_id (asosiy guruh)
+        // 3) talabaning yagona faol a'zoligi bo'lsa — o'sha
+        let oldGroupId = requestedOldGroupId || student.group_id;
+        if (!oldGroupId) {
+            const activeMemberships = await pool.query(
+                `SELECT group_id FROM student_groups
+                 WHERE student_id = $1 AND status = 'active'`,
+                [student_id]
+            );
+            if (activeMemberships.rows.length === 1) {
+                oldGroupId = activeMemberships.rows[0].group_id;
+            }
+        }
+
+        if (oldGroupId && Number(oldGroupId) === Number(new_group_id)) {
+            return res.status(400).json({
+                success: false,
+                message: `${student.name} ${student.surname} allaqachon ushbu guruhda`
+            });
+        }
 
         // Yangi guruhni tekshirish
         const newGroupCheck = await pool.query(
