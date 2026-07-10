@@ -1468,9 +1468,10 @@ exports.getMyGroupInfo = async (req, res) => {
     try {
         const studentId = req.user.id;
         const groupId = parseInt(req.params.group_id);
-        const currentMonth = getCurrentMonthKey();
+        // Ball tizimi oyma-oy — mobil ilova ?month=YYYY-MM bilan istalgan oyni so'rashi mumkin
+        const currentMonth = buildMonthFilter(req.query.month);
 
-        console.log(`📚 Student ${studentId} guruh ${groupId} ma'lumotlarini so'ramoqda`);
+        console.log(`📚 Student ${studentId} guruh ${groupId} ma'lumotlarini so'ramoqda (oy: ${currentMonth})`);
 
         // Avval student shu guruhda borligini tekshirish
         const membershipCheck = await pool.query(`
@@ -1620,6 +1621,7 @@ exports.getMyGroupInfo = async (req, res) => {
         const payment = myPayment.rows[0];
 
         const responseData = {
+            month: currentMonth,
             group_details: {
                 id: group.id,
                 name: group.name,
