@@ -1384,7 +1384,13 @@ exports.getMyGroups = async (req, res) => {
                 ) as total_students,
                 COALESCE(rp.month_points, 0) as month_points,
                 COALESCE(rp.rank_in_group, 0) as rank_in_group,
-                COALESCE(rp.group_max_points, 0) as group_max_points
+                COALESCE(rp.group_max_points, 0) as group_max_points,
+                (
+                    SELECT TO_CHAR(MAX(spe.created_at), 'DD.MM.YYYY')
+                    FROM student_point_events spe
+                    WHERE spe.student_id = sg.student_id
+                      AND spe.month_name = $2
+                ) as last_point_date
                 
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
@@ -1421,7 +1427,8 @@ exports.getMyGroups = async (req, res) => {
                 schedule: group.schedule || null,
                 monthly_points: parseInt(group.month_points || 0),
                 monthly_rank: parseInt(group.rank_in_group || 0),
-                group_max_points: parseInt(group.group_max_points || 0)
+                group_max_points: parseInt(group.group_max_points || 0),
+                last_point_date: group.last_point_date || null
             },
             subject_info: {
                 name: group.subject_name
