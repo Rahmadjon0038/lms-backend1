@@ -443,6 +443,10 @@ router.delete(
  *                 type: integer
  *                 example: 3
  *                 description: Yangi guruh ID
+ *               old_group_id:
+ *                 type: integer
+ *                 example: 2
+ *                 description: (Ixtiyoriy) Qaysi guruhdan o'tkazilishi. Berilmasa users.group_id yoki yagona faol a'zolik ishlatiladi
  *     responses:
  *       200:
  *         description: Student guruhdan guruhga ko'chirildi

@@ -29,6 +29,50 @@ const createPaymentTables = async () => {
     `);
     console.log('✅ student_payments jadvali yaratildi');
 
+    // Eski bazalarda UNIQUE(student_id, month) bo'lishi mumkin — uni olib tashlab,
+    // (student_id, group_id, month) bo'yicha unique borligini kafolatlaymiz.
+    // ON CONFLICT (student_id, group_id, month) ishlashi uchun shart.
+    await pool.query(`
+      DO $$
+      DECLARE
+        legacy_constraint RECORD;
+        has_correct_unique BOOLEAN;
+      BEGIN
+        -- Faqat (student_id, month) ustunlaridan iborat unique constraintlarni topib o'chiramiz
+        FOR legacy_constraint IN
+          SELECT c.conname
+          FROM pg_constraint c
+          WHERE c.conrelid = 'student_payments'::regclass
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY a.attname)
+              FROM unnest(c.conkey) AS k
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+            ) = ARRAY['month', 'student_id']::name[]
+        LOOP
+          EXECUTE format('ALTER TABLE student_payments DROP CONSTRAINT %I', legacy_constraint.conname);
+        END LOOP;
+
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          WHERE c.conrelid = 'student_payments'::regclass
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY a.attname)
+              FROM unnest(c.conkey) AS k
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+            ) = ARRAY['group_id', 'month', 'student_id']::name[]
+        ) INTO has_correct_unique;
+
+        IF NOT has_correct_unique THEN
+          ALTER TABLE student_payments
+            ADD CONSTRAINT student_payments_student_group_month_unique UNIQUE (student_id, group_id, month);
+        END IF;
+      END $$;
+    `);
+    console.log('✅ student_payments unique constraint (student_id, group_id, month) tekshirildi');
+
     // 2. PAYMENT_TRANSACTIONS - to'lov tranzaksiyalari
     // YANGI: group_id qo'shildi
     await pool.query(`
@@ -102,8 +146,10 @@ const createPaymentTables = async () => {
     console.log('✅ Indekslar yaratildi');
 
     // 5. Trigger yaratish - to'lov qilinganda required_amount ni chegirma bilan hisoblash
+    // MUHIM: hisob-kitob aynan NEW.group_id bo'yicha yuritiladi. Talaba bir vaqtda
+    // bir nechta guruhda o'qishi mumkin, shuning uchun student_id bo'yicha qidirish noto'g'ri.
     await pool.query(`
-      CREATE OR REPLACE FUNCTION calculate_required_amount() 
+      CREATE OR REPLACE FUNCTION calculate_required_amount()
       RETURNS TRIGGER AS $$
       DECLARE
         group_price DECIMAL(10,2);
@@ -112,23 +158,27 @@ const createPaymentTables = async () => {
         total_discount DECIMAL(10,2) := 0;
         discount_rec RECORD;
       BEGIN
-        -- Guruh narxi va statusini olish
+        -- Aynan shu yozuvning guruhi bo'yicha narx va statusni olish
         SELECT g.price, g.status, g.class_status INTO group_price, group_status, group_class_status
-        FROM student_groups sg
-        JOIN groups g ON sg.group_id = g.id
-        WHERE sg.student_id = NEW.student_id AND sg.status = 'active';
+        FROM groups g
+        WHERE g.id = NEW.group_id;
 
-        -- Agar guruh active emas yoki darslar boshlanmagan bo'lsa, payment yaratmaslik
-        IF group_status != 'active' OR group_class_status != 'started' THEN
-          -- Bu holatda trigger funksiyasini to'xtatamiz
+        -- Guruh topilmasa (masalan, tarixiy yozuv) qiymatlarni o'zgartirmasdan qoldiramiz
+        IF NOT FOUND THEN
+          RETURN NEW;
+        END IF;
+
+        -- Faqat yangi yozuvda: guruh active emas yoki darslar boshlanmagan bo'lsa, payment yaratmaslik
+        IF TG_OP = 'INSERT' AND (group_status IS DISTINCT FROM 'active' OR group_class_status IS DISTINCT FROM 'started') THEN
           RETURN NULL;
         END IF;
 
-        -- Aktiv chegirmalarni hisoblash
-        FOR discount_rec IN 
+        -- Shu guruhga tegishli aktiv chegirmalarni hisoblash
+        FOR discount_rec IN
           SELECT discount_type, discount_value
-          FROM student_discounts 
-          WHERE student_id = NEW.student_id 
+          FROM student_discounts
+          WHERE student_id = NEW.student_id
+            AND (group_id IS NULL OR group_id = NEW.group_id)
             AND is_active = true
             AND (start_month IS NULL OR NEW.month >= start_month)
             AND (end_month IS NULL OR NEW.month <= end_month)
