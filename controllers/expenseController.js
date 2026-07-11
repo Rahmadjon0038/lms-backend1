@@ -86,7 +86,11 @@ const createExpense = async (req, res) => {
 };
 
 const getExpenses = async (req, res) => {
-  const month = req.query.month || getCurrentMonth();
+  const dateFilter = typeof req.query.date === 'string' ? req.query.date.trim() : '';
+  if (dateFilter && !isValidDate(dateFilter)) {
+    return res.status(400).json({ success: false, message: 'date formati YYYY-MM-DD bo\'lishi kerak', errors: {} });
+  }
+  const month = dateFilter ? dateFilter.slice(0, 7) : req.query.month || getCurrentMonth();
   const adminNameFilter = typeof req.query.admin_name === 'string' ? req.query.admin_name.trim() : '';
   const categoryIdFilter = req.query.category_id !== undefined ? Number(req.query.category_id) : null;
   if (!isValidMonth(month)) {
@@ -100,6 +104,12 @@ const getExpenses = async (req, res) => {
     const filters = [];
     const params = [month];
     let paramIndex = 2;
+
+    if (dateFilter) {
+      filters.push(`ce.expense_date = $${paramIndex}::date`);
+      params.push(dateFilter);
+      paramIndex++;
+    }
 
     if (adminNameFilter) {
       filters.push(`(u.name ILIKE $${paramIndex} OR u.surname ILIKE $${paramIndex} OR (u.name || ' ' || u.surname) ILIKE $${paramIndex})`);
@@ -132,6 +142,7 @@ const getExpenses = async (req, res) => {
       success: true,
       data: {
         month,
+        date: dateFilter || undefined,
         admin_name: adminNameFilter || undefined,
         category_id: categoryIdFilter || undefined,
         count: result.rows.length,
@@ -144,7 +155,11 @@ const getExpenses = async (req, res) => {
 };
 
 const getExpenseSummary = async (req, res) => {
-  const month = req.query.month || getCurrentMonth();
+  const dateFilter = typeof req.query.date === 'string' ? req.query.date.trim() : '';
+  if (dateFilter && !isValidDate(dateFilter)) {
+    return res.status(400).json({ success: false, message: 'date formati YYYY-MM-DD bo\'lishi kerak', errors: {} });
+  }
+  const month = dateFilter ? dateFilter.slice(0, 7) : req.query.month || getCurrentMonth();
   const categoryIdFilter = req.query.category_id !== undefined ? Number(req.query.category_id) : null;
   if (!isValidMonth(month)) {
     return res.status(400).json({ success: false, message: 'month formati YYYY-MM bo\'lishi kerak', errors: {} });
@@ -157,7 +172,7 @@ const getExpenseSummary = async (req, res) => {
   const categoryClause = categoryIdFilter ? 'AND category_id = $2' : '';
 
   try {
-    const [todaySum, monthSum] = await Promise.all([
+    const [todaySum, monthSum, dateSum] = await Promise.all([
       pool.query(
         `SELECT COALESCE(SUM(amount), 0)::float AS total
          FROM center_expenses
@@ -172,6 +187,15 @@ const getExpenseSummary = async (req, res) => {
          ${categoryClause}`,
         categoryIdFilter ? [month, categoryIdFilter] : [month]
       ),
+      dateFilter
+        ? pool.query(
+            `SELECT COALESCE(SUM(amount), 0)::float AS total
+             FROM center_expenses
+             WHERE expense_date = $1::date
+             ${categoryClause}`,
+            categoryIdFilter ? [dateFilter, categoryIdFilter] : [dateFilter]
+          )
+        : Promise.resolve(null),
     ]);
 
     return res.json({
@@ -179,9 +203,11 @@ const getExpenseSummary = async (req, res) => {
       data: {
         today,
         month,
+        date: dateFilter || undefined,
         category_id: categoryIdFilter || undefined,
         today_total_expense: Number(todaySum.rows[0].total || 0),
         month_total_expense: Number(monthSum.rows[0].total || 0),
+        date_total_expense: dateSum ? Number(dateSum.rows[0].total || 0) : undefined,
       },
     });
   } catch (error) {
@@ -292,19 +318,46 @@ const updateExpense = async (req, res) => {
 };
 
 const getExpenseCategories = async (req, res) => {
+  const dateFilter = typeof req.query.date === 'string' ? req.query.date.trim() : '';
+  const monthFilter = typeof req.query.month === 'string' ? req.query.month.trim() : '';
+  if (dateFilter && !isValidDate(dateFilter)) {
+    return res.status(400).json({ success: false, message: 'date formati YYYY-MM-DD bo\'lishi kerak', errors: {} });
+  }
+  if (monthFilter && !isValidMonth(monthFilter)) {
+    return res.status(400).json({ success: false, message: 'month formati YYYY-MM bo\'lishi kerak', errors: {} });
+  }
+
+  // date yoki month berilsa, chip'lardagi soni va summasi shu davr bo'yicha hisoblanadi
+  const params = [];
+  let joinCondition = 'ce.category_id = ec.id';
+  if (dateFilter) {
+    params.push(dateFilter);
+    joinCondition += ' AND ce.expense_date = $1::date';
+  } else if (monthFilter) {
+    params.push(monthFilter);
+    joinCondition += ' AND ce.month = $1';
+  }
+
   try {
     const result = await pool.query(
       `SELECT ec.id, ec.name, ec.created_at,
-              COUNT(ce.id)::int AS expense_count
+              COUNT(ce.id)::int AS expense_count,
+              COALESCE(SUM(ce.amount), 0)::float AS total_amount
        FROM expense_categories ec
-       LEFT JOIN center_expenses ce ON ce.category_id = ec.id
+       LEFT JOIN center_expenses ce ON ${joinCondition}
        GROUP BY ec.id
-       ORDER BY ec.name ASC`
+       ORDER BY ec.name ASC`,
+      params
     );
 
     return res.json({
       success: true,
-      data: { count: result.rows.length, items: result.rows },
+      data: {
+        month: monthFilter || undefined,
+        date: dateFilter || undefined,
+        count: result.rows.length,
+        items: result.rows,
+      },
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Kategoriyalarni olishda xatolik', errors: { detail: error.message } });
