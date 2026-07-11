@@ -43,6 +43,34 @@ router.get('/', expenseController.getExpenses);
 
 /**
  * @swagger
+ * /api/expenses/categories:
+ *   get:
+ *     summary: Rasxod kategoriyalari ro'yxati
+ *     tags: [Expenses]
+ *     security: [{ bearerAuth: [] }]
+ *     responses: { 200: { description: OK } }
+ *   post:
+ *     summary: Yangi kategoriya qo'shish (name)
+ *     tags: [Expenses]
+ *     security: [{ bearerAuth: [] }]
+ *     responses: { 201: { description: Created } }
+ */
+router.get('/categories', expenseController.getExpenseCategories);
+router.post('/categories', expenseController.createExpenseCategory);
+
+/**
+ * @swagger
+ * /api/expenses/categories/{id}:
+ *   delete:
+ *     summary: Kategoriyani o'chirish (rasxodlar kategoriyasiz qoladi)
+ *     tags: [Expenses]
+ *     security: [{ bearerAuth: [] }]
+ *     responses: { 200: { description: OK } }
+ */
+router.delete('/categories/:id', expenseController.deleteExpenseCategory);
+
+/**
+ * @swagger
  * /api/expenses/summary:
  *   get:
  *     summary: Bugungi va tanlangan oy rasxod summalari
