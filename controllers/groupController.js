@@ -15,6 +15,7 @@ exports.deleteGroup = async (req, res) => {
 };
 const pool = require('../config/db');
 const crypto = require('crypto');
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'http://localhost:5000';
 const { getTeacherSubjects } = require('../models/teacherSubjectModel');
 const { checkRoomAvailability } = require('../models/roomModel');
 
@@ -1557,11 +1558,13 @@ exports.getGroupById = async (req, res) => {
         }
 
         // Guruhdagi studentlarni barcha ma'lumotlari bilan olish
+        // (avatar va joriy oy balli bilan — mobil teacher sahifasi uchun)
+        const currentMonth = new Date().toISOString().slice(0, 7);
         const students = await pool.query(`
-            SELECT 
-                u.id, 
-                u.name, 
-                u.surname, 
+            SELECT
+                u.id,
+                u.name,
+                u.surname,
                 u.phone,
                 u.phone2,
                 u.father_name,
@@ -1574,8 +1577,15 @@ exports.getGroupById = async (req, res) => {
                 u.course_end_date,
                 u.created_at as registration_date,
                 u.role,
+                u.avatar_key,
+                CASE
+                  WHEN pa.image_path IS NULL THEN NULL
+                  WHEN pa.image_path ~ '^https?://' THEN pa.image_path
+                  ELSE CONCAT('${PUBLIC_BASE_URL}', pa.image_path)
+                END AS avatar_url,
+                COALESCE(spe.monthly_points, 0) as monthly_points,
                 sg.status as group_status,
-                CASE 
+                CASE
                   WHEN sg.status = 'active' THEN 'Faol'
                   WHEN sg.status = 'stopped' THEN 'Nofaol'
                   WHEN sg.status = 'finished' THEN 'Bitirgan'
@@ -1583,10 +1593,17 @@ exports.getGroupById = async (req, res) => {
                 END as group_status_description,
                 sg.joined_at,
                 sg.left_at
-            FROM users u 
-            JOIN student_groups sg ON u.id = sg.student_id 
-            WHERE sg.group_id = $1 
-            ORDER BY sg.status = 'active' DESC, u.name, u.surname`, [id]);
+            FROM users u
+            JOIN student_groups sg ON u.id = sg.student_id
+            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
+            LEFT JOIN (
+                SELECT student_id, SUM(points) as monthly_points
+                FROM student_point_events
+                WHERE group_id = $1 AND month_name = $2
+                GROUP BY student_id
+            ) spe ON spe.student_id = u.id
+            WHERE sg.group_id = $1
+            ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth]);
 
         res.json({ 
             success: true, 
