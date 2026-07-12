@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createOrUpdateAdminSalary, getAdminSalaryList } = require('../controllers/adminSalaryController');
+const { createOrUpdateAdminSalary, getAdminSalaryList, clearAdminSalaryHistory } = require('../controllers/adminSalaryController');
 const { protect } = require('../middlewares/authMiddleware');
 const { roleCheck } = require('../middlewares/roleMiddleware');
 
@@ -66,5 +66,8 @@ router.post('/pay', protect, roleCheck(['super_admin']), createOrUpdateAdminSala
  *         description: Admin oyliklari ro'yxati
  */
 router.get('/', protect, roleCheck(['super_admin']), getAdminSalaryList);
+
+// To'lovlar tarixini tozalash (ixtiyoriy: ?month_name=YYYY-MM, ?admin_id=)
+router.delete('/', protect, roleCheck(['super_admin']), clearAdminSalaryHistory);
 
 module.exports = router;

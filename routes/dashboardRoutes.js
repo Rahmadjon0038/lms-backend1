@@ -8,6 +8,7 @@ const {
   getAdminOverviewStats,
   getDebtorStudents,
   getSuperAdminStats,
+  getSystemStartMonth,
 } = require('../controllers/dashboardController');
 
 /**
@@ -124,5 +125,8 @@ router.get('/debtors', protect, protectAdmin, getDebtorStudents);
  *         description: OK
  */
 router.get('/super-admin', protect, protectSuperAdmin, getSuperAdminStats);
+
+// Tizim ish boshlagan oy — oy filtrlarining boshlanish nuqtasi
+router.get('/system-start', protect, getSystemStartMonth);
 
 module.exports = router;

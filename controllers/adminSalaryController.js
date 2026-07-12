@@ -133,4 +133,49 @@ const getAdminSalaryList = async (req, res) => {
   }
 };
 
-module.exports = { createOrUpdateAdminSalary, getAdminSalaryList };
+// To'lovlar tarixini tozalash: month_name berilsa faqat o'sha oy,
+// admin_id berilsa faqat o'sha admin yozuvlari, ikkalasisiz — butun tarix
+const clearAdminSalaryHistory = async (req, res) => {
+  const { admin_id, month_name } = req.query || {};
+  const filters = [];
+  const params = [];
+  let idx = 1;
+
+  if (admin_id !== undefined) {
+    const adminId = Number(admin_id);
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+      return res.status(400).json({ success: false, message: 'admin_id noto\'g\'ri' });
+    }
+    filters.push(`admin_id = $${idx++}`);
+    params.push(adminId);
+  }
+
+  if (month_name !== undefined) {
+    const monthName = String(month_name).trim();
+    if (!isValidMonthName(monthName)) {
+      return res.status(400).json({ success: false, message: "month_name 'YYYY-MM' formatida bo'lishi kerak" });
+    }
+    filters.push(`month_name = $${idx++}`);
+    params.push(monthName);
+  }
+
+  const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM admin_salary_payouts ${whereClause} RETURNING id`,
+      params
+    );
+
+    return res.json({
+      success: true,
+      message: `${result.rowCount} ta to'lov yozuvi o'chirildi`,
+      deleted_count: result.rowCount
+    });
+  } catch (err) {
+    console.error('Admin salary clear error:', err.message);
+    return res.status(500).json({ success: false, message: 'Tarixni tozalashda xatolik', error: err.message });
+  }
+};
+
+module.exports = { createOrUpdateAdminSalary, getAdminSalaryList, clearAdminSalaryHistory };
