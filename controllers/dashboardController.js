@@ -574,6 +574,33 @@ const getDebtorStudents = async (req, res) => {
   }
 };
 
+// Tizim ish boshlagan oy (bazadagi eng birinchi foydalanuvchi/guruh sanasi) —
+// mobil ilovadagi oy filtrlarini shu oydan boshlash uchun
+const getSystemStartMonth = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT TO_CHAR(
+        LEAST(
+          COALESCE((SELECT MIN(created_at) FROM users), CURRENT_TIMESTAMP),
+          COALESCE((SELECT MIN(created_at) FROM groups), CURRENT_TIMESTAMP)
+        ),
+        'YYYY-MM'
+      ) AS start_month
+    `);
+    return res.json({
+      success: true,
+      data: { start_month: result.rows[0]?.start_month || null },
+    });
+  } catch (error) {
+    console.error('System start month xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Boshlanish oyini olishda xatolik',
+      error: error.message,
+    });
+  }
+};
+
 const getSuperAdminStats = async (req, res) => {
   const client = await pool.connect();
 
@@ -804,4 +831,5 @@ module.exports = {
   getAdminOverviewStats,
   getDebtorStudents,
   getSuperAdminStats,
+  getSystemStartMonth,
 };
