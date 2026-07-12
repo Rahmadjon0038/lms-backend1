@@ -6,7 +6,7 @@ const createContentTables = async () => {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS stories (
         id SERIAL PRIMARY KEY,
-        title VARCHAR(120) NOT NULL,
+        title VARCHAR(120) DEFAULT '',
         video_path TEXT NOT NULL,
         order_index INTEGER DEFAULT 0,
         is_active BOOLEAN DEFAULT TRUE,
