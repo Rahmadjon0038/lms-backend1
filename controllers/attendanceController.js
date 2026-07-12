@@ -570,6 +570,13 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND EXISTS (
+             SELECT 1 FROM student_groups sg
+             WHERE sg.student_id = a.student_id
+               AND sg.group_id = a.group_id
+               AND DATE(sg.joined_at) <= l.date
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+           )
          WHERE l.date = $1::date
            AND COALESCE(l.is_holiday, false) = false
            ${normalizedShift === 'morning'
@@ -790,6 +797,13 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND EXISTS (
+             SELECT 1 FROM student_groups sg
+             WHERE sg.student_id = a.student_id
+               AND sg.group_id = a.group_id
+               AND DATE(sg.joined_at) <= l.date
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+           )
          WHERE l.teacher_id = $1
            AND l.date = $2::date
            AND COALESCE(l.is_holiday, false) = false
@@ -1014,6 +1028,13 @@ exports.getGroupsForAttendance = async (req, res) => {
              END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND EXISTS (
+             SELECT 1 FROM student_groups sg
+             WHERE sg.student_id = a.student_id
+               AND sg.group_id = a.group_id
+               AND DATE(sg.joined_at) <= l.date
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+           )
          WHERE l.date = $1::date
            AND l.group_id = ANY($2::int[])
            AND COALESCE(l.is_holiday, false) = false
@@ -2301,6 +2322,13 @@ exports.getGroupLessons = async (req, res) => {
          END as attendance_completed
        FROM lessons l
        LEFT JOIN attendance a ON l.id = a.lesson_id
+         AND EXISTS (
+           SELECT 1 FROM student_groups sg
+           WHERE sg.student_id = a.student_id
+             AND sg.group_id = a.group_id
+             AND DATE(sg.joined_at) <= l.date
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+         )
        LEFT JOIN subjects s2 ON l.subject_id = s2.id
        LEFT JOIN rooms r2 ON l.room_id = r2.id
        WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
@@ -2416,6 +2444,13 @@ exports.getMyLessons = async (req, res) => {
        LEFT JOIN subjects gs ON gs.id = g.subject_id
        LEFT JOIN rooms r ON r.id = l.room_id
        LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND EXISTS (
+             SELECT 1 FROM student_groups sg
+             WHERE sg.student_id = a.student_id
+               AND sg.group_id = a.group_id
+               AND DATE(sg.joined_at) <= l.date
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+           )
        WHERE l.teacher_id = $1
          ${filterQuery}
        GROUP BY l.id, g.name, s.name, gs.name, r.room_number, l.is_holiday
@@ -2600,6 +2635,13 @@ exports.getAdminTeacherLessons = async (req, res) => {
        LEFT JOIN subjects gs ON gs.id = g.subject_id
        LEFT JOIN rooms r ON r.id = l.room_id
        LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND EXISTS (
+             SELECT 1 FROM student_groups sg
+             WHERE sg.student_id = a.student_id
+               AND sg.group_id = a.group_id
+               AND DATE(sg.joined_at) <= l.date
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+           )
        WHERE l.teacher_id = $1
          AND l.date = $2::date
          ${shiftSql}
