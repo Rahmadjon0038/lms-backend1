@@ -82,14 +82,10 @@ exports.getStories = async (req, res) => {
   }
 };
 
-// POST /api/content/stories — video (multipart, field: video) + title
+// POST /api/content/stories — video (multipart, field: video), title ixtiyoriy
 exports.createStory = async (req, res) => {
   try {
     const title = String(req.body.title || '').trim();
-    if (!title) {
-      if (req.file) removeFileQuietly(`/uploads/stories/${req.file.filename}`);
-      return res.status(400).json({ success: false, message: 'title majburiy' });
-    }
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'video fayl majburiy' });
     }
