@@ -607,7 +607,7 @@ const getSuperAdminStats = async (req, res) => {
   try {
     const qMonth = req.query.month;
     const currentMonth = qMonth && isValidMonth(qMonth) ? qMonth : getCurrentMonth();
-    const [monthlyResult, subjectsResult, overallResult] = await Promise.all([
+    const [monthlyResult, subjectsResult, overallResult, studentsResult] = await Promise.all([
       client.query(
         `WITH monthly_revenue AS (
            SELECT COALESCE(SUM(amount), 0)::numeric AS total_revenue
@@ -745,11 +745,41 @@ const getSuperAdminStats = async (req, res) => {
            (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished'))::int AS inactive_students_count,
            (SELECT COUNT(*) FROM users WHERE role = 'teacher')::int AS total_teachers_count`
       ),
+      // Talabalar tafsiloti — admin panel students sahifasidagi bilan bir xil
+      // ta'riflar: jami, guruh a'zoligi bo'yicha (faol/to'xtatgan/bitirgan),
+      // guruhsiz va shu oy to'lov jadvalida (monthly_snapshots) borlar
+      client.query(
+        `SELECT
+           (SELECT COUNT(*) FROM users WHERE role = 'student')::int AS total_students,
+           (SELECT COUNT(DISTINCT sg.student_id)
+              FROM student_groups sg
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
+             WHERE sg.status = 'active')::int AS active_students,
+           (SELECT COUNT(DISTINCT sg.student_id)
+              FROM student_groups sg
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
+             WHERE sg.status = 'stopped')::int AS stopped_students,
+           (SELECT COUNT(DISTINCT sg.student_id)
+              FROM student_groups sg
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
+             WHERE sg.status = 'finished')::int AS finished_students,
+           (SELECT COUNT(*)
+              FROM users u
+             WHERE u.role = 'student'
+               AND NOT EXISTS (
+                 SELECT 1 FROM student_groups sg2 WHERE sg2.student_id = u.id
+               ))::int AS unassigned_students,
+           (SELECT COUNT(DISTINCT ms.student_id)
+              FROM monthly_snapshots ms
+             WHERE ms.month = $1)::int AS snapshot_students`,
+        [currentMonth]
+      ),
     ]);
 
     const monthly = monthlyResult.rows[0] || {};
     const subjects = subjectsResult.rows || [];
     const overall = overallResult.rows[0] || {};
+    const studentsRow = studentsResult.rows[0] || {};
     const totalStudentsFromSubjects = subjects.reduce(
       (sum, row) => sum + toNumber(row.total_students_count),
       0
@@ -794,6 +824,14 @@ const getSuperAdminStats = async (req, res) => {
           finished_students_count: toNumber(overall.finished_students_count),
           inactive_students_count: toNumber(overall.inactive_students_count),
           total_teachers_count: toNumber(overall.total_teachers_count),
+        },
+        students: {
+          total_students: toNumber(studentsRow.total_students),
+          active_students: toNumber(studentsRow.active_students),
+          stopped_students: toNumber(studentsRow.stopped_students),
+          finished_students: toNumber(studentsRow.finished_students),
+          unassigned_students: toNumber(studentsRow.unassigned_students),
+          snapshot_students: toNumber(studentsRow.snapshot_students),
         },
       },
     });
