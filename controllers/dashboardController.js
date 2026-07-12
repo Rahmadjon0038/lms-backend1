@@ -671,7 +671,10 @@ const getSuperAdminStats = async (req, res) => {
          revenue_by_subject AS (
            SELECT
              g.subject_id,
-             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue,
+             -- Yig'ilishi kerak bo'lgan summa (chegirma hisobga olingan) —
+             -- to'lov progres chizig'i shu ikkisining nisbatidan chiziladi
+             COALESCE(SUM(GREATEST(COALESCE(ms.required_amount, 0) - COALESCE(ms.discount_amount, 0), 0)), 0)::numeric AS total_required
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            WHERE ms.month = $1
@@ -695,7 +698,8 @@ const getSuperAdminStats = async (req, res) => {
            SELECT
              g.subject_id,
              g.teacher_id,
-             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue
+             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue,
+             COALESCE(SUM(GREATEST(COALESCE(ms.required_amount, 0) - COALESCE(ms.discount_amount, 0), 0)), 0)::numeric AS total_required
            FROM monthly_snapshots ms
            JOIN groups g ON g.id = ms.group_id
            WHERE ms.month = $1
@@ -711,7 +715,8 @@ const getSuperAdminStats = async (req, res) => {
              tsc.teacher_id,
              tsc.teacher_name,
              tsc.total_students_count,
-             COALESCE(tr.total_revenue, 0)::numeric AS total_revenue
+             COALESCE(tr.total_revenue, 0)::numeric AS total_revenue,
+             COALESCE(tr.total_required, 0)::numeric AS total_required
            FROM teacher_student_counts tsc
            LEFT JOIN teacher_revenue tr
              ON tr.subject_id = tsc.subject_id
@@ -725,7 +730,8 @@ const getSuperAdminStats = async (req, res) => {
                  'teacher_id', teacher_id,
                  'teacher_name', teacher_name,
                  'total_students_count', total_students_count,
-                 'total_revenue', total_revenue
+                 'total_revenue', total_revenue,
+                 'total_required', total_required
                )
                ORDER BY teacher_name
              ) AS teachers
@@ -737,6 +743,7 @@ const getSuperAdminStats = async (req, res) => {
            s.name AS subject_name,
            COALESCE(sb.total_students_count, 0)::int AS total_students_count,
            COALESCE(rb.total_revenue, 0)::float AS total_revenue,
+           COALESCE(rb.total_required, 0)::float AS total_required,
            COALESCE(json_array_length(tb.teachers), 0)::int AS teachers_count,
            COALESCE(tb.teachers, '[]'::json) AS teachers
          FROM subjects s
@@ -821,6 +828,7 @@ const getSuperAdminStats = async (req, res) => {
           subject_name: row.subject_name,
           total_students_count: toNumber(row.total_students_count),
           total_revenue: toNumber(row.total_revenue),
+          total_required: toNumber(row.total_required),
           teachers_count: toNumber(row.teachers_count),
           teachers: Array.isArray(row.teachers)
             ? row.teachers
