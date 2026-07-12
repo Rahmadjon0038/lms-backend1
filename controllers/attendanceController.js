@@ -1576,46 +1576,61 @@ exports.markAttendance = async (req, res) => {
           }
 
           try {
+            // Davomat balli qoidasi: keldi = 3, kechikdi = 2, kelmadi = 0.
+            // Har (student, lesson) uchun bitta yozuv bo'ladi: qayta
+            // belgilashda eski yozuv o'chirilib yangisi yoziladi — balllar
+            // dublikat bo'lmaydi, "kelmadi"ga o'zgartirilsa ball olib
+            // tashlanadi. Kim belgilashidan qat'i nazar (teacher/admin,
+            // sayt yoki mobil) shu endpoint orqali bir xil ishlaydi.
             const attendancePoints = {
-              keldi: 10,
-              kechikdi: 5,
+              keldi: 3,
+              kechikdi: 2,
               kelmadi: 0,
             };
             const awardedPoints = attendancePoints[record.status] ?? 0;
+
             await pool.query(
-              `
-              INSERT INTO student_point_events (
-                student_id,
-                group_id,
-                lesson_id,
-                month_name,
-                points,
-                source_type,
-                title,
-                description,
-                metadata,
-                created_by
-              ) VALUES ($1, $2, $3, $4, $5, 'attendance', $6, $7, $8::jsonb, $9)
-              `,
-              [
-                updatedStudentId,
-                lesson.group_id,
-                lesson.id,
-                lesson.lesson_month || String(lesson.lesson_date).slice(0, 7),
-                awardedPoints,
-                'Davomat belgilandi',
-                `${humanStatus} - ${awardedPoints} ball`,
-                JSON.stringify({
-                  status: record.status,
-                  lesson_date: lesson.lesson_date,
-                  group_name: lesson.group_name || '',
-                  teacher_name: lesson.teacher_name || '',
-                  subject_name: lesson.subject_name || '',
-                  awarded_points: awardedPoints,
-                }),
-                userId,
-              ]
+              `DELETE FROM student_point_events
+               WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
+              [updatedStudentId, lesson.id]
             );
+
+            if (awardedPoints > 0) {
+              await pool.query(
+                `
+                INSERT INTO student_point_events (
+                  student_id,
+                  group_id,
+                  lesson_id,
+                  month_name,
+                  points,
+                  source_type,
+                  title,
+                  description,
+                  metadata,
+                  created_by
+                ) VALUES ($1, $2, $3, $4, $5, 'attendance', $6, $7, $8::jsonb, $9)
+                `,
+                [
+                  updatedStudentId,
+                  lesson.group_id,
+                  lesson.id,
+                  lesson.lesson_month || String(lesson.lesson_date).slice(0, 7),
+                  awardedPoints,
+                  'Darsga qatnashdi',
+                  `${humanStatus} - +${awardedPoints} ball`,
+                  JSON.stringify({
+                    status: record.status,
+                    lesson_date: lesson.lesson_date,
+                    group_name: lesson.group_name || '',
+                    teacher_name: lesson.teacher_name || '',
+                    subject_name: lesson.subject_name || '',
+                    awarded_points: awardedPoints,
+                  }),
+                  userId,
+                ]
+              );
+            }
           } catch (pointsError) {
             console.warn(
               `⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`
