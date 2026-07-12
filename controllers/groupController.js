@@ -1558,8 +1558,12 @@ exports.getGroupById = async (req, res) => {
         }
 
         // Guruhdagi studentlarni barcha ma'lumotlari bilan olish
-        // (avatar va joriy oy balli bilan — mobil teacher sahifasi uchun)
-        const currentMonth = new Date().toISOString().slice(0, 7);
+        // (avatar va oy balli bilan — mobil teacher sahifasi uchun).
+        // ?month=YYYY-MM berilsa o'sha oy balli, bo'lmasa joriy oy.
+        const requestedMonth = String(req.query.month || '');
+        const currentMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+            ? requestedMonth
+            : new Date().toISOString().slice(0, 7);
         const students = await pool.query(`
             SELECT
                 u.id,
