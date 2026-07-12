@@ -630,34 +630,18 @@ const getSuperAdminStats = async (req, res) => {
            FROM monthly_snapshots
            WHERE month = $1
          ),
-         teacher_base AS (
-           SELECT
-             u.id AS teacher_id,
-             COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
-           FROM users u
-           LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
-           WHERE u.role = 'teacher' AND u.status = 'active'
-         ),
-         teacher_revenue AS (
-           SELECT
-             g.teacher_id,
-             COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_collected
-           FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id
-           WHERE ms.month = $1
-             AND COALESCE(ms.monthly_status, 'active') = 'active'
-           GROUP BY g.teacher_id
-         ),
-         teacher_salary_calc AS (
-           SELECT
-             tb.teacher_id,
-             (COALESCE(tr.total_collected, 0) * tb.salary_percentage / 100.0)::numeric AS expected_salary
-           FROM teacher_base tb
-           LEFT JOIN teacher_revenue tr ON tr.teacher_id = tb.teacher_id
-         ),
          teacher_salary_monthly AS (
-           SELECT COALESCE(SUM(expected_salary), 0)::numeric AS total_teacher_salary
-           FROM teacher_salary_calc
+           -- Faqat YOPILGAN (oylik oldi deb belgilangan) teacher oyliklari.
+           -- Taxminiy % hisob emas: /admin/teachers-payments sahifasida
+           -- "oylikni yopish" qilinganda teacher_monthly_salaries jadvaliga
+           -- is_closed = true bo'lib yoziladi — shu summa ko'rsatiladi.
+           SELECT COALESCE(
+             SUM(COALESCE(tms.close_expected_salary, tms.expected_salary, 0)),
+             0
+           )::numeric AS total_teacher_salary
+           FROM teacher_monthly_salaries tms
+           WHERE tms.month_name = $1
+             AND tms.is_closed = true
          )
          SELECT
            (SELECT total_revenue FROM monthly_revenue)::float AS total_revenue,
