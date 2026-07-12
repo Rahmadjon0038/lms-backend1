@@ -91,6 +91,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
 const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
+const contentRoutes = require('./routes/contentRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
@@ -101,6 +102,7 @@ const { createExpenseTable } = require('./models/expenseModel');
 const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
 const { createAdminSalaryTables } = require('./models/adminSalaryModel');
 const { createProfileAvatarTable } = require('./models/profileAvatarModel');
+const { createContentTables } = require('./models/contentModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -124,6 +126,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
 app.use('/api/admin-salary', adminSalaryRoutes);
+app.use('/api/content', contentRoutes);
 
 // createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
@@ -160,7 +163,8 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['payments', createPaymentTables],
             ['monthly_snapshots', createMonthlySnapshotTable],
             ['teacher_salary_v2', createTeacherSalaryTables],
-            ['admin_salary', createAdminSalaryTables]
+            ['admin_salary', createAdminSalaryTables],
+            ['content', createContentTables]
         ];
 
         for (const [stepName, setupFn] of setupSteps) {

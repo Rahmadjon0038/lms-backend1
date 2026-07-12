@@ -1534,9 +1534,10 @@ exports.getMyGroupInfo = async (req, res) => {
                     TO_CHAR(sg.joined_at, 'DD.MM.YYYY')
                 ) as created_date,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as student_joined_date,
-                
+                g.schedule,
+
                 s.name as subject_name,
-                
+
                 u.name || ' ' || u.surname as teacher_name,
                 u.phone as teacher_phone,
                 COALESCE(mp.month_points, 0)::int as my_month_points
@@ -1654,7 +1655,8 @@ exports.getMyGroupInfo = async (req, res) => {
                 class_status: group.class_status,
                 start_date: group.start_date,
                 created_date: group.created_date,
-                student_joined_date: group.student_joined_date
+                student_joined_date: group.student_joined_date,
+                schedule: group.schedule || null
             },
             subject: {
                 name: group.subject_name
