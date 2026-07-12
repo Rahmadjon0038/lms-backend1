@@ -642,10 +642,17 @@ const getSuperAdminStats = async (req, res) => {
            FROM teacher_monthly_salaries tms
            WHERE tms.month_name = $1
              AND tms.is_closed = true
+         ),
+         admin_salary_monthly AS (
+           -- Adminlarga shu oy uchun to'langan oyliklar
+           SELECT COALESCE(SUM(amount), 0)::numeric AS total_admin_salary
+           FROM admin_salary_payouts
+           WHERE month_name = $1
          )
          SELECT
            (SELECT total_revenue FROM monthly_revenue)::float AS total_revenue,
            (SELECT total_teacher_salary FROM teacher_salary_monthly)::float AS total_teacher_salary,
+           (SELECT total_admin_salary FROM admin_salary_monthly)::float AS total_admin_salary,
            (SELECT total_expenses FROM monthly_expenses)::float AS total_expenses,
            (SELECT new_students_count FROM monthly_new_students)::int AS new_students_count,
            (SELECT total_discounts FROM monthly_discounts)::float AS total_discounts`,
@@ -745,21 +752,24 @@ const getSuperAdminStats = async (req, res) => {
            (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished'))::int AS inactive_students_count,
            (SELECT COUNT(*) FROM users WHERE role = 'teacher')::int AS total_teachers_count`
       ),
-      // Talabalar tafsiloti — admin panel students sahifasidagi bilan bir xil
-      // ta'riflar: jami, guruh a'zoligi bo'yicha (faol/to'xtatgan/bitirgan),
-      // guruhsiz va shu oy to'lov jadvalida (monthly_snapshots) borlar
+      // Talabalar tafsiloti — admin panel students sahifasi bilan AYNAN bir xil
+      // hisob: bitta talaba ikkita guruhda o'qisa u ikki marta sanaladi
+      // (davomat va oylik to'lovlar jadvali ham shunday yuritiladi).
       client.query(
         `SELECT
-           (SELECT COUNT(*) FROM users WHERE role = 'student')::int AS total_students,
-           (SELECT COUNT(DISTINCT sg.student_id)
+           (SELECT COUNT(*)
+              FROM users u
+              LEFT JOIN student_groups sg ON sg.student_id = u.id
+             WHERE u.role = 'student')::int AS total_students,
+           (SELECT COUNT(*)
               FROM student_groups sg
               JOIN users u ON u.id = sg.student_id AND u.role = 'student'
              WHERE sg.status = 'active')::int AS active_students,
-           (SELECT COUNT(DISTINCT sg.student_id)
+           (SELECT COUNT(*)
               FROM student_groups sg
               JOIN users u ON u.id = sg.student_id AND u.role = 'student'
              WHERE sg.status = 'stopped')::int AS stopped_students,
-           (SELECT COUNT(DISTINCT sg.student_id)
+           (SELECT COUNT(*)
               FROM student_groups sg
               JOIN users u ON u.id = sg.student_id AND u.role = 'student'
              WHERE sg.status = 'finished')::int AS finished_students,
@@ -769,7 +779,7 @@ const getSuperAdminStats = async (req, res) => {
                AND NOT EXISTS (
                  SELECT 1 FROM student_groups sg2 WHERE sg2.student_id = u.id
                ))::int AS unassigned_students,
-           (SELECT COUNT(DISTINCT ms.student_id)
+           (SELECT COUNT(*)
               FROM monthly_snapshots ms
              WHERE ms.month = $1)::int AS snapshot_students`,
         [currentMonth]
@@ -787,9 +797,11 @@ const getSuperAdminStats = async (req, res) => {
 
     const totalRevenue = toNumber(monthly.total_revenue);
     const totalTeacherSalary = toNumber(monthly.total_teacher_salary);
+    const totalAdminSalary = toNumber(monthly.total_admin_salary);
     const totalExpenses = toNumber(monthly.total_expenses);
     const totalDiscounts = toNumber(monthly.total_discounts);
-    const netProfit = totalRevenue - totalTeacherSalary - totalExpenses - totalDiscounts;
+    const netProfit =
+      totalRevenue - totalTeacherSalary - totalAdminSalary - totalExpenses - totalDiscounts;
 
     return res.json({
       success: true,
@@ -798,6 +810,7 @@ const getSuperAdminStats = async (req, res) => {
           current_month: currentMonth,
           total_revenue: totalRevenue,
           total_teacher_salary: totalTeacherSalary,
+          total_admin_salary: totalAdminSalary,
           total_expenses: totalExpenses,
           new_students_count: toNumber(monthly.new_students_count),
           total_discounts: totalDiscounts,
