@@ -2956,9 +2956,15 @@ exports.getTeacherGroupDetails = async (req, res) => {
 
         const group = groupResult.rows[0];
 
-        // Guruh talabalari
+        // Guruh talabalari (avatar va oy balli bilan — web teacher sahifasi uchun).
+        // ?month=YYYY-MM berilsa o'sha oy balli, bo'lmasa joriy oy.
+        const requestedMonth = String(req.query.month || '');
+        const pointsMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+            ? requestedMonth
+            : new Date().toISOString().slice(0, 7);
+
         const studentsResult = await pool.query(`
-            SELECT 
+            SELECT
                 u.id as student_id,
                 u.name,
                 u.surname,
@@ -2966,28 +2972,43 @@ exports.getTeacherGroupDetails = async (req, res) => {
                 u.phone2,
                 u.father_name,
                 u.father_phone,
+                u.avatar_key,
+                CASE
+                  WHEN pa.image_path IS NULL THEN NULL
+                  WHEN pa.image_path ~ '^https?://' THEN pa.image_path
+                  ELSE CONCAT('${PUBLIC_BASE_URL}', pa.image_path)
+                END AS avatar_url,
+                COALESCE(spe.monthly_points, 0) as monthly_points,
                 sg.status as group_status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
-                CASE sg.status 
+                CASE sg.status
                     WHEN 'active' THEN 'Faol'
                     WHEN 'stopped' THEN 'To''xtatilgan'
                     WHEN 'finished' THEN 'Tugatgan'
                     ELSE sg.status
                 END as status_description
-                
+
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
+            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
+            LEFT JOIN (
+                SELECT student_id, SUM(points) as monthly_points
+                FROM student_point_events
+                WHERE group_id = $1 AND month_name = $2
+                GROUP BY student_id
+            ) spe ON spe.student_id = u.id
             WHERE sg.group_id = $1
-            ORDER BY 
-                CASE sg.status 
+            ORDER BY
+                CASE sg.status
                     WHEN 'active' THEN 1
-                    WHEN 'stopped' THEN 2  
+                    WHEN 'stopped' THEN 2
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
+                COALESCE(spe.monthly_points, 0) DESC,
                 u.name, u.surname
-        `, [groupId]);
+        `, [groupId, pointsMonth]);
 
         // Statistika
         const stats = {
@@ -3006,6 +3027,9 @@ exports.getTeacherGroupDetails = async (req, res) => {
             phone2: student.phone2 || null,
             father_name: student.father_name || null,
             father_phone: student.father_phone || null,
+            avatar_key: student.avatar_key || null,
+            avatar_url: student.avatar_url || null,
+            monthly_points: parseInt(student.monthly_points) || 0,
             group_status: student.group_status,
             status_description: student.status_description,
             join_date: student.join_date,
