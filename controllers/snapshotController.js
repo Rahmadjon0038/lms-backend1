@@ -406,6 +406,12 @@ exports.getMonthlySnapshots = async (req, res) => {
         ms.total_lessons,
         ms.attended_lessons,
         ms.attendance_percentage,
+
+        -- Faqat davomat qilingan (belgilangan) darslar bo'yicha jonli hisob:
+        -- hali belgilanmagan kunlar "qoldirilgan" deb sanalmasligi uchun
+        COALESCE(att.marked_lessons, 0) as marked_lessons,
+        COALESCE(att.attended_marked, 0) as attended_marked_lessons,
+        COALESCE(att.missed_marked, 0) as missed_marked_lessons,
         TO_CHAR(ms.snapshot_created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as snapshot_created_at,
         TO_CHAR(ms.snapshot_updated_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as snapshot_updated_at,
         
@@ -438,6 +444,19 @@ exports.getMonthlySnapshots = async (req, res) => {
         AND sd.is_active = true
       LEFT JOIN users u ON ms.payment_made_by = u.id
       LEFT JOIN users su ON ms.student_id = su.id
+      LEFT JOIN (
+        SELECT
+          a.student_id,
+          a.group_id,
+          COALESCE(a.month, a.month_name) as month,
+          COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false)) as marked_lessons,
+          COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) as attended_marked,
+          COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false) AND a.status = 'kelmadi') as missed_marked
+        FROM attendance a
+        GROUP BY a.student_id, a.group_id, COALESCE(a.month, a.month_name)
+      ) att ON att.student_id = ms.student_id
+           AND att.group_id = ms.group_id
+           AND att.month = ms.month
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
