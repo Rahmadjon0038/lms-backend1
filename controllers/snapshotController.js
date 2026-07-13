@@ -1701,32 +1701,26 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     }
 
     // Umumiy statistika.
-    // Jami — tizimda mavjud barcha studentlar (bosh sahifa/dashboard bilan
-    // AYNAN bir xil hisob: LEFT JOIN student_groups, ya'ni ikki guruhdagi
-    // student ikki marta sanaladi, guruhsiz bir marta).
-    // Faol/To'xtatgan — TO'G'RIDAN-TO'G'RI davomat jadvalidan: davomatda bor
-    // student aniq o'qiyotgan hisoblanadi. Bitta student+guruh jufti bir marta
-    // sanaladi (oy ichida darslar ko'p bo'lgani uchun eng oxirgi yozuvning
-    // monthly_status'i olinadi).
+    // Jami/Faol/To'xtatgan — bosh sahifa (super admin dashboard) bilan AYNAN
+    // bir xil hisob (dashboardController'dagi students bloki bilan bir xil
+    // so'rovlar): jami = users LEFT JOIN student_groups (ikki guruhdagi
+    // student ikki marta, guruhsiz bir marta), faol/to'xtatgan =
+    // student_groups.status bo'yicha. Ikkala sahifada bir xil raqam chiqadi.
     // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
-    const attendanceCountsQuery = `
-      WITH att AS (
-        SELECT DISTINCT ON (a.student_id, a.group_id)
-          a.student_id,
-          a.group_id,
-          COALESCE(a.monthly_status, 'active') AS monthly_status
-        FROM attendance a
-        WHERE COALESCE(a.month, a.month_name) = $1
-        ORDER BY a.student_id, a.group_id, a.updated_at DESC NULLS LAST, a.id DESC
-      )
+    const studentCountsQuery = `
       SELECT
         (SELECT COUNT(*)
            FROM users u
            LEFT JOIN student_groups sg ON sg.student_id = u.id
           WHERE u.role = 'student')::int as total_students,
-        COUNT(*) FILTER (WHERE monthly_status = 'active') as active_students,
-        COUNT(*) FILTER (WHERE monthly_status = 'stopped') as stopped_students
-      FROM att
+        (SELECT COUNT(*)
+           FROM student_groups sg
+           JOIN users u ON u.id = sg.student_id AND u.role = 'student'
+          WHERE sg.status = 'active')::int as active_students,
+        (SELECT COUNT(*)
+           FROM student_groups sg
+           JOIN users u ON u.id = sg.student_id AND u.role = 'student'
+          WHERE sg.status = 'stopped')::int as stopped_students
     `;
 
     const summaryQuery = `
@@ -1742,8 +1736,8 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       WHERE ms.month = $1
     `;
 
-    const [attendanceCountsResult, summaryResult] = await Promise.all([
-      db.query(attendanceCountsQuery, [month]),
+    const [studentCountsResult, summaryResult] = await Promise.all([
+      db.query(studentCountsQuery),
       db.query(summaryQuery, [month]),
     ]);
 
@@ -1803,7 +1797,7 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       month,
       summary: {
         ...summaryResult.rows[0],
-        ...attendanceCountsResult.rows[0],
+        ...studentCountsResult.rows[0],
       },
       group_breakdown: groupResult.rows,
       discounts: discountResult.rows[0] || { discount_count: 0, total_discount_amount: 0 },
