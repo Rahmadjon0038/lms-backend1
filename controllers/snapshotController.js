@@ -1701,10 +1701,13 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     }
 
     // Umumiy statistika.
-    // Talabalar soni (jami/faol/to'xtatgan) TO'G'RIDAN-TO'G'RI davomat
-    // jadvalidan olinadi — davomatda bor student aniq o'qiyotgan hisoblanadi.
-    // Bitta student+guruh jufti bir marta sanaladi (oy ichida darslar ko'p
-    // bo'lgani uchun eng oxirgi yozuvning monthly_status'i olinadi).
+    // Jami — tizimda mavjud barcha studentlar (bosh sahifa/dashboard bilan
+    // AYNAN bir xil hisob: LEFT JOIN student_groups, ya'ni ikki guruhdagi
+    // student ikki marta sanaladi, guruhsiz bir marta).
+    // Faol/To'xtatgan — TO'G'RIDAN-TO'G'RI davomat jadvalidan: davomatda bor
+    // student aniq o'qiyotgan hisoblanadi. Bitta student+guruh jufti bir marta
+    // sanaladi (oy ichida darslar ko'p bo'lgani uchun eng oxirgi yozuvning
+    // monthly_status'i olinadi).
     // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
     const attendanceCountsQuery = `
       WITH att AS (
@@ -1717,7 +1720,10 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         ORDER BY a.student_id, a.group_id, a.updated_at DESC NULLS LAST, a.id DESC
       )
       SELECT
-        COUNT(*) as total_students,
+        (SELECT COUNT(*)
+           FROM users u
+           LEFT JOIN student_groups sg ON sg.student_id = u.id
+          WHERE u.role = 'student')::int as total_students,
         COUNT(*) FILTER (WHERE monthly_status = 'active') as active_students,
         COUNT(*) FILTER (WHERE monthly_status = 'stopped') as stopped_students
       FROM att
