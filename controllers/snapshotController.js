@@ -1700,12 +1700,31 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       });
     }
 
-    // Umumiy statistika
-    const summaryQuery = `
-      SELECT 
+    // Umumiy statistika.
+    // Talabalar soni (jami/faol/to'xtatgan) TO'G'RIDAN-TO'G'RI davomat
+    // jadvalidan olinadi — davomatda bor student aniq o'qiyotgan hisoblanadi.
+    // Bitta student+guruh jufti bir marta sanaladi (oy ichida darslar ko'p
+    // bo'lgani uchun eng oxirgi yozuvning monthly_status'i olinadi).
+    // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
+    const attendanceCountsQuery = `
+      WITH att AS (
+        SELECT DISTINCT ON (a.student_id, a.group_id)
+          a.student_id,
+          a.group_id,
+          COALESCE(a.monthly_status, 'active') AS monthly_status
+        FROM attendance a
+        WHERE COALESCE(a.month, a.month_name) = $1
+        ORDER BY a.student_id, a.group_id, a.updated_at DESC NULLS LAST, a.id DESC
+      )
+      SELECT
         COUNT(*) as total_students,
-        COUNT(CASE WHEN monthly_status = 'active' THEN 1 END) as active_students,
-        COUNT(CASE WHEN monthly_status = 'stopped' THEN 1 END) as stopped_students,
+        COUNT(*) FILTER (WHERE monthly_status = 'active') as active_students,
+        COUNT(*) FILTER (WHERE monthly_status = 'stopped') as stopped_students
+      FROM att
+    `;
+
+    const summaryQuery = `
+      SELECT
         COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_students,
         COUNT(CASE WHEN payment_status = 'partial' THEN 1 END) as partial_students,
         COUNT(CASE WHEN payment_status = 'unpaid' THEN 1 END) as unpaid_students,
@@ -1713,11 +1732,14 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         SUM(paid_amount) as total_paid,
         SUM(debt_amount) as total_debt,
         SUM(CASE WHEN monthly_status = 'active' THEN debt_amount ELSE 0 END) as active_debt
-      FROM monthly_snapshots 
-      WHERE month = $1
+      FROM monthly_snapshots ms
+      WHERE ms.month = $1
     `;
 
-    const summaryResult = await db.query(summaryQuery, [month]);
+    const [attendanceCountsResult, summaryResult] = await Promise.all([
+      db.query(attendanceCountsQuery, [month]),
+      db.query(summaryQuery, [month]),
+    ]);
 
     // Guruh bo'yicha breakdown
     const groupBreakdownQuery = `
@@ -1773,7 +1795,10 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     res.json({
       success: true,
       month,
-      summary: summaryResult.rows[0],
+      summary: {
+        ...summaryResult.rows[0],
+        ...attendanceCountsResult.rows[0],
+      },
       group_breakdown: groupResult.rows,
       discounts: discountResult.rows[0] || { discount_count: 0, total_discount_amount: 0 },
       payment_methods: paymentMethodResult.rows
