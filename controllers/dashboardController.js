@@ -607,7 +607,7 @@ const getSuperAdminStats = async (req, res) => {
   try {
     const qMonth = req.query.month;
     const currentMonth = qMonth && isValidMonth(qMonth) ? qMonth : getCurrentMonth();
-    const [monthlyResult, subjectsResult, overallResult, studentsResult] = await Promise.all([
+    const [monthlyResult, subjectsResult, overallResult, studentsResult, expenseCategoriesResult] = await Promise.all([
       client.query(
         `WITH monthly_revenue AS (
            SELECT COALESCE(SUM(amount), 0)::numeric AS total_revenue
@@ -791,6 +791,18 @@ const getSuperAdminStats = async (req, res) => {
              WHERE ms.month = $1)::int AS snapshot_students`,
         [currentMonth]
       ),
+      // Rasxodlar kategoriyalar kesimida (kategoriyasiz rasxodlar "Boshqa")
+      client.query(
+        `SELECT
+           COALESCE(ec.name, 'Boshqa') AS category_name,
+           COALESCE(SUM(ce.amount), 0)::float AS total
+         FROM center_expenses ce
+         LEFT JOIN expense_categories ec ON ec.id = ce.category_id
+         WHERE ce.month = $1
+         GROUP BY COALESCE(ec.name, 'Boshqa')
+         ORDER BY total DESC`,
+        [currentMonth]
+      ),
     ]);
 
     const monthly = monthlyResult.rows[0] || {};
@@ -822,6 +834,10 @@ const getSuperAdminStats = async (req, res) => {
           new_students_count: toNumber(monthly.new_students_count),
           total_discounts: totalDiscounts,
           net_profit: netProfit,
+          expenses_by_category: (expenseCategoriesResult.rows || []).map((row) => ({
+            category_name: row.category_name,
+            total: toNumber(row.total),
+          })),
         },
         subjects: subjects.map((row) => ({
           subject_id: row.subject_id,
