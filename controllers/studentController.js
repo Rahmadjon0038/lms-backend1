@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const crypto = require('crypto');
+const { MONTHLY_POINT_CAP } = require('../config/points');
 
 const generatePlainRecoveryKey = () => {
     return `RK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
@@ -906,136 +907,199 @@ exports.getMyGroupInfo = async (req, res) => {
     }
 };
 
+// Ball tarixi student_id bo'yicha yig'iladi — student guruhdan guruhga
+// o'tsa ham, guruh/teacher o'chirilsa ham tarix yo'qolmaydi (guruh nomi
+// metadata snapshotidan tiklanadi). month='all' butun o'qish davri.
+const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
+    const isAllTime = String(month || '').trim().toLowerCase() === 'all';
+    const monthKey = isAllTime ? null : buildMonthFilter(month);
+
+    const baseParams = [studentId];
+    const whereParts = ['spe.student_id = $1'];
+    if (monthKey) {
+        baseParams.push(monthKey);
+        whereParts.push(`spe.month_name = $${baseParams.length}`);
+    }
+    if (groupId) {
+        baseParams.push(groupId);
+        whereParts.push(`spe.group_id = $${baseParams.length}`);
+    }
+    const whereSql = whereParts.join(' AND ');
+
+    const summaryResult = await pool.query(
+        `
+        SELECT
+            COALESCE(SUM(points), 0)::int AS total_points,
+            COUNT(*)::int AS total_events,
+            COUNT(CASE WHEN source_type = 'attendance' THEN 1 END)::int AS attendance_events,
+            COUNT(CASE WHEN source_type IN ('bonus', 'report') THEN 1 END)::int AS manual_events,
+            MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')) AS first_event_date,
+            MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')) AS last_event_date
+        FROM student_point_events spe
+        WHERE ${whereSql}
+        `,
+        baseParams
+    );
+
+    const breakdownResult = await pool.query(
+        `
+        SELECT
+            spe.group_id,
+            COALESCE(g.name, spe.metadata->>'group_name', 'Guruh') AS group_name,
+            COALESCE(SUM(spe.points), 0)::int AS total_points,
+            COUNT(*)::int AS total_events
+        FROM student_point_events spe
+        LEFT JOIN groups g ON g.id = spe.group_id
+        WHERE ${whereSql}
+        GROUP BY spe.group_id, g.name, spe.metadata->>'group_name'
+        ORDER BY total_points DESC, group_name ASC
+        `,
+        baseParams
+    );
+
+    const monthlyBreakdownResult = await pool.query(
+        `
+        SELECT
+            spe.month_name,
+            COALESCE(SUM(spe.points), 0)::int AS total_points,
+            COUNT(*)::int AS total_events
+        FROM student_point_events spe
+        WHERE ${whereSql}
+        GROUP BY spe.month_name
+        ORDER BY spe.month_name DESC
+        `,
+        baseParams
+    );
+
+    const teacherBreakdownResult = await pool.query(
+        `
+        SELECT
+            spe.month_name,
+            spe.created_by,
+            COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', 'Noma''lum') AS teacher_name,
+            COALESCE(SUM(spe.points), 0)::int AS total_points,
+            COUNT(*)::int AS total_events
+        FROM student_point_events spe
+        LEFT JOIN users cb ON cb.id = spe.created_by
+        WHERE ${whereSql}
+        GROUP BY spe.month_name, spe.created_by, cb.name, cb.surname, spe.metadata->>'created_by_name'
+        ORDER BY spe.month_name DESC, total_points DESC
+        `,
+        baseParams
+    );
+
+    const dailyBreakdownResult = await pool.query(
+        `
+        SELECT
+            TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
+            COALESCE(SUM(spe.points), 0)::int AS total_points,
+            COUNT(*)::int AS total_events,
+            MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS first_time,
+            MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS last_time
+        FROM student_point_events spe
+        WHERE ${whereSql}
+        GROUP BY DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
+        ORDER BY day_key DESC
+        `,
+        baseParams
+    );
+
+    const eventsResult = await pool.query(
+        `
+        SELECT
+            spe.id,
+            spe.student_id,
+            spe.group_id,
+            COALESCE(g.name, spe.metadata->>'group_name', '') AS group_name,
+            spe.lesson_id,
+            spe.month_name,
+            spe.points,
+            spe.source_type,
+            spe.title,
+            spe.description,
+            spe.metadata,
+            spe.created_by,
+            COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', '') AS created_by_name,
+            TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
+            TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
+            TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
+        FROM student_point_events spe
+        LEFT JOIN groups g ON g.id = spe.group_id
+        LEFT JOIN users cb ON cb.id = spe.created_by
+        WHERE ${whereSql}
+        ORDER BY spe.created_at DESC, spe.id DESC
+        `,
+        baseParams
+    );
+
+    return {
+        month: isAllTime ? 'all' : monthKey,
+        filter: {
+            group_id: groupId || null,
+        },
+        summary: {
+            total_points: summaryResult.rows[0]?.total_points || 0,
+            total_events: summaryResult.rows[0]?.total_events || 0,
+            attendance_events: summaryResult.rows[0]?.attendance_events || 0,
+            manual_events: summaryResult.rows[0]?.manual_events || 0,
+            first_event_date: summaryResult.rows[0]?.first_event_date || null,
+            last_event_date: summaryResult.rows[0]?.last_event_date || null,
+            monthly_cap: MONTHLY_POINT_CAP,
+        },
+        breakdown: breakdownResult.rows.map((row) => ({
+            group_id: row.group_id,
+            group_name: row.group_name,
+            total_points: row.total_points,
+            total_events: row.total_events,
+        })),
+        monthly_breakdown: monthlyBreakdownResult.rows.map((row) => ({
+            month_name: row.month_name,
+            total_points: row.total_points,
+            total_events: row.total_events,
+        })),
+        teacher_breakdown: teacherBreakdownResult.rows.map((row) => ({
+            month_name: row.month_name,
+            teacher_id: row.created_by,
+            teacher_name: row.teacher_name,
+            total_points: row.total_points,
+            total_events: row.total_events,
+        })),
+        daily_breakdown: dailyBreakdownResult.rows.map((row) => ({
+            day_key: row.day_key,
+            total_points: row.total_points,
+            total_events: row.total_events,
+            first_time: row.first_time,
+            last_time: row.last_time,
+        })),
+        events: eventsResult.rows.map((row) => ({
+            id: row.id,
+            group_id: row.group_id,
+            group_name: row.group_name,
+            lesson_id: row.lesson_id,
+            month_name: row.month_name,
+            points: row.points,
+            source_type: row.source_type,
+            title: row.title,
+            description: row.description,
+            metadata: row.metadata,
+            created_by: row.created_by,
+            created_by_name: row.created_by_name,
+            created_at: row.created_at,
+            day_key: row.day_key,
+            created_time: row.created_time,
+        })),
+    };
+};
+
 exports.getMyPointReports = async (req, res) => {
     try {
         const studentId = req.user.id;
-        const month = buildMonthFilter(req.query.month);
         const groupId = req.query.group_id ? parseInt(req.query.group_id) : null;
 
-        if (!month) {
-            return res.status(400).json({
-                success: false,
-                message: 'month YYYY-MM formatida bo\'lishi kerak'
-            });
-        }
-
-        const baseParams = [studentId, month];
-        const whereParts = ['spe.student_id = $1', 'spe.month_name = $2'];
-        if (groupId) {
-            baseParams.push(groupId);
-            whereParts.push(`spe.group_id = $${baseParams.length}`);
-        }
-
-        const summaryResult = await pool.query(
-            `
-            SELECT
-                COALESCE(SUM(points), 0)::int AS total_points,
-                COUNT(*)::int AS total_events,
-                COUNT(CASE WHEN source_type = 'attendance' THEN 1 END)::int AS attendance_events,
-                COUNT(CASE WHEN source_type IN ('bonus', 'report') THEN 1 END)::int AS manual_events
-            FROM student_point_events spe
-            WHERE ${whereParts.join(' AND ')}
-            `,
-            baseParams
-        );
-
-        const breakdownResult = await pool.query(
-            `
-            SELECT
-                spe.group_id,
-                COALESCE(g.name, 'Guruh') AS group_name,
-                COALESCE(SUM(spe.points), 0)::int AS total_points,
-                COUNT(*)::int AS total_events
-            FROM student_point_events spe
-            LEFT JOIN groups g ON g.id = spe.group_id
-            WHERE ${whereParts.join(' AND ')}
-            GROUP BY spe.group_id, g.name
-            ORDER BY total_points DESC, group_name ASC
-            `,
-            baseParams
-        );
-
-        const dailyBreakdownResult = await pool.query(
-            `
-            SELECT
-                TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-                COALESCE(SUM(spe.points), 0)::int AS total_points,
-                COUNT(*)::int AS total_events,
-                MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS first_time,
-                MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS last_time
-            FROM student_point_events spe
-            WHERE ${whereParts.join(' AND ')}
-            GROUP BY DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
-            ORDER BY day_key DESC
-            `,
-            baseParams
-        );
-
-        const eventsResult = await pool.query(
-            `
-            SELECT
-                spe.id,
-                spe.student_id,
-                spe.group_id,
-                COALESCE(g.name, '') AS group_name,
-                spe.lesson_id,
-                spe.month_name,
-                spe.points,
-                spe.source_type,
-                spe.title,
-                spe.description,
-                spe.metadata,
-                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
-                TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-                TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
-            FROM student_point_events spe
-            LEFT JOIN groups g ON g.id = spe.group_id
-            WHERE ${whereParts.join(' AND ')}
-            ORDER BY spe.created_at DESC, spe.id DESC
-            `,
-            baseParams
-        );
-
-        const responseData = {
-            month,
-            filter: {
-                group_id: groupId,
-            },
-            summary: {
-                total_points: summaryResult.rows[0]?.total_points || 0,
-                total_events: summaryResult.rows[0]?.total_events || 0,
-                attendance_events: summaryResult.rows[0]?.attendance_events || 0,
-                manual_events: summaryResult.rows[0]?.manual_events || 0,
-            },
-            breakdown: breakdownResult.rows.map((row) => ({
-                group_id: row.group_id,
-                group_name: row.group_name,
-                total_points: row.total_points,
-                total_events: row.total_events,
-            })),
-            daily_breakdown: dailyBreakdownResult.rows.map((row) => ({
-                day_key: row.day_key,
-                total_points: row.total_points,
-                total_events: row.total_events,
-                first_time: row.first_time,
-                last_time: row.last_time,
-            })),
-            events: eventsResult.rows.map((row) => ({
-                id: row.id,
-                group_id: row.group_id,
-                group_name: row.group_name,
-                lesson_id: row.lesson_id,
-                month_name: row.month_name,
-                points: row.points,
-                source_type: row.source_type,
-                title: row.title,
-                description: row.description,
-                metadata: row.metadata,
-                created_at: row.created_at,
-                day_key: row.day_key,
-                created_time: row.created_time,
-            })),
-        };
+        const responseData = await buildStudentPointHistory(studentId, {
+            month: req.query.month,
+            groupId,
+        });
 
         res.json({
             success: true,
@@ -1044,6 +1108,73 @@ exports.getMyPointReports = async (req, res) => {
         });
     } catch (error) {
         console.error('❌ Student ballar tarixini olishda xato:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Ballar tarixini olishda xatolik yuz berdi',
+            error: error.message
+        });
+    }
+};
+
+// Admin/teacher uchun: studentning butun o'qish davomidagi ball tarixi.
+// Teacher faqat o'z guruhidagi (hozirgi a'zolik) studentni ko'ra oladi,
+// lekin tarixning o'zi barcha guruh/teacherlar bo'yicha to'liq qaytadi.
+exports.getStudentPointHistory = async (req, res) => {
+    try {
+        const { role, id: actorId } = req.user;
+        const studentId = parseInt(req.params.id);
+        const groupId = req.query.group_id ? parseInt(req.query.group_id) : null;
+
+        if (Number.isNaN(studentId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'student id son bo\'lishi kerak'
+            });
+        }
+
+        const studentCheck = await pool.query(
+            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
+            [studentId, 'student']
+        );
+        if (studentCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student topilmadi'
+            });
+        }
+
+        if (role === 'teacher') {
+            const accessCheck = await pool.query(
+                `SELECT 1
+                 FROM student_groups sg
+                 JOIN groups g ON g.id = sg.group_id
+                 WHERE sg.student_id = $1 AND g.teacher_id = $2
+                 LIMIT 1`,
+                [studentId, actorId]
+            );
+            if (accessCheck.rows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Siz faqat o\'z guruhingizdagi studentlar tarixini ko\'ra olasiz'
+                });
+            }
+        }
+
+        const responseData = await buildStudentPointHistory(studentId, {
+            month: req.query.month || 'all',
+            groupId,
+        });
+
+        res.json({
+            success: true,
+            message: 'Ballar tarixi muvaffaqiyatli olindi',
+            data: {
+                student: studentCheck.rows[0],
+                ...responseData,
+            }
+        });
+    } catch (error) {
+        console.error('❌ Student ball tarixini olishda xato:', error);
         res.status(500).json({
             success: false,
             message: 'Ballar tarixini olishda xatolik yuz berdi',
@@ -1104,7 +1235,11 @@ exports.createStudentPointEvent = async (req, res) => {
         }
 
         const groupCheck = await pool.query(
-            'SELECT id, name, teacher_id FROM groups WHERE id = $1',
+            `SELECT g.id, g.name, g.teacher_id,
+                    COALESCE(NULLIF(TRIM(t.name || ' ' || t.surname), ''), '') AS teacher_name
+             FROM groups g
+             LEFT JOIN users t ON t.id = g.teacher_id
+             WHERE g.id = $1`,
             [groupId]
         );
         if (groupCheck.rows.length === 0) {
@@ -1133,6 +1268,44 @@ exports.createStudentPointEvent = async (req, res) => {
             });
         }
 
+        // Oylik limit: student bir oyda (shu guruh bo'yicha) ko'pi bilan
+        // MONTHLY_POINT_CAP ball to'playdi. Ayirish (manfiy ball) har doim mumkin.
+        if (pointsValue > 0) {
+            const capResult = await pool.query(
+                `SELECT COALESCE(SUM(points), 0)::int AS month_total
+                 FROM student_point_events
+                 WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
+                [studentId, groupId, eventMonth]
+            );
+            const monthTotal = capResult.rows[0]?.month_total || 0;
+            const remaining = Math.max(0, MONTHLY_POINT_CAP - monthTotal);
+            if (pointsValue > remaining) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Oylik ball limiti ${MONTHLY_POINT_CAP} ta. ${eventMonth} oyida to'plangan: ${monthTotal}, yana qo'shish mumkin: ${remaining}`,
+                    data: {
+                        monthly_cap: MONTHLY_POINT_CAP,
+                        month_name: eventMonth,
+                        month_total: monthTotal,
+                        remaining,
+                    }
+                });
+            }
+        }
+
+        // Guruh/teacher keyinchalik o'zgarsa yoki o'chirilsa ham tarixda
+        // kim va qaysi guruhda ball qo'yganligi ko'rinib turishi uchun snapshot
+        const actorResult = await pool.query(
+            `SELECT COALESCE(NULLIF(TRIM(name || ' ' || surname), ''), '') AS full_name FROM users WHERE id = $1`,
+            [actorId]
+        );
+        const eventMetadata = {
+            ...(metadata && typeof metadata === 'object' ? metadata : {}),
+            group_name: group.name || '',
+            teacher_name: group.teacher_name || '',
+            created_by_name: actorResult.rows[0]?.full_name || '',
+        };
+
         const inserted = await pool.query(
             `
             INSERT INTO student_point_events (
@@ -1158,7 +1331,7 @@ exports.createStudentPointEvent = async (req, res) => {
                 normalizedType,
                 title.trim(),
                 description?.trim() || null,
-                metadata ? JSON.stringify(metadata) : '{}',
+                JSON.stringify(eventMetadata),
                 actorId,
             ]
         );

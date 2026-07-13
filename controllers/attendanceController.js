@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const XLSX = require('xlsx');
 const { notifyUser } = require('./notificationController');
+const { MONTHLY_POINT_CAP } = require('../config/points');
 
 /**
  * YANGI ATTENDANCE TIZIMI
@@ -1576,7 +1577,10 @@ exports.markAttendance = async (req, res) => {
           }
 
           try {
-            // Davomat balli qoidasi: keldi = 3, kechikdi = 2, kelmadi = 0.
+            // Davomat balli qoidasi: keldi = 3, kelmadi = 0.
+            // Amalda faqat keldi/kelmadi ishlatiladi; dars haftada 3 marta
+            // bo'lgani uchun oyiga ~13 dars × 3 = ~39 ball — oylik 100 ballik
+            // limitning ~40% i davomatdan, qolgani teacher ballaridan yig'iladi.
             // Har (student, lesson) uchun bitta yozuv bo'ladi: qayta
             // belgilashda eski yozuv o'chirilib yangisi yoziladi — balllar
             // dublikat bo'lmaydi, "kelmadi"ga o'zgartirilsa ball olib
@@ -1584,16 +1588,34 @@ exports.markAttendance = async (req, res) => {
             // sayt yoki mobil) shu endpoint orqali bir xil ishlaydi.
             const attendancePoints = {
               keldi: 3,
-              kechikdi: 2,
               kelmadi: 0,
             };
-            const awardedPoints = attendancePoints[record.status] ?? 0;
+            const basePoints = attendancePoints[record.status] ?? 0;
 
             await pool.query(
               `DELETE FROM student_point_events
                WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
               [updatedStudentId, lesson.id]
             );
+
+            // Oylik limit: shu oyda (shu guruh bo'yicha) MONTHLY_POINT_CAP dan
+            // oshmasligi kerak — limitga yetganda qolgan budjet doirasida beriladi
+            const eventMonthKey =
+              lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
+            let awardedPoints = basePoints;
+            if (basePoints > 0) {
+              const capResult = await pool.query(
+                `SELECT COALESCE(SUM(points), 0)::int AS month_total
+                 FROM student_point_events
+                 WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
+                [updatedStudentId, lesson.group_id, eventMonthKey]
+              );
+              const remaining = Math.max(
+                0,
+                MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
+              );
+              awardedPoints = Math.min(basePoints, remaining);
+            }
 
             if (awardedPoints > 0) {
               await pool.query(
@@ -1609,13 +1631,20 @@ exports.markAttendance = async (req, res) => {
                   description,
                   metadata,
                   created_by
-                ) VALUES ($1, $2, $3, $4, $5, 'attendance', $6, $7, $8::jsonb, $9)
+                ) VALUES (
+                  $1, $2, $3, $4, $5, 'attendance', $6, $7,
+                  $8::jsonb || jsonb_build_object(
+                    'created_by_name',
+                    COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
+                  ),
+                  $9
+                )
                 `,
                 [
                   updatedStudentId,
                   lesson.group_id,
                   lesson.id,
-                  lesson.lesson_month || String(lesson.lesson_date).slice(0, 7),
+                  eventMonthKey,
                   awardedPoints,
                   'Darsga qatnashdi',
                   `${humanStatus} - +${awardedPoints} ball`,
@@ -1626,6 +1655,8 @@ exports.markAttendance = async (req, res) => {
                     teacher_name: lesson.teacher_name || '',
                     subject_name: lesson.subject_name || '',
                     awarded_points: awardedPoints,
+                    base_points: basePoints,
+                    capped: awardedPoints < basePoints,
                   }),
                   userId,
                 ]
