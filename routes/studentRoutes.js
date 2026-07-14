@@ -476,6 +476,8 @@ router.get("/:student_id/groups", protect, roleCheck(['admin']), studentControll
  *       401:
  *         description: Ruxsat berilmadi (token kerak)
  */
+// Student o'z akkauntini o'chirishi (parol bilan tasdiqlanadi)
+router.delete("/me/account", protect, roleCheck(['student']), studentController.deleteMyAccount);
 router.get("/my-groups", protect, studentController.getMyGroups);
 router.get("/my-point-reports", protect, studentController.getMyPointReports);
 router.post("/point-events", protect, roleCheck(['teacher', 'admin', 'super_admin']), studentController.createStudentPointEvent);
