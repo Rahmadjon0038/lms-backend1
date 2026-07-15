@@ -90,6 +90,7 @@ const profileAvatarRoutes = require('./routes/profileAvatarRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const teacherSalaryRoutes = require('./routes/teacherSalaryRoutes');
+const teacherLateRoutes = require('./routes/teacherLateRoutes');
 const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const { createGroupTables } = require('./models/groupModel');
@@ -100,6 +101,7 @@ const { createLessonsTable, createAttendanceTable, createHolidaysTable } = requi
 const { createGuideTables } = require('./models/guideModel');
 const { createExpenseTable } = require('./models/expenseModel');
 const { createTeacherSalaryTables } = require('./models/teacherSalaryModel');
+const { createTeacherLateTables } = require('./models/teacherLateModel');
 const { createAdminSalaryTables } = require('./models/adminSalaryModel');
 const { createProfileAvatarTable } = require('./models/profileAvatarModel');
 const { createContentTables } = require('./models/contentModel');
@@ -125,6 +127,7 @@ app.use('/api/profile-avatars', profileAvatarRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/teacher-salary', teacherSalaryRoutes);
+app.use('/api/teacher-late', teacherLateRoutes);
 app.use('/api/admin-salary', adminSalaryRoutes);
 app.use('/api/content', contentRoutes);
 
@@ -163,6 +166,7 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['payments', createPaymentTables],
             ['monthly_snapshots', createMonthlySnapshotTable],
             ['teacher_salary_v2', createTeacherSalaryTables],
+            ['teacher_late', createTeacherLateTables],
             ['admin_salary', createAdminSalaryTables],
             ['content', createContentTables]
         ];
