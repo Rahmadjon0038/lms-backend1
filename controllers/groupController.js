@@ -471,10 +471,14 @@ exports.updateGroup = async (req, res) => {
                 });
             }
         }
+        // Jadval o'zgarishi BUGUNDAN kuchga kiradi (front sana yubormasa):
+        // bugun yangi jadval bo'yicha dars kuni bo'lsa, teacher shu kunning
+        // o'zida davomat qila olishi kerak. Bugungi eski jadval darsi (agar
+        // bo'lsa) o'chirilib, yangisi bilan almashadi.
         const effectiveFrom = scheduleChanged
             ? (schedule_effective_from && /^\d{4}-\d{2}-\d{2}$/.test(String(schedule_effective_from))
                 ? schedule_effective_from
-                : tomorrowAsDateString())
+                : todayAsDateString())
             : null;
         
         // Teacher va subject validation - agar ikkalasi ham berilgan bo'lsa

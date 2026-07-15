@@ -789,6 +789,22 @@ exports.closeTeacherMonth = async (req, res) => {
 
     const summary = await buildOpenMonthSummary(client, teacherId, monthName);
 
+    // Admin qo'lda kiritgan yakuniy oylik summasi (ixtiyoriy).
+    // Yuborilmasa — avvalgidek hisoblangan qiymat ishlatiladi.
+    const overrideRaw = req.body?.expected_salary;
+    const overrideNum = Number(overrideRaw);
+    const hasOverride =
+      overrideRaw !== undefined &&
+      overrideRaw !== null &&
+      overrideRaw !== '' &&
+      Number.isFinite(overrideNum) &&
+      overrideNum >= 0;
+
+    const computedExpected =
+      summary.expected_salary_gross != null ? summary.expected_salary_gross : summary.expected_salary;
+    const closeExpected = hasOverride ? round2(overrideNum) : computedExpected;
+    const closeBalance = hasOverride ? round2(overrideNum) : summary.final_salary;
+
     await client.query(
       `UPDATE teacher_monthly_salaries
        SET is_closed = true,
@@ -804,8 +820,8 @@ exports.closeTeacherMonth = async (req, res) => {
         monthName,
         req.user.id,
         summary.total_collected,
-        summary.expected_salary_gross != null ? summary.expected_salary_gross : summary.expected_salary,
-        summary.final_salary,
+        closeExpected,
+        closeBalance,
       ]
     );
 
@@ -840,23 +856,28 @@ exports.getAllTeachersMonthSummary = async (req, res) => {
 
   const client = await pool.connect();
   try {
+    // Faqat tanlangan oyga (yoki undan avvalgi oyga) ishga kelgan o'qituvchilar.
+    // "Qaysi oyda kelgan" — ishni boshlagan sana (start_date), agar u yo'q bo'lsa
+    // tizimga qo'shilgan sana (created_at). Shu oydan boshlab ro'yxatda ko'rinadi.
     const teachers = await client.query(
       `SELECT id
        FROM users
        WHERE role = 'teacher'
-       ORDER BY id`
+         AND to_char(COALESCE(start_date, created_at::date), 'YYYY-MM') <= $1
+       ORDER BY id`,
+      [monthName]
     );
 
     const items = [];
     for (const t of teachers.rows) {
       const closed = await getClosedSummary(client, t.id, monthName);
-      if (closed) {
-        items.push(closed);
-        continue;
-      }
+      const summary = closed || (await buildOpenMonthSummary(client, t.id, monthName));
 
-      const open = await buildOpenMonthSummary(client, t.id, monthName);
-      items.push(open);
+      // O'quvchisi yo'q o'qituvchilar ro'yxatda ko'rsatilmaydi.
+      const studentCount = Array.isArray(summary.students) ? summary.students.length : 0;
+      if (studentCount <= 0) continue;
+
+      items.push(summary);
     }
 
     return res.json({
