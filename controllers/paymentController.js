@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 /**
  * ===================================================================
@@ -18,6 +19,7 @@ const db = require('../config/db');
 exports.getMyPayments = async (req, res) => {
   try {
     const { id: studentId, role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat student role uchun
     if (role !== 'student') {
@@ -29,11 +31,11 @@ exports.getMyPayments = async (req, res) => {
 
     const { month } = req.query;
     
-    let whereClause = 'WHERE ms.student_id = $1';
-    let params = [studentId];
+    let whereClause = 'WHERE ms.student_id = $1 AND ms.branch_id = $2';
+    let params = [studentId, branchId];
     
     if (month) {
-      whereClause += ' AND ms.month = $2';
+      whereClause += ' AND ms.month = $3';
       params.push(month);
     }
 
@@ -72,9 +74,9 @@ exports.getMyPayments = async (req, res) => {
         g.name as group_name,
         TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as payment_date
       FROM payment_transactions pt
-      JOIN groups g ON pt.group_id = g.id
-      WHERE pt.student_id = $1
-      ${month ? 'AND pt.month = $2' : ''}
+      JOIN groups g ON pt.group_id = g.id AND g.branch_id = $2
+      WHERE pt.student_id = $1 AND pt.branch_id = $2
+      ${month ? 'AND pt.month = $3' : ''}
       ORDER BY pt.created_at DESC
       LIMIT 50
     `;
@@ -94,8 +96,8 @@ exports.getMyPayments = async (req, res) => {
         COUNT(CASE WHEN payment_status = 'partial' THEN 1 END) as partial_count,
         COUNT(CASE WHEN payment_status = 'unpaid' THEN 1 END) as unpaid_count
       FROM monthly_snapshots 
-      WHERE student_id = $1
-      ${month ? 'AND month = $2' : ''}
+      WHERE student_id = $1 AND branch_id = $2
+      ${month ? 'AND month = $3' : ''}
     `;
 
     const summaryResult = await db.query(summaryQuery, params);

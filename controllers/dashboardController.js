@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const isValidDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 const isValidMonth = (v) => /^\d{4}-\d{2}$/.test(v);
@@ -38,6 +39,7 @@ const getAdminDailyStats = async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const branchId = getScopedBranchId(req);
     const today = getTodayDate();
     const qFrom = req.query.from;
     const qTo = req.query.to;
@@ -71,6 +73,7 @@ const getAdminDailyStats = async (req, res) => {
                 COUNT(*)::int AS payments_count
          FROM payment_transactions
          WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') BETWEEN $1::date AND $2::date
+           AND branch_id = $3
          GROUP BY 1
        ),
        daily_students AS (
@@ -78,6 +81,7 @@ const getAdminDailyStats = async (req, res) => {
                 COUNT(*)::int AS new_students_count
          FROM users
          WHERE role = 'student'
+           AND branch_id = $3
            AND DATE(created_at AT TIME ZONE 'Asia/Tashkent') BETWEEN $1::date AND $2::date
          GROUP BY 1
        ),
@@ -87,6 +91,7 @@ const getAdminDailyStats = async (req, res) => {
                 COALESCE(SUM(amount), 0)::numeric AS expenses_amount
          FROM center_expenses
          WHERE expense_date::date BETWEEN $1::date AND $2::date
+           AND branch_id = $3
          GROUP BY 1
        )
        SELECT d.day::text AS date,
@@ -99,7 +104,7 @@ const getAdminDailyStats = async (req, res) => {
        LEFT JOIN daily_students s ON s.day = d.day
        LEFT JOIN daily_expenses e ON e.day = d.day
        ORDER BY d.day ASC`,
-      [fromDate, toDate]
+      [fromDate, toDate, branchId]
     );
 
     const points = result.rows;
@@ -129,8 +134,9 @@ const getAdminDailyStats = async (req, res) => {
     const dailyPaymentTotalResult = await client.query(
       `SELECT COALESCE(SUM(amount), 0)::float AS total_amount
        FROM payment_transactions
-       WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date`,
-      [toDate]
+       WHERE DATE(created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
+         AND branch_id = $2`,
+      [toDate, branchId]
     );
 
     const dailyPaymentsResult = await client.query(
@@ -164,13 +170,14 @@ const getAdminDailyStats = async (req, res) => {
          pt.payment_method,
          TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as payment_time
        FROM payment_transactions pt
-       JOIN users u ON u.id = pt.student_id
-       JOIN groups g ON g.id = pt.group_id
+       JOIN users u ON u.id = pt.student_id AND u.branch_id = pt.branch_id
+       JOIN groups g ON g.id = pt.group_id AND g.branch_id = pt.branch_id
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN users t ON t.id = g.teacher_id
        WHERE DATE(pt.created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
+         AND pt.branch_id = $2
        ORDER BY pt.created_at DESC`,
-      [toDate]
+      [toDate, branchId]
     );
 
     const dailyNewStudentsResult = await client.query(
@@ -204,9 +211,10 @@ const getAdminDailyStats = async (req, res) => {
        LEFT JOIN groups g ON g.id = users.group_id
        LEFT JOIN subjects sg ON sg.id = g.subject_id
        WHERE users.role = 'student'
+         AND users.branch_id = $2
          AND DATE(users.created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
        ORDER BY users.created_at DESC`,
-      [toDate]
+      [toDate, branchId]
     );
 
     const dailyNewStudents = dailyNewStudentsResult.rows;
@@ -271,6 +279,7 @@ const getAdminMonthlyStats = async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const branchId = getScopedBranchId(req);
     const currentMonth = getCurrentMonth();
     const qFrom = req.query.from_month;
     const qTo = req.query.to_month;
@@ -308,6 +317,7 @@ const getAdminMonthlyStats = async (req, res) => {
                 COUNT(*)::int AS new_students_count
          FROM users
          WHERE role = 'student'
+           AND branch_id = $5
            AND TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') BETWEEN $3 AND $4
          GROUP BY 1
        ),
@@ -317,6 +327,7 @@ const getAdminMonthlyStats = async (req, res) => {
                 COALESCE(SUM(amount), 0)::numeric AS expenses_amount
          FROM center_expenses
          WHERE month BETWEEN $3 AND $4
+           AND branch_id = $5
          GROUP BY 1
        )
        SELECT m.month,
@@ -327,7 +338,7 @@ const getAdminMonthlyStats = async (req, res) => {
        LEFT JOIN monthly_students s ON s.month = m.month
        LEFT JOIN monthly_expenses e ON e.month = m.month
        ORDER BY m.month ASC`,
-      [fromDate, toDate, fromMonth, toMonth]
+      [fromDate, toDate, fromMonth, toMonth, branchId]
     );
 
     const points = result.rows;
@@ -348,8 +359,8 @@ const getAdminMonthlyStats = async (req, res) => {
          COUNT(CASE WHEN payment_status = 'partial' THEN 1 END)::int AS partial_count,
          COUNT(CASE WHEN payment_status = 'unpaid' THEN 1 END)::int AS unpaid_count
        FROM monthly_snapshots
-       WHERE month = $1`,
-      [toMonth]
+       WHERE month = $1 AND branch_id = $2`,
+      [toMonth, branchId]
     );
 
     const statusDist = statusDistResult.rows[0] || {};
@@ -419,14 +430,16 @@ const getAdminOverviewStats = async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const branchId = getScopedBranchId(req);
     const currentMonth = getCurrentMonth();
 
     const [overallResult, admissionsTrendResult] = await Promise.all([
       client.query(
         `SELECT
-           (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started')::int AS active_groups_count,
-           (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND status = 'active')::int AS active_teachers_count,
-           (SELECT COUNT(*) FROM subjects)::int AS subjects_count`
+           (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started' AND branch_id = $1)::int AS active_groups_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND status = 'active' AND branch_id = $1)::int AS active_teachers_count,
+           (SELECT COUNT(*) FROM subjects WHERE branch_id = $1)::int AS subjects_count`,
+        [branchId]
       ),
       client.query(
         `WITH months AS (
@@ -441,13 +454,15 @@ const getAdminOverviewStats = async (req, res) => {
            SELECT TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') AS month, COUNT(*)::int AS admissions_count
            FROM users
            WHERE role = 'student'
+             AND branch_id = $1
              AND created_at >= date_trunc('month', CURRENT_DATE) - interval '11 months'
            GROUP BY 1
          )
          SELECT m.month, COALESCE(a.admissions_count, 0)::int AS admissions_count
          FROM months m
          LEFT JOIN admissions a ON a.month = m.month
-         ORDER BY m.month`
+         ORDER BY m.month`,
+        [branchId]
       ),
     ]);
 
@@ -490,6 +505,7 @@ const getDebtorStudents = async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const branchId = getScopedBranchId(req);
     const currentMonth = new Date().toISOString().slice(0, 7);
     const { limit = 50 } = req.query;
 
@@ -508,6 +524,8 @@ const getDebtorStudents = async (req, res) => {
          FROM student_discounts sd
          JOIN groups g ON sd.group_id = g.id
          WHERE sd.is_active = true
+           AND sd.branch_id = $3
+           AND g.branch_id = $3
            AND sd.start_month <= $1
            AND (sd.end_month IS NULL OR sd.end_month >= $1)
          GROUP BY sd.student_id, sd.group_id
@@ -525,21 +543,23 @@ const getDebtorStudents = async (req, res) => {
          (GREATEST(g.price - COALESCE(sdc.total_discount_amount, 0), 0) - COALESCE(sp.paid_amount, 0)) as debt_amount,
          TO_CHAR(sp.last_payment_date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as last_payment_date
        FROM student_groups sg
-       JOIN users u ON sg.student_id = u.id
-       JOIN groups g ON sg.group_id = g.id
-       JOIN subjects s ON g.subject_id = s.id
+       JOIN users u ON sg.student_id = u.id AND u.branch_id = $3
+       JOIN groups g ON sg.group_id = g.id AND g.branch_id = $3
+       JOIN subjects s ON g.subject_id = s.id AND s.branch_id = $3
        LEFT JOIN student_discounts_calc sdc ON sg.student_id = sdc.student_id
                                              AND sg.group_id = sdc.group_id
        LEFT JOIN student_payments sp ON sg.student_id = sp.student_id
                                      AND sp.month = $1
                                      AND sp.group_id = sg.group_id
+                                     AND sp.branch_id = $3
        WHERE sg.status = 'active'
+         AND sg.branch_id = $3
          AND g.status = 'active'
          AND g.class_status = 'started'
          AND COALESCE(sp.paid_amount, 0) < GREATEST(g.price - COALESCE(sdc.total_discount_amount, 0), 0)
        ORDER BY debt_amount DESC
        LIMIT $2`,
-      [currentMonth, limit]
+      [currentMonth, limit, branchId]
     );
 
     return res.json({
@@ -578,15 +598,16 @@ const getDebtorStudents = async (req, res) => {
 // mobil ilovadagi oy filtrlarini shu oydan boshlash uchun
 const getSystemStartMonth = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(`
       SELECT TO_CHAR(
         LEAST(
-          COALESCE((SELECT MIN(created_at) FROM users), CURRENT_TIMESTAMP),
-          COALESCE((SELECT MIN(created_at) FROM groups), CURRENT_TIMESTAMP)
+          COALESCE((SELECT MIN(created_at) FROM users WHERE branch_id = $1), CURRENT_TIMESTAMP),
+          COALESCE((SELECT MIN(created_at) FROM groups WHERE branch_id = $1), CURRENT_TIMESTAMP)
         ),
         'YYYY-MM'
       ) AS start_month
-    `);
+    `, [branchId]);
     return res.json({
       success: true,
       data: { start_month: result.rows[0]?.start_month || null },
@@ -605,6 +626,7 @@ const getSuperAdminStats = async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const branchId = getScopedBranchId(req);
     const qMonth = req.query.month;
     const currentMonth = qMonth && isValidMonth(qMonth) ? qMonth : getCurrentMonth();
     const [monthlyResult, subjectsResult, overallResult, studentsResult, expenseCategoriesResult] = await Promise.all([
@@ -613,22 +635,26 @@ const getSuperAdminStats = async (req, res) => {
            SELECT COALESCE(SUM(amount), 0)::numeric AS total_revenue
            FROM payment_transactions
            WHERE month = $1
+             AND branch_id = $2
          ),
          monthly_expenses AS (
            SELECT COALESCE(SUM(amount), 0)::numeric AS total_expenses
            FROM center_expenses
            WHERE month = $1
+             AND branch_id = $2
          ),
          monthly_new_students AS (
            SELECT COUNT(*)::int AS new_students_count
            FROM users
            WHERE role = 'student'
+             AND branch_id = $2
              AND TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $1
          ),
          monthly_discounts AS (
            SELECT COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN discount_amount ELSE 0 END), 0)::numeric AS total_discounts
            FROM monthly_snapshots
            WHERE month = $1
+             AND branch_id = $2
          ),
          teacher_salary_monthly AS (
            -- Faqat YOPILGAN (oylik oldi deb belgilangan) teacher oyliklari.
@@ -641,6 +667,7 @@ const getSuperAdminStats = async (req, res) => {
            )::numeric AS total_teacher_salary
            FROM teacher_monthly_salaries tms
            WHERE tms.month_name = $1
+             AND tms.branch_id = $2
              AND tms.is_closed = true
          ),
          admin_salary_monthly AS (
@@ -648,6 +675,7 @@ const getSuperAdminStats = async (req, res) => {
            SELECT COALESCE(SUM(amount), 0)::numeric AS total_admin_salary
            FROM admin_salary_payouts
            WHERE month_name = $1
+             AND branch_id = $2
          )
          SELECT
            (SELECT total_revenue FROM monthly_revenue)::float AS total_revenue,
@@ -656,7 +684,7 @@ const getSuperAdminStats = async (req, res) => {
            (SELECT total_expenses FROM monthly_expenses)::float AS total_expenses,
            (SELECT new_students_count FROM monthly_new_students)::int AS new_students_count,
            (SELECT total_discounts FROM monthly_discounts)::float AS total_discounts`,
-        [currentMonth]
+        [currentMonth, branchId]
       ),
       client.query(
         `WITH students_by_subject AS (
@@ -664,8 +692,9 @@ const getSuperAdminStats = async (req, res) => {
              g.subject_id,
              COUNT(*)::int AS total_students_count
            FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id
+           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
            WHERE ms.month = $1
+             AND ms.branch_id = $2
            GROUP BY g.subject_id
          ),
          revenue_by_subject AS (
@@ -676,8 +705,9 @@ const getSuperAdminStats = async (req, res) => {
              -- to'lov progres chizig'i shu ikkisining nisbatidan chiziladi
              COALESCE(SUM(GREATEST(COALESCE(ms.required_amount, 0) - COALESCE(ms.discount_amount, 0), 0)), 0)::numeric AS total_required
            FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id
+           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
            WHERE ms.month = $1
+             AND ms.branch_id = $2
              AND COALESCE(ms.monthly_status, 'active') = 'active'
            GROUP BY g.subject_id
          ),
@@ -688,9 +718,10 @@ const getSuperAdminStats = async (req, res) => {
              CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
              COUNT(*)::int AS total_students_count
            FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id
-           LEFT JOIN users u ON u.id = g.teacher_id
+           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
+           LEFT JOIN users u ON u.id = g.teacher_id AND u.branch_id = $2
            WHERE ms.month = $1
+             AND ms.branch_id = $2
              AND g.teacher_id IS NOT NULL
            GROUP BY g.subject_id, g.teacher_id, u.surname, u.name
          ),
@@ -701,8 +732,9 @@ const getSuperAdminStats = async (req, res) => {
              COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_revenue,
              COALESCE(SUM(GREATEST(COALESCE(ms.required_amount, 0) - COALESCE(ms.discount_amount, 0), 0)), 0)::numeric AS total_required
            FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id
+           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
            WHERE ms.month = $1
+             AND ms.branch_id = $2
              AND COALESCE(ms.monthly_status, 'active') = 'active'
              AND g.status = 'active'
              AND g.class_status = 'started'
@@ -750,14 +782,16 @@ const getSuperAdminStats = async (req, res) => {
          LEFT JOIN students_by_subject sb ON sb.subject_id = s.id
          LEFT JOIN revenue_by_subject rb ON rb.subject_id = s.id
          LEFT JOIN teachers_by_subject tb ON tb.subject_id = s.id
+         WHERE s.branch_id = $2
          ORDER BY total_revenue DESC, total_students_count DESC, s.name ASC`,
-        [currentMonth]
+        [currentMonth, branchId]
       ),
       client.query(
         `SELECT
-           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'finished')::int AS finished_students_count,
-           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished'))::int AS inactive_students_count,
-           (SELECT COUNT(*) FROM users WHERE role = 'teacher')::int AS total_teachers_count`
+           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'finished' AND branch_id = $1)::int AS finished_students_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'student' AND status NOT IN ('active', 'finished') AND branch_id = $1)::int AS inactive_students_count,
+           (SELECT COUNT(*) FROM users WHERE role = 'teacher' AND branch_id = $1)::int AS total_teachers_count`,
+        [branchId]
       ),
       // Talabalar tafsiloti — admin panel students sahifasi bilan AYNAN bir xil
       // hisob: bitta talaba ikkita guruhda o'qisa u ikki marta sanaladi
@@ -766,30 +800,42 @@ const getSuperAdminStats = async (req, res) => {
         `SELECT
            (SELECT COUNT(*)
               FROM users u
-              LEFT JOIN student_groups sg ON sg.student_id = u.id
-             WHERE u.role = 'student')::int AS total_students,
+              LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
+             WHERE u.role = 'student'
+               AND u.branch_id = $2)::int AS total_students,
            (SELECT COUNT(*)
               FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-             WHERE sg.status = 'active')::int AS active_students,
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+             WHERE sg.status = 'active'
+               AND sg.branch_id = $2)::int AS active_students,
            (SELECT COUNT(*)
               FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-             WHERE sg.status = 'stopped')::int AS stopped_students,
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+             WHERE sg.status = 'stopped'
+               AND sg.branch_id = $2)::int AS stopped_students,
            (SELECT COUNT(*)
               FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-             WHERE sg.status = 'finished')::int AS finished_students,
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+             WHERE sg.status = 'finished'
+               AND sg.branch_id = $2)::int AS finished_students,
            (SELECT COUNT(*)
               FROM users u
              WHERE u.role = 'student'
+               AND u.branch_id = $2
                AND NOT EXISTS (
-                 SELECT 1 FROM student_groups sg2 WHERE sg2.student_id = u.id
+                 SELECT 1 FROM student_groups sg2 WHERE sg2.student_id = u.id AND sg2.branch_id = u.branch_id
                ))::int AS unassigned_students,
            (SELECT COUNT(*)
               FROM monthly_snapshots ms
-             WHERE ms.month = $1)::int AS snapshot_students`,
-        [currentMonth]
+             WHERE ms.month = $1
+               AND ms.branch_id = $2)::int AS snapshot_students,
+           (SELECT COUNT(*)
+              FROM student_groups sg
+              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+              JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
+             WHERE sg.status = 'active'
+               AND sg.branch_id = $2)::int AS active_attendance_students`,
+        [currentMonth, branchId]
       ),
       // Rasxodlar kategoriyalar kesimida (kategoriyasiz rasxodlar "Boshqa")
       client.query(
@@ -797,11 +843,12 @@ const getSuperAdminStats = async (req, res) => {
            COALESCE(ec.name, 'Boshqa') AS category_name,
            COALESCE(SUM(ce.amount), 0)::float AS total
          FROM center_expenses ce
-         LEFT JOIN expense_categories ec ON ec.id = ce.category_id
+         LEFT JOIN expense_categories ec ON ec.id = ce.category_id AND ec.branch_id = ce.branch_id
          WHERE ce.month = $1
+           AND ce.branch_id = $2
          GROUP BY COALESCE(ec.name, 'Boshqa')
          ORDER BY total DESC`,
-        [currentMonth]
+        [currentMonth, branchId]
       ),
     ]);
 
@@ -869,6 +916,7 @@ const getSuperAdminStats = async (req, res) => {
           finished_students: toNumber(studentsRow.finished_students),
           unassigned_students: toNumber(studentsRow.unassigned_students),
           snapshot_students: toNumber(studentsRow.snapshot_students),
+          active_attendance_students: toNumber(studentsRow.active_attendance_students),
         },
       },
     });

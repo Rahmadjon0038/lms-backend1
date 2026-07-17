@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
 const avatarUploadDir = path.join(__dirname, '..', 'uploads', 'profile_avatars');
@@ -54,13 +55,15 @@ const generateAvatarKey = (name) => {
   return slug ? `avatar_${slug}_${suffix}` : `avatar_${suffix}`;
 };
 
-const getProfileAvatars = async (_req, res) => {
+const getProfileAvatars = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, avatar_key, name, image_path, is_active, created_by, created_at
        FROM profile_avatars
-       WHERE is_active = TRUE
-       ORDER BY created_at DESC, id DESC`
+       WHERE is_active = TRUE AND branch_id = $1
+       ORDER BY created_at DESC, id DESC`,
+      [branchId]
     );
 
     res.json({
@@ -101,12 +104,13 @@ const uploadProfileAvatar = async (req, res) => {
     const isActive = req.body?.is_active === undefined
       ? true
       : ['true', '1', true, 1].includes(req.body.is_active);
+    const branchId = getScopedBranchId(req);
 
     const inserted = await pool.query(
-      `INSERT INTO profile_avatars (avatar_key, name, image_path, is_active, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO profile_avatars (avatar_key, name, image_path, is_active, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, avatar_key, name, image_path, is_active, created_by, created_at`,
-      [avatarKey, name, imagePath, isActive, req.user?.id ?? null]
+      [avatarKey, name, imagePath, isActive, req.user?.id ?? null, branchId]
     );
 
     const avatar = inserted.rows[0];

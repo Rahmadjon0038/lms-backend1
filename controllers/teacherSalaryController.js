@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
 
@@ -19,7 +20,7 @@ const canAccessTeacherData = (reqUser, teacherId) => {
   return reqUser.role === 'teacher' && Number(reqUser.id) === Number(teacherId);
 };
 
-const getTeacherWithPercent = async (client, teacherId) => {
+const getTeacherWithPercent = async (client, teacherId, branchId) => {
   const res = await client.query(
     `SELECT
        u.id,
@@ -33,15 +34,15 @@ const getTeacherWithPercent = async (client, teacherId) => {
        u.age,
        COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
      FROM users u
-     LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
-     WHERE u.id = $1 AND u.role = 'teacher'`,
-    [teacherId]
+     LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id AND tss.branch_id = u.branch_id
+     WHERE u.id = $1 AND u.role = 'teacher' AND u.branch_id = $2`,
+    [teacherId, branchId]
   );
 
   return res.rows[0] || null;
 };
 
-const getTeacherMonthLiveCollected = async (client, teacherId, monthName) => {
+const getTeacherMonthLiveCollected = async (client, teacherId, monthName, branchId) => {
   const res = await client.query(
     `SELECT
        COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
@@ -49,14 +50,16 @@ const getTeacherMonthLiveCollected = async (client, teacherId, monthName) => {
      JOIN groups g ON g.id = ms.group_id
      WHERE g.teacher_id = $1
        AND ms.month = $2
+       AND ms.branch_id = $3
+       AND g.branch_id = $3
        AND COALESCE(ms.monthly_status, 'active') = 'active'`,
-    [teacherId, monthName]
+    [teacherId, monthName, branchId]
   );
 
   return toNum(res.rows[0]?.total_collected);
 };
 
-const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
+const getTeacherStudentsForMonth = async (client, teacherId, monthName, branchId) => {
   const res = await client.query(
     `WITH teacher_student_status AS (
        SELECT
@@ -77,6 +80,8 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
        LEFT JOIN users su ON su.id = ms.student_id
        WHERE g.teacher_id = $1
          AND ms.month = $2
+         AND ms.branch_id = $3
+         AND g.branch_id = $3
          AND COALESCE(ms.monthly_status, 'active') = 'active'
        GROUP BY ms.student_id
      )
@@ -108,15 +113,15 @@ const getTeacherStudentsForMonth = async (client, teacherId, monthName) => {
        '[]'::json
      ) AS students
      FROM teacher_student_status tss`,
-    [teacherId, monthName]
+    [teacherId, monthName, branchId]
   );
 
   const students = res.rows[0]?.students;
   return Array.isArray(students) ? students : [];
 };
 
-const buildOpenMonthSummary = async (client, teacherId, monthName) => {
-  const teacher = await getTeacherWithPercent(client, teacherId);
+const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => {
+  const teacher = await getTeacherWithPercent(client, teacherId, branchId);
   if (!teacher) {
     throw new Error("O'qituvchi topilmadi");
   }
@@ -132,29 +137,32 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
        JOIN groups g ON g.id = ms.group_id
        WHERE g.teacher_id = $1
          AND ms.month = $2
+         AND ms.branch_id = $3
+         AND g.branch_id = $3
          AND COALESCE(ms.monthly_status, 'active') = 'active'`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     ),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_advances
        FROM teacher_advances
-       WHERE teacher_id = $1 AND month_name = $2`,
-      [teacherId, monthName]
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+      [teacherId, monthName, branchId]
     ),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1
          AND month_name = $2
+         AND branch_id = $3
          AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     ),
-    getTeacherStudentsForMonth(client, teacherId, monthName),
+    getTeacherStudentsForMonth(client, teacherId, monthName, branchId),
     client.query(
       `SELECT is_closed, closed_at, close_revenue, close_expected_salary, close_balance
        FROM teacher_monthly_salaries
-       WHERE teacher_id = $1 AND month_name = $2`,
-      [teacherId, monthName]
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+      [teacherId, monthName, branchId]
     ),
   ]);
 
@@ -185,10 +193,11 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
        gross_salary,
        partial_students,
        fully_paid_students,
+       branch_id,
        recalculated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $11, $7, $8, $9, $10,
-       0, $5, 0, $9, CURRENT_TIMESTAMP
+       0, $5, 0, $9, $12, CURRENT_TIMESTAMP
      )
      ON CONFLICT (teacher_id, month_name)
      DO UPDATE SET
@@ -220,6 +229,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
       toNum(stat.paid_students),
       toNum(stat.unpaid_students),
       totalGiven,
+      branchId,
     ]
   );
 
@@ -264,8 +274,8 @@ const buildOpenMonthSummary = async (client, teacherId, monthName) => {
   };
 };
 
-const getClosedSummary = async (client, teacherId, monthName) => {
-  const teacher = await getTeacherWithPercent(client, teacherId);
+const getClosedSummary = async (client, teacherId, monthName, branchId) => {
+  const teacher = await getTeacherWithPercent(client, teacherId, branchId);
   if (!teacher) {
     throw new Error("O'qituvchi topilmadi");
   }
@@ -284,8 +294,8 @@ const getClosedSummary = async (client, teacherId, monthName) => {
        close_expected_salary,
        close_balance
      FROM teacher_monthly_salaries
-     WHERE teacher_id = $1 AND month_name = $2`,
-    [teacherId, monthName]
+     WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+    [teacherId, monthName, branchId]
   );
 
   if (!monthly.rows.length) return null;
@@ -294,24 +304,26 @@ const getClosedSummary = async (client, teacherId, monthName) => {
   if (!row.is_closed) return null;
 
   const [liveCollected, payoutsRegularRes, payoutsPostCloseRes, students] = await Promise.all([
-    getTeacherMonthLiveCollected(client, teacherId, monthName),
+    getTeacherMonthLiveCollected(client, teacherId, monthName, branchId),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1
          AND month_name = $2
+         AND branch_id = $3
          AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     ),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS post_close_given
        FROM teacher_salary_payouts
        WHERE teacher_id = $1
          AND month_name = $2
+         AND branch_id = $3
          AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     ),
-    getTeacherStudentsForMonth(client, teacherId, monthName),
+    getTeacherStudentsForMonth(client, teacherId, monthName, branchId),
   ]);
 
   const salaryPercentage = toNum(teacher.salary_percentage);
@@ -364,6 +376,7 @@ const getClosedSummary = async (client, teacherId, monthName) => {
 exports.upsertTeacherSalarySettings = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
   const percentage = Number(req.body.salary_percentage);
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -379,8 +392,8 @@ exports.upsertTeacherSalarySettings = async (req, res) => {
   const client = await pool.connect();
   try {
     const teacher = await client.query(
-      `SELECT id, name, surname FROM users WHERE id = $1 AND role = 'teacher'`,
-      [teacherId]
+      `SELECT id, name, surname FROM users WHERE id = $1 AND role = 'teacher' AND branch_id = $2`,
+      [teacherId, branchId]
     );
 
     if (!teacher.rows.length) {
@@ -388,12 +401,12 @@ exports.upsertTeacherSalarySettings = async (req, res) => {
     }
 
     const result = await client.query(
-      `INSERT INTO teacher_salary_settings (teacher_id, salary_percentage, updated_at)
-       VALUES ($1, $2, CURRENT_TIMESTAMP)
+      `INSERT INTO teacher_salary_settings (teacher_id, salary_percentage, updated_at, branch_id)
+       VALUES ($1, $2, CURRENT_TIMESTAMP, $3)
        ON CONFLICT (teacher_id)
-       DO UPDATE SET salary_percentage = EXCLUDED.salary_percentage, updated_at = CURRENT_TIMESTAMP
+       DO UPDATE SET salary_percentage = EXCLUDED.salary_percentage, branch_id = EXCLUDED.branch_id, updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
-      [teacherId, percentage]
+      [teacherId, percentage, branchId]
     );
 
     return res.json({ success: true, data: result.rows[0] });
@@ -410,6 +423,7 @@ exports.upsertTeacherSalarySettings = async (req, res) => {
 
 exports.getTeacherSalarySettings = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -427,9 +441,9 @@ exports.getTeacherSalarySettings = async (req, res) => {
          u.surname,
          COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
        FROM users u
-       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
-       WHERE u.id = $1 AND u.role = 'teacher'`,
-      [teacherId]
+       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id AND tss.branch_id = u.branch_id
+       WHERE u.id = $1 AND u.role = 'teacher' AND u.branch_id = $2`,
+      [teacherId, branchId]
     );
 
     if (!result.rows.length) {
@@ -451,6 +465,7 @@ exports.createTeacherAdvance = async (req, res) => {
   const monthName = req.body.month_name;
   const amount = Number(req.body.amount);
   const description = req.body.description || null;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -468,7 +483,7 @@ exports.createTeacherAdvance = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const teacher = await getTeacherWithPercent(client, teacherId);
+    const teacher = await getTeacherWithPercent(client, teacherId, branchId);
     if (!teacher) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
@@ -477,8 +492,8 @@ exports.createTeacherAdvance = async (req, res) => {
     const closedCheck = await client.query(
       `SELECT is_closed
        FROM teacher_monthly_salaries
-       WHERE teacher_id = $1 AND month_name = $2`,
-      [teacherId, monthName]
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+      [teacherId, monthName, branchId]
     );
 
     if (closedCheck.rows[0]?.is_closed) {
@@ -490,13 +505,13 @@ exports.createTeacherAdvance = async (req, res) => {
     }
 
     const ins = await client.query(
-      `INSERT INTO teacher_advances (teacher_id, amount, month_name, description, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO teacher_advances (teacher_id, amount, month_name, description, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [teacherId, amount, monthName, description, req.user.id]
+      [teacherId, amount, monthName, description, req.user.id, branchId]
     );
 
-    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName, branchId);
 
     await client.query('COMMIT');
 
@@ -524,6 +539,7 @@ exports.createTeacherAdvance = async (req, res) => {
 exports.getTeacherAdvances = async (req, res) => {
   const monthName = req.query.month_name;
   let teacherId = req.query.teacher_id ? Number(req.query.teacher_id) : null;
+  const branchId = getScopedBranchId(req);
 
   if (monthName && !isValidMonth(monthName)) {
     return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
@@ -537,8 +553,10 @@ exports.getTeacherAdvances = async (req, res) => {
     teacherId = Number(req.user.id);
   }
 
-  const params = [];
+  const params = [branchId];
   const where = [];
+  where.push(`ta.branch_id = $${params.length}`);
+  where.push('u.branch_id = ta.branch_id');
 
   if (teacherId) {
     params.push(teacherId);
@@ -578,6 +596,7 @@ exports.createTeacherSalaryGiven = async (req, res) => {
   const teacherId = Number(req.body.teacher_id);
   const monthName = req.body.month_name;
   const description = req.body.description || null;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -598,14 +617,14 @@ exports.createTeacherSalaryGiven = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const teacher = await getTeacherWithPercent(client, teacherId);
+    const teacher = await getTeacherWithPercent(client, teacherId, branchId);
     if (!teacher) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
     }
 
-    const closed = await getClosedSummary(client, teacherId, monthName);
-    const live = closed || (await buildOpenMonthSummary(client, teacherId, monthName));
+    const closed = await getClosedSummary(client, teacherId, monthName, branchId);
+    const live = closed || (await buildOpenMonthSummary(client, teacherId, monthName, branchId));
     const isClosed = Boolean(closed);
     const available = isClosed ? toNum(live.post_close_available) : toNum(live.final_salary);
 
@@ -621,8 +640,8 @@ exports.createTeacherSalaryGiven = async (req, res) => {
     const givenAmount = available;
 
     const ins = await client.query(
-      `INSERT INTO teacher_salary_payouts (teacher_id, month_name, amount, payout_type, description, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO teacher_salary_payouts (teacher_id, month_name, amount, payout_type, description, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         teacherId,
@@ -631,11 +650,12 @@ exports.createTeacherSalaryGiven = async (req, res) => {
         isClosed ? PAYOUT_TYPE_POST_CLOSE : PAYOUT_TYPE_REGULAR,
         description,
         req.user.id,
+        branchId,
       ]
     );
 
-    const refreshedClosed = await getClosedSummary(client, teacherId, monthName);
-    const refreshedOpen = refreshedClosed || (await buildOpenMonthSummary(client, teacherId, monthName));
+    const refreshedClosed = await getClosedSummary(client, teacherId, monthName, branchId);
+    const refreshedOpen = refreshedClosed || (await buildOpenMonthSummary(client, teacherId, monthName, branchId));
 
     await client.query('COMMIT');
 
@@ -664,6 +684,7 @@ exports.createTeacherSalaryGiven = async (req, res) => {
 exports.getTeacherSalaryGivenList = async (req, res) => {
   const monthName = req.query.month_name;
   let teacherId = req.query.teacher_id ? Number(req.query.teacher_id) : null;
+  const branchId = getScopedBranchId(req);
 
   if (monthName && !isValidMonth(monthName)) {
     return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
@@ -677,8 +698,10 @@ exports.getTeacherSalaryGivenList = async (req, res) => {
     teacherId = Number(req.user.id);
   }
 
-  const params = [];
+  const params = [branchId];
   const where = [];
+  where.push(`tsp.branch_id = $${params.length}`);
+  where.push('u.branch_id = tsp.branch_id');
 
   if (teacherId) {
     params.push(teacherId);
@@ -702,7 +725,7 @@ exports.getTeacherSalaryGivenList = async (req, res) => {
          COALESCE(tss.salary_percentage, 50)::numeric AS salary_percentage
        FROM teacher_salary_payouts tsp
        JOIN users u ON u.id = tsp.teacher_id
-       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
+       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id AND tss.branch_id = tsp.branch_id
        LEFT JOIN users cu ON cu.id = tsp.created_by
        ${whereSql}
        ORDER BY tsp.created_at DESC`,
@@ -722,6 +745,7 @@ exports.getTeacherSalaryGivenList = async (req, res) => {
 exports.getTeacherMonthSummary = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -737,12 +761,12 @@ exports.getTeacherMonthSummary = async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const closed = await getClosedSummary(client, teacherId, monthName);
+    const closed = await getClosedSummary(client, teacherId, monthName, branchId);
     if (closed) {
       return res.json({ success: true, data: closed });
     }
 
-    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName, branchId);
     return res.json({ success: true, data: summary });
   } catch (error) {
     return res.status(500).json({
@@ -758,6 +782,7 @@ exports.getTeacherMonthSummary = async (req, res) => {
 exports.closeTeacherMonth = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -774,9 +799,9 @@ exports.closeTeacherMonth = async (req, res) => {
     const already = await client.query(
       `SELECT is_closed
        FROM teacher_monthly_salaries
-       WHERE teacher_id = $1 AND month_name = $2
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3
        FOR UPDATE`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     );
 
     if (already.rows[0]?.is_closed) {
@@ -787,7 +812,7 @@ exports.closeTeacherMonth = async (req, res) => {
       });
     }
 
-    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName, branchId);
 
     // Admin qo'lda kiritgan yakuniy oylik summasi (ixtiyoriy).
     // Yuborilmasa — avvalgidek hisoblangan qiymat ishlatiladi.
@@ -814,7 +839,7 @@ exports.closeTeacherMonth = async (req, res) => {
            close_expected_salary = $5,
            close_balance = $6,
            balance = $6
-       WHERE teacher_id = $1 AND month_name = $2`,
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $7`,
       [
         teacherId,
         monthName,
@@ -822,6 +847,7 @@ exports.closeTeacherMonth = async (req, res) => {
         summary.total_collected,
         closeExpected,
         closeBalance,
+        branchId,
       ]
     );
 
@@ -849,6 +875,7 @@ exports.closeTeacherMonth = async (req, res) => {
 
 exports.getAllTeachersMonthSummary = async (req, res) => {
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!isValidMonth(monthName)) {
     return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
@@ -863,15 +890,16 @@ exports.getAllTeachersMonthSummary = async (req, res) => {
       `SELECT id
        FROM users
        WHERE role = 'teacher'
+         AND branch_id = $2
          AND to_char(COALESCE(start_date, created_at::date), 'YYYY-MM') <= $1
        ORDER BY id`,
-      [monthName]
+      [monthName, branchId]
     );
 
     const items = [];
     for (const t of teachers.rows) {
-      const closed = await getClosedSummary(client, t.id, monthName);
-      const summary = closed || (await buildOpenMonthSummary(client, t.id, monthName));
+      const closed = await getClosedSummary(client, t.id, monthName, branchId);
+      const summary = closed || (await buildOpenMonthSummary(client, t.id, monthName, branchId));
 
       // O'quvchisi yo'q o'qituvchilar ro'yxatda ko'rsatilmaydi.
       const studentCount = Array.isArray(summary.students) ? summary.students.length : 0;
@@ -902,6 +930,7 @@ exports.getAllTeachersMonthSummary = async (req, res) => {
 
 exports.getSimpleTeacherSalaryList = async (req, res) => {
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!isValidMonth(monthName)) {
     return res.status(400).json({ success: false, message: 'month_name YYYY-MM formatda bo\'lishi kerak' });
@@ -916,6 +945,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          FROM monthly_snapshots ms
          JOIN groups g ON g.id = ms.group_id
          WHERE ms.month = $1
+           AND ms.branch_id = $2
+           AND g.branch_id = $2
            AND COALESCE(ms.monthly_status, 'active') = 'active'
          GROUP BY g.teacher_id
        ),
@@ -924,7 +955,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            teacher_id,
            COALESCE(SUM(amount), 0)::numeric AS total_advances
          FROM teacher_advances
-         WHERE month_name = $1
+         WHERE month_name = $1 AND branch_id = $2
          GROUP BY teacher_id
        ),
        monthly_given_regular AS (
@@ -933,6 +964,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            COALESCE(SUM(amount), 0)::numeric AS total_given
          FROM teacher_salary_payouts
          WHERE month_name = $1
+           AND branch_id = $2
            AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'
          GROUP BY teacher_id
        ),
@@ -942,6 +974,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            COALESCE(SUM(amount), 0)::numeric AS post_close_given
          FROM teacher_salary_payouts
          WHERE month_name = $1
+           AND branch_id = $2
            AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'
          GROUP BY teacher_id
        ),
@@ -973,6 +1006,8 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          JOIN groups g ON g.id = ms.group_id
          LEFT JOIN users su ON su.id = ms.student_id
          WHERE ms.month = $1
+           AND ms.branch_id = $2
+           AND g.branch_id = $2
            AND COALESCE(ms.monthly_status, 'active') = 'active'
          GROUP BY g.teacher_id, ms.student_id
        ),
@@ -1023,7 +1058,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
          tms.close_expected_salary,
          tms.close_balance
        FROM users u
-       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id
+       LEFT JOIN teacher_salary_settings tss ON tss.teacher_id = u.id AND tss.branch_id = u.branch_id
        LEFT JOIN monthly_collected mc ON mc.teacher_id = u.id
        LEFT JOIN monthly_advances ma ON ma.teacher_id = u.id
        LEFT JOIN monthly_given_regular mgr ON mgr.teacher_id = u.id
@@ -1032,9 +1067,11 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
        LEFT JOIN teacher_monthly_salaries tms
          ON tms.teacher_id = u.id
         AND tms.month_name = $1
+        AND tms.branch_id = $2
        WHERE u.role = 'teacher'
+         AND u.branch_id = $2
        ORDER BY teacher_name ASC`,
-      [monthName]
+      [monthName, branchId]
     );
 
     const teachers = result.rows.map((row) => {
@@ -1123,6 +1160,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
 exports.resetTeacherMonthPayouts = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -1136,7 +1174,7 @@ exports.resetTeacherMonthPayouts = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const teacher = await getTeacherWithPercent(client, teacherId);
+    const teacher = await getTeacherWithPercent(client, teacherId, branchId);
     if (!teacher) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
@@ -1145,9 +1183,9 @@ exports.resetTeacherMonthPayouts = async (req, res) => {
     const closed = await client.query(
       `SELECT is_closed
        FROM teacher_monthly_salaries
-       WHERE teacher_id = $1 AND month_name = $2
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3
        FOR UPDATE`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     );
 
     if (closed.rows[0]?.is_closed) {
@@ -1159,19 +1197,19 @@ exports.resetTeacherMonthPayouts = async (req, res) => {
              close_revenue = NULL,
              close_expected_salary = NULL,
              close_balance = NULL
-         WHERE teacher_id = $1 AND month_name = $2`,
-        [teacherId, monthName]
+         WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+        [teacherId, monthName, branchId]
       );
     }
 
     const del = await client.query(
       `DELETE FROM teacher_salary_payouts
-       WHERE teacher_id = $1 AND month_name = $2
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3
        RETURNING id`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     );
 
-    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName, branchId);
 
     await client.query('COMMIT');
 
@@ -1198,6 +1236,7 @@ exports.resetTeacherMonthPayouts = async (req, res) => {
 exports.resetTeacherMonthAdvances = async (req, res) => {
   const teacherId = Number(req.params.teacher_id);
   const monthName = req.params.month_name;
+  const branchId = getScopedBranchId(req);
 
   if (!teacherId || Number.isNaN(teacherId)) {
     return res.status(400).json({ success: false, message: 'teacher_id noto\'g\'ri' });
@@ -1211,7 +1250,7 @@ exports.resetTeacherMonthAdvances = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const teacher = await getTeacherWithPercent(client, teacherId);
+    const teacher = await getTeacherWithPercent(client, teacherId, branchId);
     if (!teacher) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
@@ -1220,9 +1259,9 @@ exports.resetTeacherMonthAdvances = async (req, res) => {
     const closed = await client.query(
       `SELECT is_closed
        FROM teacher_monthly_salaries
-       WHERE teacher_id = $1 AND month_name = $2
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3
        FOR UPDATE`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     );
 
     if (closed.rows[0]?.is_closed) {
@@ -1234,19 +1273,19 @@ exports.resetTeacherMonthAdvances = async (req, res) => {
              close_revenue = NULL,
              close_expected_salary = NULL,
              close_balance = NULL
-         WHERE teacher_id = $1 AND month_name = $2`,
-        [teacherId, monthName]
+         WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+        [teacherId, monthName, branchId]
       );
     }
 
     const del = await client.query(
       `DELETE FROM teacher_advances
-       WHERE teacher_id = $1 AND month_name = $2
+       WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3
        RETURNING id`,
-      [teacherId, monthName]
+      [teacherId, monthName, branchId]
     );
 
-    const summary = await buildOpenMonthSummary(client, teacherId, monthName);
+    const summary = await buildOpenMonthSummary(client, teacherId, monthName, branchId);
 
     await client.query('COMMIT');
 

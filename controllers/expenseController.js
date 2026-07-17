@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const isValidDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 const isValidMonth = (v) => /^\d{4}-\d{2}$/.test(v);
@@ -20,10 +21,10 @@ const mapExpense = (row) => ({
   category_name: row.category_name || null,
 });
 
-const findCategoryById = async (categoryId) => {
+const findCategoryById = async (categoryId, branchId) => {
   const result = await pool.query(
-    'SELECT id, name FROM expense_categories WHERE id = $1',
-    [categoryId]
+    'SELECT id, name FROM expense_categories WHERE id = $1 AND branch_id = $2',
+    [categoryId, branchId]
   );
   return result.rows[0] || null;
 };
@@ -33,6 +34,7 @@ const createExpense = async (req, res) => {
   const amount = Number(req.body?.amount);
   const expenseDate = req.body?.expense_date || getToday();
   const rawCategoryId = req.body?.category_id;
+  const branchId = getScopedBranchId(req);
 
   if (!reason) {
     return res.status(400).json({ success: false, message: 'reason majburiy', errors: {} });
@@ -50,7 +52,7 @@ const createExpense = async (req, res) => {
     if (!Number.isInteger(categoryId) || categoryId <= 0) {
       return res.status(400).json({ success: false, message: 'category_id noto\'g\'ri', errors: {} });
     }
-    category = await findCategoryById(categoryId);
+    category = await findCategoryById(categoryId, branchId);
     if (!category) {
       return res.status(404).json({ success: false, message: 'Kategoriya topilmadi', errors: {} });
     }
@@ -59,10 +61,10 @@ const createExpense = async (req, res) => {
   try {
     const month = expenseDate.slice(0, 7);
     const result = await pool.query(
-      `INSERT INTO center_expenses (title, note, amount, expense_date, month, created_by, category_id)
-       VALUES ($1, NULL, $2, $3::date, $4, $5, $6)
+      `INSERT INTO center_expenses (title, note, amount, expense_date, month, created_by, category_id, branch_id)
+       VALUES ($1, NULL, $2, $3::date, $4, $5, $6, $7)
        RETURNING id, title, amount, expense_date::text, month, created_at, created_by, category_id`,
-      [reason, amount, expenseDate, month, req.user.id, category ? category.id : null]
+      [reason, amount, expenseDate, month, req.user.id, category ? category.id : null, branchId]
     );
 
     const created = { ...result.rows[0], category_name: category ? category.name : null };
@@ -93,6 +95,7 @@ const getExpenses = async (req, res) => {
   const month = dateFilter ? dateFilter.slice(0, 7) : req.query.month || getCurrentMonth();
   const adminNameFilter = typeof req.query.admin_name === 'string' ? req.query.admin_name.trim() : '';
   const categoryIdFilter = req.query.category_id !== undefined ? Number(req.query.category_id) : null;
+  const branchId = getScopedBranchId(req);
   if (!isValidMonth(month)) {
     return res.status(400).json({ success: false, message: 'month formati YYYY-MM bo\'lishi kerak', errors: {} });
   }
@@ -101,9 +104,9 @@ const getExpenses = async (req, res) => {
   }
 
   try {
-    const filters = [];
-    const params = [month];
-    let paramIndex = 2;
+    const filters = ['ce.branch_id = $2'];
+    const params = [month, branchId];
+    let paramIndex = 3;
 
     if (dateFilter) {
       filters.push(`ce.expense_date = $${paramIndex}::date`);
@@ -130,8 +133,8 @@ const getExpenses = async (req, res) => {
               ce.category_id, ec.name AS category_name,
               u.name AS admin_name, u.surname AS admin_surname, (u.name || ' ' || u.surname) AS admin_full_name
        FROM center_expenses ce
-       JOIN users u ON u.id = ce.created_by
-       LEFT JOIN expense_categories ec ON ec.id = ce.category_id
+       JOIN users u ON u.id = ce.created_by AND u.branch_id = ce.branch_id
+       LEFT JOIN expense_categories ec ON ec.id = ce.category_id AND ec.branch_id = ce.branch_id
        WHERE ce.month = $1
        ${whereClause}
        ORDER BY ce.expense_date DESC, ce.id DESC`,
@@ -161,6 +164,7 @@ const getExpenseSummary = async (req, res) => {
   }
   const month = dateFilter ? dateFilter.slice(0, 7) : req.query.month || getCurrentMonth();
   const categoryIdFilter = req.query.category_id !== undefined ? Number(req.query.category_id) : null;
+  const branchId = getScopedBranchId(req);
   if (!isValidMonth(month)) {
     return res.status(400).json({ success: false, message: 'month formati YYYY-MM bo\'lishi kerak', errors: {} });
   }
@@ -169,7 +173,7 @@ const getExpenseSummary = async (req, res) => {
   }
 
   const today = getToday();
-  const categoryClause = categoryIdFilter ? 'AND category_id = $2' : '';
+  const categoryClause = categoryIdFilter ? 'AND category_id = $3' : '';
 
   try {
     const [todaySum, monthSum, dateSum] = await Promise.all([
@@ -177,23 +181,26 @@ const getExpenseSummary = async (req, res) => {
         `SELECT COALESCE(SUM(amount), 0)::float AS total
          FROM center_expenses
          WHERE expense_date = $1::date
+         AND branch_id = $2
          ${categoryClause}`,
-        categoryIdFilter ? [today, categoryIdFilter] : [today]
+        categoryIdFilter ? [today, branchId, categoryIdFilter] : [today, branchId]
       ),
       pool.query(
         `SELECT COALESCE(SUM(amount), 0)::float AS total
          FROM center_expenses
          WHERE month = $1
+         AND branch_id = $2
          ${categoryClause}`,
-        categoryIdFilter ? [month, categoryIdFilter] : [month]
+        categoryIdFilter ? [month, branchId, categoryIdFilter] : [month, branchId]
       ),
       dateFilter
         ? pool.query(
             `SELECT COALESCE(SUM(amount), 0)::float AS total
              FROM center_expenses
              WHERE expense_date = $1::date
+             AND branch_id = $2
              ${categoryClause}`,
-            categoryIdFilter ? [dateFilter, categoryIdFilter] : [dateFilter]
+            categoryIdFilter ? [dateFilter, branchId, categoryIdFilter] : [dateFilter, branchId]
           )
         : Promise.resolve(null),
     ]);
@@ -217,6 +224,7 @@ const getExpenseSummary = async (req, res) => {
 
 const updateExpense = async (req, res) => {
   const id = Number(req.params?.id);
+  const branchId = getScopedBranchId(req);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ success: false, message: 'id noto\'g\'ri', errors: {} });
   }
@@ -279,7 +287,7 @@ const updateExpense = async (req, res) => {
       if (!Number.isInteger(categoryId) || categoryId <= 0) {
         return res.status(400).json({ success: false, message: 'category_id noto\'g\'ri', errors: {} });
       }
-      const category = await findCategoryById(categoryId);
+      const category = await findCategoryById(categoryId, branchId);
       if (!category) {
         return res.status(404).json({ success: false, message: 'Kategoriya topilmadi', errors: {} });
       }
@@ -290,12 +298,14 @@ const updateExpense = async (req, res) => {
 
   updates.push('updated_at = CURRENT_TIMESTAMP');
   params.push(id);
+  const idParamIndex = paramIndex++;
+  params.push(branchId);
 
   try {
     const result = await pool.query(
       `UPDATE center_expenses
        SET ${updates.join(', ')}
-       WHERE id = $${paramIndex}
+       WHERE id = $${idParamIndex} AND branch_id = $${paramIndex}
        RETURNING id, title, amount, expense_date::text, month, created_at, created_by, category_id`,
       params
     );
@@ -307,7 +317,7 @@ const updateExpense = async (req, res) => {
     const updated = result.rows[0];
     let categoryName = null;
     if (updated.category_id) {
-      const category = await findCategoryById(updated.category_id);
+      const category = await findCategoryById(updated.category_id, branchId);
       categoryName = category ? category.name : null;
     }
 
@@ -320,6 +330,7 @@ const updateExpense = async (req, res) => {
 const getExpenseCategories = async (req, res) => {
   const dateFilter = typeof req.query.date === 'string' ? req.query.date.trim() : '';
   const monthFilter = typeof req.query.month === 'string' ? req.query.month.trim() : '';
+  const branchId = getScopedBranchId(req);
   if (dateFilter && !isValidDate(dateFilter)) {
     return res.status(400).json({ success: false, message: 'date formati YYYY-MM-DD bo\'lishi kerak', errors: {} });
   }
@@ -328,14 +339,14 @@ const getExpenseCategories = async (req, res) => {
   }
 
   // date yoki month berilsa, chip'lardagi soni va summasi shu davr bo'yicha hisoblanadi
-  const params = [];
-  let joinCondition = 'ce.category_id = ec.id';
+  const params = [branchId];
+  let joinCondition = 'ce.category_id = ec.id AND ce.branch_id = ec.branch_id';
   if (dateFilter) {
     params.push(dateFilter);
-    joinCondition += ' AND ce.expense_date = $1::date';
+    joinCondition += ' AND ce.expense_date = $2::date';
   } else if (monthFilter) {
     params.push(monthFilter);
-    joinCondition += ' AND ce.month = $1';
+    joinCondition += ' AND ce.month = $2';
   }
 
   try {
@@ -345,6 +356,7 @@ const getExpenseCategories = async (req, res) => {
               COALESCE(SUM(ce.amount), 0)::float AS total_amount
        FROM expense_categories ec
        LEFT JOIN center_expenses ce ON ${joinCondition}
+       WHERE ec.branch_id = $1
        GROUP BY ec.id
        ORDER BY ec.name ASC`,
       params
@@ -366,6 +378,7 @@ const getExpenseCategories = async (req, res) => {
 
 const createExpenseCategory = async (req, res) => {
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const branchId = getScopedBranchId(req);
   if (!name) {
     return res.status(400).json({ success: false, message: 'name majburiy', errors: {} });
   }
@@ -375,18 +388,18 @@ const createExpenseCategory = async (req, res) => {
 
   try {
     const existing = await pool.query(
-      'SELECT id FROM expense_categories WHERE LOWER(name) = LOWER($1)',
-      [name]
+      'SELECT id FROM expense_categories WHERE LOWER(name) = LOWER($1) AND branch_id = $2',
+      [name, branchId]
     );
     if (existing.rows.length > 0) {
       return res.status(409).json({ success: false, message: 'Bunday kategoriya allaqachon mavjud', errors: {} });
     }
 
     const result = await pool.query(
-      `INSERT INTO expense_categories (name, created_by)
-       VALUES ($1, $2)
+      `INSERT INTO expense_categories (name, created_by, branch_id)
+       VALUES ($1, $2, $3)
        RETURNING id, name, created_at`,
-      [name, req.user.id]
+      [name, req.user.id, branchId]
     );
 
     return res.status(201).json({ success: true, data: result.rows[0] });
@@ -397,6 +410,7 @@ const createExpenseCategory = async (req, res) => {
 
 const deleteExpenseCategory = async (req, res) => {
   const id = Number(req.params?.id);
+  const branchId = getScopedBranchId(req);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ success: false, message: 'id noto\'g\'ri', errors: {} });
   }
@@ -404,9 +418,9 @@ const deleteExpenseCategory = async (req, res) => {
   try {
     const result = await pool.query(
       `DELETE FROM expense_categories
-       WHERE id = $1
+       WHERE id = $1 AND branch_id = $2
        RETURNING id, name`,
-      [id]
+      [id, branchId]
     );
 
     if (result.rows.length === 0) {
@@ -425,6 +439,7 @@ const deleteExpenseCategory = async (req, res) => {
 
 const deleteExpense = async (req, res) => {
   const id = Number(req.params?.id);
+  const branchId = getScopedBranchId(req);
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ success: false, message: 'id noto\'g\'ri', errors: {} });
   }
@@ -432,9 +447,9 @@ const deleteExpense = async (req, res) => {
   try {
     const result = await pool.query(
       `DELETE FROM center_expenses
-       WHERE id = $1
+       WHERE id = $1 AND branch_id = $2
        RETURNING id, title, amount, expense_date::text, month, created_at, created_by`,
-      [id]
+      [id, branchId]
     );
 
     if (result.rows.length === 0) {
