@@ -166,6 +166,9 @@ const getAdminDailyStats = async (req, res) => {
          g.name as group_name,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
+         pt.created_by as admin_id,
+         CONCAT(admin_user.name, ' ', admin_user.surname) as admin_full_name,
+         admin_user.username as admin_username,
          pt.amount::float as amount,
          pt.payment_method,
          TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') as payment_time
@@ -174,6 +177,7 @@ const getAdminDailyStats = async (req, res) => {
        JOIN groups g ON g.id = pt.group_id AND g.branch_id = pt.branch_id
        LEFT JOIN subjects s ON s.id = g.subject_id
        LEFT JOIN users t ON t.id = g.teacher_id
+       LEFT JOIN users admin_user ON admin_user.id = pt.created_by
        WHERE DATE(pt.created_at AT TIME ZONE 'Asia/Tashkent') = $1::date
          AND pt.branch_id = $2
        ORDER BY pt.created_at DESC`,
