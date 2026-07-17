@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { sendUserPushNotification } = require('../services/pushNotificationService');
+const { getScopedBranchId } = require('../utils/branch');
 
 const toInt = (value, fallback = 0) => {
   const parsed = parseInt(value, 10);
@@ -21,15 +22,20 @@ const createNotificationRecord = async ({
   data = {},
   createdBy = null,
 }) => {
+  const userBranch = await db.query(
+    'SELECT branch_id FROM users WHERE id = $1 LIMIT 1',
+    [userId],
+  );
+  const branchId = userBranch.rows[0]?.branch_id || 1;
   const result = await db.query(
     `
       INSERT INTO notifications (
-        user_id, type, title, body, data, created_by
+        user_id, type, title, body, data, created_by, branch_id
       )
-      VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
       RETURNING *
     `,
-    [userId, type, title, body, JSON.stringify(safeJson(data)), createdBy],
+    [userId, type, title, body, JSON.stringify(safeJson(data)), createdBy, branchId],
   );
 
   return result.rows[0];
@@ -55,8 +61,8 @@ const sendNotificationToUser = async ({
   });
 
   const tokenResult = await db.query(
-    'SELECT fcm_token FROM users WHERE id = $1',
-    [userId],
+    'SELECT fcm_token FROM users WHERE id = $1 AND branch_id = $2',
+    [userId, notification.branch_id || 1],
   );
   const fcmToken = tokenResult.rows[0]?.fcm_token?.toString().trim() ?? '';
 
@@ -85,6 +91,7 @@ const sendNotificationToUser = async ({
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId = req.user.id;
+    const branchId = getScopedBranchId(req);
     const page = Math.max(toInt(req.query.page, 1), 1);
     const limit = Math.min(Math.max(toInt(req.query.limit, 20), 1), 100);
     const offset = (page - 1) * limit;
@@ -101,29 +108,29 @@ exports.getMyNotifications = async (req, res) => {
           TO_CHAR(created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') AS created_at,
           created_at AS created_at_raw
         FROM notifications
-        WHERE user_id = $1
+        WHERE user_id = $1 AND branch_id = $4
         ORDER BY created_at DESC
         LIMIT $2 OFFSET $3
       `,
-      [userId, limit, offset],
+      [userId, limit, offset, branchId],
     );
 
     const unreadResult = await db.query(
       `
         SELECT COUNT(*) AS unread_count
         FROM notifications
-        WHERE user_id = $1 AND is_read = false
+        WHERE user_id = $1 AND branch_id = $2 AND is_read = false
       `,
-      [userId],
+      [userId, branchId],
     );
 
     const totalResult = await db.query(
       `
         SELECT COUNT(*) AS total_count
         FROM notifications
-        WHERE user_id = $1
+        WHERE user_id = $1 AND branch_id = $2
       `,
-      [userId],
+      [userId, branchId],
     );
 
     res.json({
@@ -148,13 +155,14 @@ exports.getMyNotifications = async (req, res) => {
 
 exports.getUnreadCount = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const result = await db.query(
       `
         SELECT COUNT(*) AS unread_count
         FROM notifications
-        WHERE user_id = $1 AND is_read = false
+        WHERE user_id = $1 AND branch_id = $2 AND is_read = false
       `,
-      [req.user.id],
+      [req.user.id, branchId],
     );
 
     res.json({
@@ -175,6 +183,7 @@ exports.getUnreadCount = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const notificationId = toInt(req.params.id, 0);
+    const branchId = getScopedBranchId(req);
     if (!notificationId) {
       return res.status(400).json({
         success: false,
@@ -187,10 +196,10 @@ exports.markNotificationAsRead = async (req, res) => {
         UPDATE notifications
         SET is_read = true,
             read_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND user_id = $2
+        WHERE id = $1 AND user_id = $2 AND branch_id = $3
         RETURNING *
       `,
-      [notificationId, req.user.id],
+      [notificationId, req.user.id, branchId],
     );
 
     if (result.rows.length === 0) {
@@ -215,15 +224,16 @@ exports.markNotificationAsRead = async (req, res) => {
 
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const result = await db.query(
       `
         UPDATE notifications
         SET is_read = true,
             read_at = CURRENT_TIMESTAMP
-        WHERE user_id = $1 AND is_read = false
+        WHERE user_id = $1 AND branch_id = $2 AND is_read = false
         RETURNING id
       `,
-      [req.user.id],
+      [req.user.id, branchId],
     );
 
     res.json({
@@ -244,6 +254,7 @@ exports.markAllNotificationsAsRead = async (req, res) => {
 exports.deleteNotification = async (req, res) => {
   try {
     const notificationId = toInt(req.params.id, 0);
+    const branchId = getScopedBranchId(req);
     if (!notificationId) {
       return res.status(400).json({
         success: false,
@@ -254,10 +265,10 @@ exports.deleteNotification = async (req, res) => {
     const result = await db.query(
       `
         DELETE FROM notifications
-        WHERE id = $1 AND user_id = $2
+        WHERE id = $1 AND user_id = $2 AND branch_id = $3
         RETURNING id
       `,
-      [notificationId, req.user.id],
+      [notificationId, req.user.id, branchId],
     );
 
     if (result.rows.length === 0) {

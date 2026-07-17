@@ -27,13 +27,13 @@ const createTeacherSubjectTables = async () => {
     BEGIN
         -- Mavjud teacherlarning subject_id ma'lumotlarini teacher_subjects jadvaliga ko'chirish
         FOR teacher_record IN 
-            SELECT id, subject_id, subject 
+            SELECT id, subject_id, subject, branch_id
             FROM users 
             WHERE role = 'teacher' AND subject_id IS NOT NULL
         LOOP
             -- teacher_subjects jadvaliga yozish (agar mavjud bo'lmasa)
-            INSERT INTO teacher_subjects (teacher_id, subject_id)
-            VALUES (teacher_record.id, teacher_record.subject_id)
+            INSERT INTO teacher_subjects (teacher_id, subject_id, branch_id)
+            VALUES (teacher_record.id, teacher_record.subject_id, COALESCE(teacher_record.branch_id, 1))
             ON CONFLICT (teacher_id, subject_id) DO NOTHING;
         END LOOP;
         
@@ -63,15 +63,15 @@ const createTeacherSubjectTables = async () => {
 };
 
 // Teacher-ga yangi fan qo'shish (primary concept olib tashlandi)
-const addSubjectToTeacher = async (teacherId, subjectId) => {
+const addSubjectToTeacher = async (teacherId, subjectId, branchId = 1) => {
   try {
     const result = await pool.query(
-      `INSERT INTO teacher_subjects (teacher_id, subject_id) 
-       VALUES ($1, $2) 
+      `INSERT INTO teacher_subjects (teacher_id, subject_id, branch_id) 
+       VALUES ($1, $2, $3) 
        ON CONFLICT (teacher_id, subject_id) 
-       DO NOTHING
+       DO UPDATE SET branch_id = EXCLUDED.branch_id
        RETURNING *`,
-      [teacherId, subjectId]
+      [teacherId, subjectId, branchId]
     );
     return result.rows[0];
   } catch (err) {
@@ -80,11 +80,11 @@ const addSubjectToTeacher = async (teacherId, subjectId) => {
 };
 
 // Teacher-dan fan olib tashlash
-const removeSubjectFromTeacher = async (teacherId, subjectId) => {
+const removeSubjectFromTeacher = async (teacherId, subjectId, branchId = 1) => {
   try {
     const result = await pool.query(
-      'DELETE FROM teacher_subjects WHERE teacher_id = $1 AND subject_id = $2 RETURNING *',
-      [teacherId, subjectId]
+      'DELETE FROM teacher_subjects WHERE teacher_id = $1 AND subject_id = $2 AND branch_id = $3 RETURNING *',
+      [teacherId, subjectId, branchId]
     );
     return result.rows[0];
   } catch (err) {
@@ -93,15 +93,15 @@ const removeSubjectFromTeacher = async (teacherId, subjectId) => {
 };
 
 // Teacher-ning barcha fanlarini olish
-const getTeacherSubjects = async (teacherId) => {
+const getTeacherSubjects = async (teacherId, branchId = 1) => {
   try {
     const result = await pool.query(`
       SELECT s.*, ts.assigned_at
       FROM subjects s
-      JOIN teacher_subjects ts ON s.id = ts.subject_id
-      WHERE ts.teacher_id = $1
+      JOIN teacher_subjects ts ON s.id = ts.subject_id AND ts.branch_id = s.branch_id
+      WHERE ts.teacher_id = $1 AND s.branch_id = $2
       ORDER BY s.name ASC
-    `, [teacherId]);
+    `, [teacherId, branchId]);
     return result.rows;
   } catch (err) {
     throw new Error(`Teacher fanlarini olishda xato: ${err.message}`);
@@ -109,16 +109,16 @@ const getTeacherSubjects = async (teacherId) => {
 };
 
 // Fan bo'yicha teacherlarni olish
-const getTeachersBySubject = async (subjectId) => {
+const getTeachersBySubject = async (subjectId, branchId = 1) => {
   try {
     const result = await pool.query(`
       SELECT u.id, u.name, u.surname, u.username, u.phone, 
              ts.assigned_at
       FROM users u
-      JOIN teacher_subjects ts ON u.id = ts.teacher_id
-      WHERE ts.subject_id = $1 AND u.role = 'teacher'
+      JOIN teacher_subjects ts ON u.id = ts.teacher_id AND ts.branch_id = u.branch_id
+      WHERE ts.subject_id = $1 AND u.role = 'teacher' AND u.branch_id = $2
       ORDER BY u.name ASC
-    `, [subjectId]);
+    `, [subjectId, branchId]);
     return result.rows;
   } catch (err) {
     throw new Error(`Fan bo'yicha teacherlarni olishda xato: ${err.message}`);

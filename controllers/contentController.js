@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
 const storyUploadDir = path.join(__dirname, '..', 'uploads', 'stories');
@@ -68,12 +69,15 @@ const mapStory = (row) => ({
 // Admin ?all=1 bersa nofaollarni ham ko'radi (boshqaruv paneli uchun).
 exports.getStories = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const showAll = isAdmin(req.user.role) && String(req.query.all || '') === '1';
     const result = await pool.query(
       `SELECT id, title, video_path, order_index, is_active, created_at
        FROM stories
-       ${showAll ? '' : 'WHERE is_active = TRUE'}
-       ORDER BY order_index ASC, created_at DESC`
+       WHERE branch_id = $1
+       ${showAll ? '' : 'AND is_active = TRUE'}
+       ORDER BY order_index ASC, created_at DESC`,
+      [branchId]
     );
     res.json({ success: true, data: result.rows.map(mapStory) });
   } catch (error) {
@@ -85,6 +89,7 @@ exports.getStories = async (req, res) => {
 // POST /api/content/stories — video (multipart, field: video), title ixtiyoriy
 exports.createStory = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const title = String(req.body.title || '').trim();
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'video fayl majburiy' });
@@ -94,10 +99,10 @@ exports.createStory = async (req, res) => {
     const orderIndex = parseInt(req.body.order_index) || 0;
 
     const result = await pool.query(
-      `INSERT INTO stories (title, video_path, order_index, created_by)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO stories (title, video_path, order_index, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, title, video_path, order_index, is_active, created_at`,
-      [title, videoPath, orderIndex, req.user.id]
+      [title, videoPath, orderIndex, req.user.id, branchId]
     );
 
     res.status(201).json({
@@ -114,8 +119,9 @@ exports.createStory = async (req, res) => {
 // PATCH /api/content/stories/:id — title/order/is_active, ixtiyoriy yangi video
 exports.updateStory = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const existing = await pool.query('SELECT * FROM stories WHERE id = $1', [id]);
+    const existing = await pool.query('SELECT * FROM stories WHERE id = $1 AND branch_id = $2', [id, branchId]);
     if (existing.rows.length === 0) {
       if (req.file) removeFileQuietly(`/uploads/stories/${req.file.filename}`);
       return res.status(404).json({ success: false, message: 'Storis topilmadi' });
@@ -139,9 +145,9 @@ exports.updateStory = async (req, res) => {
     const result = await pool.query(
       `UPDATE stories
        SET title = $1, order_index = $2, is_active = $3, video_path = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5
+       WHERE id = $5 AND branch_id = $6
        RETURNING id, title, video_path, order_index, is_active, created_at`,
-      [title, orderIndex, isActive, videoPath, id]
+      [title, orderIndex, isActive, videoPath, id, branchId]
     );
 
     res.json({
@@ -158,10 +164,11 @@ exports.updateStory = async (req, res) => {
 // DELETE /api/content/stories/:id
 exports.deleteStory = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     const result = await pool.query(
-      'DELETE FROM stories WHERE id = $1 RETURNING video_path',
-      [id]
+      'DELETE FROM stories WHERE id = $1 AND branch_id = $2 RETURNING video_path',
+      [id, branchId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Storis topilmadi' });
@@ -179,12 +186,15 @@ exports.deleteStory = async (req, res) => {
 // GET /api/content/news — hamma rollar (faqat faollar); admin ?all=1
 exports.getNews = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const showAll = isAdmin(req.user.role) && String(req.query.all || '') === '1';
     const result = await pool.query(
       `SELECT id, tag, title, subtitle, body, order_index, is_active, created_at
        FROM news
-       ${showAll ? '' : 'WHERE is_active = TRUE'}
-       ORDER BY order_index ASC, created_at DESC`
+       WHERE branch_id = $1
+       ${showAll ? '' : 'AND is_active = TRUE'}
+       ORDER BY order_index ASC, created_at DESC`,
+      [branchId]
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -196,14 +206,15 @@ exports.getNews = async (req, res) => {
 // POST /api/content/news
 exports.createNews = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const { tag, title, subtitle, body, order_index } = req.body;
     if (!String(title || '').trim() || !String(body || '').trim()) {
       return res.status(400).json({ success: false, message: 'title va body majburiy' });
     }
 
     const result = await pool.query(
-      `INSERT INTO news (tag, title, subtitle, body, order_index, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO news (tag, title, subtitle, body, order_index, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, tag, title, subtitle, body, order_index, is_active, created_at`,
       [
         String(tag || 'Yangilik').trim() || 'Yangilik',
@@ -212,6 +223,7 @@ exports.createNews = async (req, res) => {
         String(body).trim(),
         parseInt(order_index) || 0,
         req.user.id,
+        branchId,
       ]
     );
 
@@ -229,8 +241,9 @@ exports.createNews = async (req, res) => {
 // PATCH /api/content/news/:id
 exports.updateNews = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const existing = await pool.query('SELECT * FROM news WHERE id = $1', [id]);
+    const existing = await pool.query('SELECT * FROM news WHERE id = $1 AND branch_id = $2', [id, branchId]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Yangilik topilmadi' });
     }
@@ -256,9 +269,9 @@ exports.updateNews = async (req, res) => {
     const result = await pool.query(
       `UPDATE news
        SET tag = $1, title = $2, subtitle = $3, body = $4, order_index = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7
+       WHERE id = $7 AND branch_id = $8
        RETURNING id, tag, title, subtitle, body, order_index, is_active, created_at`,
-      [next.tag, next.title, next.subtitle, next.body, next.order_index, next.is_active, id]
+      [next.tag, next.title, next.subtitle, next.body, next.order_index, next.is_active, id, branchId]
     );
 
     res.json({
@@ -275,8 +288,9 @@ exports.updateNews = async (req, res) => {
 // DELETE /api/content/news/:id
 exports.deleteNews = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const result = await pool.query('DELETE FROM news WHERE id = $1 RETURNING id', [id]);
+    const result = await pool.query('DELETE FROM news WHERE id = $1 AND branch_id = $2 RETURNING id', [id, branchId]);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Yangilik topilmadi' });
     }

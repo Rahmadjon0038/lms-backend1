@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const MAX_PDF_SIZE = 20 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
@@ -207,12 +208,12 @@ const normalizeSpeechRate = (value) => {
   return Number(numeric.toFixed(2));
 };
 
-const getSpeechSettingsForUser = async (userId) => {
+const getSpeechSettingsForUser = async (userId, branchId = 1) => {
   const result = await pool.query(
     `SELECT speech_rate, updated_at
      FROM guide_user_speech_settings
-     WHERE user_id = $1`,
-    [userId]
+     WHERE user_id = $1 AND branch_id = $2`,
+    [userId, branchId]
   );
 
   if (result.rows.length === 0) {
@@ -232,25 +233,25 @@ const getSpeechSettingsForUser = async (userId) => {
   };
 };
 
-const findLevel = async (levelId) => {
+const findLevel = async (levelId, branchId = 1) => {
   const result = await pool.query(
     `SELECT id, title, description, icon, color, created_at, updated_at,
             banner_file_name, banner_file_size_bytes, banner_mime_type
      FROM guide_levels
-     WHERE id = $1`,
-    [levelId]
+     WHERE id = $1 AND branch_id = $2`,
+    [levelId, branchId]
   );
   return result.rows[0] || null;
 };
 
-const findLesson = async (lessonId) => {
+const findLesson = async (lessonId, branchId = 1) => {
   const result = await pool.query(
     `SELECT gl.id, gl.level_id, gl.title, gl.description, gl.order_index, gl.created_at, gl.updated_at,
             lvl.title AS level_title
      FROM guide_lessons gl
-     JOIN guide_levels lvl ON lvl.id = gl.level_id
-     WHERE gl.id = $1`,
-    [lessonId]
+     JOIN guide_levels lvl ON lvl.id = gl.level_id AND lvl.branch_id = gl.branch_id
+     WHERE gl.id = $1 AND gl.branch_id = $2`,
+    [lessonId, branchId]
   );
   return result.rows[0] || null;
 };
@@ -267,6 +268,7 @@ const removeFileIfExists = async (filePath) => {
 // Level CRUD
 const createLevel = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const title = hasText(req.body?.title) ? req.body.title.trim() : 'Untitled Level';
     const icon = hasText(req.body?.icon) ? req.body.icon.trim() : null;
     const color = hasText(req.body?.color) ? req.body.color.trim() : null;
@@ -275,13 +277,13 @@ const createLevel = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO guide_levels (
          title, description, icon, color,
-         banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
+         banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type, branch_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id, title, description, icon, color, created_at, updated_at,
                  banner_file_name, banner_file_size_bytes, banner_mime_type`,
       [title, '', icon, color,
-        file?.path || null, file?.originalname || null, file?.size || null, file?.mimetype || null]
+        file?.path || null, file?.originalname || null, file?.size || null, file?.mimetype || null, branchId]
     );
 
     return sendSuccess(res, {
@@ -298,16 +300,19 @@ const createLevel = async (req, res) => {
 
 const getLevels = async (_req, res) => {
   try {
+    const branchId = getScopedBranchId(_req);
     const result = await pool.query(
       `SELECT l.id, l.title, l.icon, l.color, l.created_at, l.updated_at,
               l.banner_file_name, l.banner_file_size_bytes, l.banner_mime_type,
               COUNT(gl.id)::int AS lesson_count,
               CASE WHEN mp.id IS NOT NULL THEN true ELSE false END AS has_main_pdf
        FROM guide_levels l
-       LEFT JOIN guide_lessons gl ON gl.level_id = l.id
-       LEFT JOIN guide_level_main_pdfs mp ON mp.level_id = l.id
+       LEFT JOIN guide_lessons gl ON gl.level_id = l.id AND gl.branch_id = l.branch_id
+       LEFT JOIN guide_level_main_pdfs mp ON mp.level_id = l.id AND mp.branch_id = l.branch_id
+       WHERE l.branch_id = $1
        GROUP BY l.id, mp.id
-       ORDER BY l.id DESC`
+       ORDER BY l.id DESC`,
+      [branchId]
     );
     const rolePrefix = _req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
     return sendSuccess(res, result.rows.map((row) => ({
@@ -326,7 +331,8 @@ const getLevelById = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
-    const level = await findLevel(levelId);
+    const branchId = getScopedBranchId(req);
+    const level = await findLevel(levelId, branchId);
     if (!level) return sendError(res, 'Level not found', 404);
     const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
 
@@ -334,16 +340,16 @@ const getLevelById = async (req, res) => {
       `SELECT id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at,
               banner_file_name, banner_file_size_bytes, banner_mime_type
        FROM guide_level_main_pdfs
-       WHERE level_id = $1`,
-      [levelId]
+       WHERE level_id = $1 AND branch_id = $2`,
+      [levelId, branchId]
     );
 
     const lessonsResult = await pool.query(
       `SELECT id, level_id, title, description, order_index, created_at, updated_at
        FROM guide_lessons
-       WHERE level_id = $1
+       WHERE level_id = $1 AND branch_id = $2
        ORDER BY order_index ASC, id ASC`,
-      [levelId]
+      [levelId, branchId]
     );
 
     return sendSuccess(res, {
@@ -379,11 +385,12 @@ const updateLevel = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const existing = await pool.query(
       `SELECT id, title, icon, color, banner_path, banner_file_name, banner_file_size_bytes, banner_mime_type
        FROM guide_levels
-       WHERE id = $1`,
-      [levelId]
+       WHERE id = $1 AND branch_id = $2`,
+      [levelId, branchId]
     );
 
     if (existing.rows.length === 0) return sendError(res, 'Level not found', 404);
@@ -408,10 +415,10 @@ const updateLevel = async (req, res) => {
            banner_file_size_bytes = $6,
            banner_mime_type = $7,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $8
+       WHERE id = $8 AND branch_id = $9
        RETURNING id, title, icon, color, created_at, updated_at,
                  banner_file_name, banner_file_size_bytes, banner_mime_type`,
-      [nextTitle, nextIcon, nextColor, nextBannerPath, nextBannerName, nextBannerSize, nextBannerMime, levelId]
+      [nextTitle, nextIcon, nextColor, nextBannerPath, nextBannerName, nextBannerSize, nextBannerMime, levelId, branchId]
     );
 
     if (nextFile?.path && current.banner_path && current.banner_path !== nextFile.path) {
@@ -435,11 +442,12 @@ const streamLevelBanner = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT banner_path, banner_file_name, banner_mime_type
        FROM guide_levels
-       WHERE id = $1`,
-      [levelId]
+       WHERE id = $1 AND branch_id = $2`,
+      [levelId, branchId]
     );
 
     if (result.rows.length === 0 || !result.rows[0].banner_path) return sendError(res, 'Level banner not found', 404);
@@ -460,10 +468,11 @@ const deleteLevel = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
-    const pdf = await pool.query('SELECT file_path, banner_path FROM guide_level_main_pdfs WHERE level_id = $1', [levelId]);
+    const branchId = getScopedBranchId(req);
+    const pdf = await pool.query('SELECT file_path, banner_path FROM guide_level_main_pdfs WHERE level_id = $1 AND branch_id = $2', [levelId, branchId]);
 
-    const levelBanner = await pool.query('SELECT banner_path FROM guide_levels WHERE id = $1', [levelId]);
-    const result = await pool.query('DELETE FROM guide_levels WHERE id = $1 RETURNING id', [levelId]);
+    const levelBanner = await pool.query('SELECT banner_path FROM guide_levels WHERE id = $1 AND branch_id = $2', [levelId, branchId]);
+    const result = await pool.query('DELETE FROM guide_levels WHERE id = $1 AND branch_id = $2 RETURNING id', [levelId, branchId]);
     if (result.rows.length === 0) return sendError(res, 'Level not found', 404);
 
     if (pdf.rows[0]?.file_path) await removeFileIfExists(pdf.rows[0].file_path);
@@ -490,13 +499,14 @@ const uploadLevelMainPdf = async (req, res) => {
   }
 
   try {
-    const level = await findLevel(levelId);
+    const branchId = getScopedBranchId(req);
+    const level = await findLevel(levelId, branchId);
     if (!level) {
       await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Level not found', 404);
     }
 
-    const old = await pool.query('SELECT file_path FROM guide_level_main_pdfs WHERE level_id = $1', [levelId]);
+    const old = await pool.query('SELECT file_path FROM guide_level_main_pdfs WHERE level_id = $1 AND branch_id = $2', [levelId, branchId]);
 
     let result;
     if (old.rows.length > 0) {
@@ -508,18 +518,18 @@ const uploadLevelMainPdf = async (req, res) => {
              mime_type = $4,
              uploaded_by = $5,
              uploaded_at = CURRENT_TIMESTAMP
-         WHERE level_id = $6
+         WHERE level_id = $6 AND branch_id = $7
          RETURNING id, level_id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at`,
-        [pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id, levelId]
+        [pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id, levelId, branchId]
       );
       await removeFileIfExists(old.rows[0].file_path);
     } else {
       result = await pool.query(
         `INSERT INTO guide_level_main_pdfs (
-          level_id, file_path, file_name, file_size_bytes, mime_type, uploaded_by
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          level_id, file_path, file_name, file_size_bytes, mime_type, uploaded_by, branch_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, level_id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at`,
-        [levelId, pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id]
+        [levelId, pdfFile.path, pdfFile.originalname, pdfFile.size, pdfFile.mimetype, req.user.id, branchId]
       );
     }
 
@@ -542,11 +552,12 @@ const getLevelMainPdfMeta = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, level_id, file_name, file_size_bytes, mime_type, uploaded_by, uploaded_at
        FROM guide_level_main_pdfs
-       WHERE level_id = $1`,
-      [levelId]
+       WHERE level_id = $1 AND branch_id = $2`,
+      [levelId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Main PDF not found', 404);
@@ -569,11 +580,12 @@ const streamLevelMainPdf = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT file_path, file_name, mime_type
        FROM guide_level_main_pdfs
-       WHERE level_id = $1`,
-      [levelId]
+       WHERE level_id = $1 AND branch_id = $2`,
+      [levelId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Main PDF not found', 404);
@@ -595,11 +607,12 @@ const deleteLevelMainPdf = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_level_main_pdfs
-       WHERE level_id = $1
+       WHERE level_id = $1 AND branch_id = $2
        RETURNING id, file_path, banner_path`,
-      [levelId]
+      [levelId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Main PDF not found', 404);
@@ -623,20 +636,21 @@ const createLesson = async (req, res) => {
   }
 
   try {
-    const level = await findLevel(levelId);
+    const branchId = getScopedBranchId(req);
+    const level = await findLevel(levelId, branchId);
     if (!level) return sendError(res, 'Level not found', 404);
 
     const nextOrderResult = await pool.query(
-      'SELECT COALESCE(MAX(order_index), 0)::int AS max_order FROM guide_lessons WHERE level_id = $1',
-      [levelId]
+      'SELECT COALESCE(MAX(order_index), 0)::int AS max_order FROM guide_lessons WHERE level_id = $1 AND branch_id = $2',
+      [levelId, branchId]
     );
     const nextOrder = (nextOrderResult.rows[0]?.max_order || 0) + 1;
 
     const result = await pool.query(
-      `INSERT INTO guide_lessons (level_id, title, description, order_index)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO guide_lessons (level_id, title, description, order_index, branch_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, level_id, title, description, order_index, created_at, updated_at`,
-      [levelId, topicName, '', nextOrder]
+      [levelId, topicName, '', nextOrder, branchId]
     );
 
     return sendSuccess(res, mapLessonRow(result.rows[0]), 201);
@@ -650,12 +664,13 @@ const getLevelLessons = async (req, res) => {
   if (!levelId) return sendError(res, 'Invalid levelId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, level_id, title, description, order_index, created_at, updated_at
        FROM guide_lessons
-       WHERE level_id = $1
+       WHERE level_id = $1 AND branch_id = $2
        ORDER BY order_index ASC, id ASC`,
-      [levelId]
+      [levelId, branchId]
     );
 
     return sendSuccess(res, result.rows.map(mapLessonRow));
@@ -674,13 +689,14 @@ const updateLesson = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `UPDATE guide_lessons
        SET title = $1,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
+       WHERE id = $2 AND branch_id = $3
        RETURNING id, level_id, title, description, order_index, created_at, updated_at`,
-      [topicName, lessonId]
+      [topicName, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Lesson not found', 404);
@@ -695,7 +711,8 @@ const deleteLesson = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
-    const result = await pool.query('DELETE FROM guide_lessons WHERE id = $1 RETURNING id, level_id', [lessonId]);
+    const branchId = getScopedBranchId(req);
+    const result = await pool.query('DELETE FROM guide_lessons WHERE id = $1 AND branch_id = $2 RETURNING id, level_id', [lessonId, branchId]);
     if (result.rows.length === 0) return sendError(res, 'Lesson not found', 404);
 
     const levelId = result.rows[0].level_id;
@@ -703,13 +720,13 @@ const deleteLesson = async (req, res) => {
       `WITH ordered AS (
         SELECT id, ROW_NUMBER() OVER (PARTITION BY level_id ORDER BY order_index ASC, id ASC) AS rn
         FROM guide_lessons
-        WHERE level_id = $1
+        WHERE level_id = $1 AND branch_id = $2
       )
       UPDATE guide_lessons gl
       SET order_index = ordered.rn
       FROM ordered
-      WHERE gl.id = ordered.id`,
-      [levelId]
+      WHERE gl.id = ordered.id AND gl.branch_id = $2`,
+      [levelId, branchId]
     );
 
     return sendSuccess(res, { id: result.rows[0].id, deleted: true });
@@ -742,7 +759,8 @@ const reorderLessons = async (req, res) => {
   }
 
   try {
-    const existing = await pool.query('SELECT id FROM guide_lessons WHERE level_id = $1', [levelId]);
+    const branchId = getScopedBranchId(req);
+    const existing = await pool.query('SELECT id FROM guide_lessons WHERE level_id = $1 AND branch_id = $2', [levelId, branchId]);
     if (existing.rows.length === 0) return sendError(res, 'No lessons found in this level', 404);
 
     const existingIds = new Set(existing.rows.map((r) => r.id));
@@ -773,8 +791,8 @@ const reorderLessons = async (req, res) => {
           `UPDATE guide_lessons
            SET order_index = $1,
                updated_at = CURRENT_TIMESTAMP
-           WHERE id = $2 AND level_id = $3`,
-          [item.orderIndex, item.lessonId, levelId]
+           WHERE id = $2 AND level_id = $3 AND branch_id = $4`,
+          [item.orderIndex, item.lessonId, levelId, branchId]
         );
       }
       await client.query('COMMIT');
@@ -788,9 +806,9 @@ const reorderLessons = async (req, res) => {
     const result = await pool.query(
       `SELECT id, level_id, title, description, order_index, created_at, updated_at
        FROM guide_lessons
-       WHERE level_id = $1
+       WHERE level_id = $1 AND branch_id = $2
        ORDER BY order_index ASC, id ASC`,
-      [levelId]
+      [levelId, branchId]
     );
     return sendSuccess(res, result.rows.map(mapLessonRow));
   } catch (error) {
@@ -814,14 +832,15 @@ const createLessonNote = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const result = await pool.query(
-      `INSERT INTO guide_lesson_notes (lesson_id, title, content_markdown, color, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO guide_lesson_notes (lesson_id, title, content_markdown, color, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, lesson_id, title, content_markdown, color, created_by, created_at, updated_at`,
-      [lessonId, '', content_markdown.trim(), normalizedColor, req.user.id]
+      [lessonId, '', content_markdown.trim(), normalizedColor, req.user.id, branchId]
     );
 
     return sendSuccess(res, mapNoteRow(result.rows[0]), 201);
@@ -846,15 +865,16 @@ const updateLessonNote = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `UPDATE guide_lesson_notes
        SET title = '',
            content_markdown = $1,
            color = $2,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3 AND lesson_id = $4
+       WHERE id = $3 AND lesson_id = $4 AND branch_id = $5
        RETURNING id, lesson_id, title, content_markdown, color, created_by, created_at, updated_at`,
-      [content_markdown.trim(), normalizedColor, noteId, lessonId]
+      [content_markdown.trim(), normalizedColor, noteId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Lesson note not found', 404);
@@ -870,11 +890,12 @@ const deleteLessonNote = async (req, res) => {
   if (!lessonId || !noteId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_notes
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id`,
-      [noteId, lessonId]
+      [noteId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Lesson note not found', 404);
@@ -903,7 +924,8 @@ const uploadLessonPdfItem = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) {
       await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Lesson not found', 404);
@@ -912,7 +934,7 @@ const uploadLessonPdfItem = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO guide_lesson_pdfs (
          lesson_id, title, description, file_path, file_name, file_size_bytes, mime_type, created_by
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       , branch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id, lesson_id, title, description, file_name, file_size_bytes, mime_type, created_by, created_at`,
       [
         lessonId,
@@ -922,7 +944,8 @@ const uploadLessonPdfItem = async (req, res) => {
         pdfFile.originalname,
         pdfFile.size,
         pdfFile.mimetype,
-        req.user.id
+        req.user.id,
+        branchId
       ]
     );
 
@@ -942,11 +965,12 @@ const streamLessonPdfFile = async (req, res) => {
   if (!lessonId || !pdfId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, file_path, file_name, mime_type
        FROM guide_lesson_pdfs
-       WHERE id = $1 AND lesson_id = $2`,
-      [pdfId, lessonId]
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3`,
+      [pdfId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Lesson PDF not found', 404);
@@ -974,11 +998,12 @@ const updateLessonPdfItem = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const existing = await pool.query(
       `SELECT id, title, file_path, file_name, file_size_bytes, mime_type
        FROM guide_lesson_pdfs
-       WHERE id = $1 AND lesson_id = $2`,
-      [pdfId, lessonId]
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3`,
+      [pdfId, lessonId, branchId]
     );
 
     if (existing.rows.length === 0) {
@@ -996,9 +1021,9 @@ const updateLessonPdfItem = async (req, res) => {
     const result = await pool.query(
       `UPDATE guide_lesson_pdfs
        SET title = $1, file_path = $2, file_name = $3, file_size_bytes = $4, mime_type = $5
-       WHERE id = $6 AND lesson_id = $7
+       WHERE id = $6 AND lesson_id = $7 AND branch_id = $8
        RETURNING id, lesson_id, title, description, file_name, file_size_bytes, mime_type, created_by, created_at`,
-      [nextTitle, nextPath, nextName, nextSize, nextMime, pdfId, lessonId]
+      [nextTitle, nextPath, nextName, nextSize, nextMime, pdfId, lessonId, branchId]
     );
 
     // Yangi fayl yuklangan bo'lsa eskisini o'chiramiz
@@ -1022,11 +1047,12 @@ const deleteLessonPdfItem = async (req, res) => {
   if (!lessonId || !pdfId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_pdfs
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id, file_path`,
-      [pdfId, lessonId]
+      [pdfId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Lesson PDF not found', 404);
@@ -1050,14 +1076,15 @@ const createAssignment = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const result = await pool.query(
-      `INSERT INTO guide_lesson_assignments (lesson_id, title, description, created_by)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO guide_lesson_assignments (lesson_id, title, description, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, lesson_id, title, description, created_by, created_at, updated_at`,
-      [lessonId, '', assignmentText, req.user.id]
+      [lessonId, '', assignmentText, req.user.id, branchId]
     );
 
     return sendSuccess(res, mapAssignmentRow(result.rows[0]), 201);
@@ -1079,14 +1106,15 @@ const updateAssignment = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `UPDATE guide_lesson_assignments
        SET title = '',
            description = $1,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND lesson_id = $3
+       WHERE id = $2 AND lesson_id = $3 AND branch_id = $4
        RETURNING id, lesson_id, title, description, created_by, created_at, updated_at`,
-      [assignmentText, assignmentId, lessonId]
+      [assignmentText, assignmentId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Assignment not found', 404);
@@ -1102,11 +1130,12 @@ const deleteAssignment = async (req, res) => {
   if (!lessonId || !assignmentId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_assignments
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id`,
-      [assignmentId, lessonId]
+      [assignmentId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Assignment not found', 404);
@@ -1126,14 +1155,15 @@ const createVocabulary = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const result = await pool.query(
-      `INSERT INTO guide_lesson_vocabularies (lesson_id, word, translation, example, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO guide_lesson_vocabularies (lesson_id, word, translation, example, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, lesson_id, word, translation, example, created_by, created_at, updated_at`,
-      [lessonId, word.trim(), translation.trim(), hasText(example) ? example.trim() : null, req.user.id]
+      [lessonId, word.trim(), translation.trim(), hasText(example) ? example.trim() : null, req.user.id, branchId]
     );
 
     return sendSuccess(res, result.rows[0], 201);
@@ -1153,15 +1183,16 @@ const updateVocabulary = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `UPDATE guide_lesson_vocabularies
        SET word = $1,
            translation = $2,
            example = $3,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $4 AND lesson_id = $5
+       WHERE id = $4 AND lesson_id = $5 AND branch_id = $6
        RETURNING id, lesson_id, word, translation, example, created_by, created_at, updated_at`,
-      [word.trim(), translation.trim(), hasText(example) ? example.trim() : null, vocabId, lessonId]
+      [word.trim(), translation.trim(), hasText(example) ? example.trim() : null, vocabId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Vocabulary item not found', 404);
@@ -1177,11 +1208,12 @@ const deleteVocabulary = async (req, res) => {
   if (!lessonId || !vocabId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_vocabularies
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id`,
-      [vocabId, lessonId]
+      [vocabId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Vocabulary item not found', 404);
@@ -1209,7 +1241,8 @@ const uploadVocabularyPdf = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) {
       await removeFileIfExists(pdfFile.path);
       return sendError(res, 'Lesson not found', 404);
@@ -1218,7 +1251,7 @@ const uploadVocabularyPdf = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO guide_lesson_vocabulary_pdfs (
          lesson_id, title, file_path, file_name, file_size_bytes, mime_type, created_by
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+       , branch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at`,
       [
         lessonId,
@@ -1227,7 +1260,8 @@ const uploadVocabularyPdf = async (req, res) => {
         pdfFile.originalname,
         pdfFile.size,
         pdfFile.mimetype,
-        req.user.id
+        req.user.id,
+        branchId
       ]
     );
 
@@ -1246,13 +1280,14 @@ const listVocabularyPdfs = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
     const result = await pool.query(
       `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
        FROM guide_lesson_vocabulary_pdfs
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
 
     return sendSuccess(res, result.rows.map((row) => ({
@@ -1270,11 +1305,12 @@ const streamVocabularyPdfFile = async (req, res) => {
   if (!lessonId || !pdfId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, file_path, file_name, mime_type
        FROM guide_lesson_vocabulary_pdfs
-       WHERE id = $1 AND lesson_id = $2`,
-      [pdfId, lessonId]
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3`,
+      [pdfId, lessonId, branchId]
     );
     if (result.rows.length === 0) return sendError(res, 'Vocabulary PDF not found', 404);
 
@@ -1296,11 +1332,12 @@ const deleteVocabularyPdf = async (req, res) => {
   if (!lessonId || !pdfId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_vocabulary_pdfs
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id, file_path`,
-      [pdfId, lessonId]
+      [pdfId, lessonId, branchId]
     );
     if (result.rows.length === 0) return sendError(res, 'Vocabulary PDF not found', 404);
     await removeFileIfExists(result.rows[0].file_path);
@@ -1326,7 +1363,8 @@ const uploadVocabularyImageItem = async (req, res) => {
   if (!req.file) return sendError(res, 'Image file is required');
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) {
       await removeFileIfExists(req.file.path);
       return sendError(res, 'Lesson not found', 404);
@@ -1335,9 +1373,9 @@ const uploadVocabularyImageItem = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO guide_lesson_vocabulary_images (
          lesson_id, title, file_path, file_name, file_size_bytes, mime_type, created_by
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+       , branch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at`,
-      [lessonId, title.trim(), req.file.path, req.file.originalname, req.file.size, req.file.mimetype, req.user.id]
+      [lessonId, title.trim(), req.file.path, req.file.originalname, req.file.size, req.file.mimetype, req.user.id, branchId]
     );
 
     return sendSuccess(res, {
@@ -1355,13 +1393,14 @@ const listVocabularyImages = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
     const result = await pool.query(
       `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
        FROM guide_lesson_vocabulary_images
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
 
     return sendSuccess(res, result.rows.map((row) => ({
@@ -1379,11 +1418,12 @@ const streamVocabularyImageFile = async (req, res) => {
   if (!lessonId || !imageId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, file_path, file_name, mime_type
        FROM guide_lesson_vocabulary_images
-       WHERE id = $1 AND lesson_id = $2`,
-      [imageId, lessonId]
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3`,
+      [imageId, lessonId, branchId]
     );
     if (result.rows.length === 0) return sendError(res, 'Vocabulary image not found', 404);
 
@@ -1405,11 +1445,12 @@ const deleteVocabularyImage = async (req, res) => {
   if (!lessonId || !imageId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_vocabulary_images
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id, file_path`,
-      [imageId, lessonId]
+      [imageId, lessonId, branchId]
     );
     if (result.rows.length === 0) return sendError(res, 'Vocabulary image not found', 404);
     await removeFileIfExists(result.rows[0].file_path);
@@ -1430,14 +1471,15 @@ const createVocabularyMarkdown = async (req, res) => {
   }
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const result = await pool.query(
-      `INSERT INTO guide_lesson_vocabulary_markdowns (lesson_id, content_markdown, created_by)
-       VALUES ($1, $2, $3)
+      `INSERT INTO guide_lesson_vocabulary_markdowns (lesson_id, content_markdown, created_by, branch_id)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, lesson_id, content_markdown, created_by, created_at, updated_at`,
-      [lessonId, content_markdown.trim(), req.user.id]
+      [lessonId, content_markdown.trim(), req.user.id, branchId]
     );
 
     return sendSuccess(res, mapVocabularyMarkdownRow(result.rows[0]), 201);
@@ -1457,13 +1499,14 @@ const updateVocabularyMarkdown = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `UPDATE guide_lesson_vocabulary_markdowns
        SET content_markdown = $1,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND lesson_id = $3
+       WHERE id = $2 AND lesson_id = $3 AND branch_id = $4
        RETURNING id, lesson_id, content_markdown, created_by, created_at, updated_at`,
-      [content_markdown.trim(), markdownId, lessonId]
+      [content_markdown.trim(), markdownId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Vocabulary markdown not found', 404);
@@ -1479,11 +1522,12 @@ const deleteVocabularyMarkdown = async (req, res) => {
   if (!lessonId || !markdownId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_vocabulary_markdowns
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id`,
-      [markdownId, lessonId]
+      [markdownId, lessonId, branchId]
     );
     if (result.rows.length === 0) return sendError(res, 'Vocabulary markdown not found', 404);
     return sendSuccess(res, { id: result.rows[0].id, deleted: true });
@@ -1497,12 +1541,13 @@ const listVocabularyMarkdowns = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, lesson_id, content_markdown, created_by, created_at, updated_at
        FROM guide_lesson_vocabulary_markdowns
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
     return sendSuccess(res, result.rows.map(mapVocabularyMarkdownRow));
   } catch (error) {
@@ -1523,14 +1568,15 @@ const createVideo = async (req, res) => {
   if (!videoId) return sendError(res, 'Invalid YouTube URL');
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const result = await pool.query(
-      `INSERT INTO guide_lesson_videos (lesson_id, title, youtube_url, youtube_video_id, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO guide_lesson_videos (lesson_id, title, youtube_url, youtube_video_id, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, lesson_id, title, youtube_url, youtube_video_id, created_by, created_at`,
-      [lessonId, title.trim(), youtube_url.trim(), videoId, req.user.id]
+      [lessonId, title.trim(), youtube_url.trim(), videoId, req.user.id, branchId]
     );
 
     return sendSuccess(res, {
@@ -1548,11 +1594,12 @@ const deleteVideo = async (req, res) => {
   if (!lessonId || !videoId) return sendError(res, 'Invalid id');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `DELETE FROM guide_lesson_videos
-       WHERE id = $1 AND lesson_id = $2
+       WHERE id = $1 AND lesson_id = $2 AND branch_id = $3
        RETURNING id`,
-      [videoId, lessonId]
+      [videoId, lessonId, branchId]
     );
 
     if (result.rows.length === 0) return sendError(res, 'Video link not found', 404);
@@ -1567,67 +1614,68 @@ const getLessonDetail = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
-    const lesson = await findLesson(lessonId);
+    const branchId = getScopedBranchId(req);
+    const lesson = await findLesson(lessonId, branchId);
     if (!lesson) return sendError(res, 'Lesson not found', 404);
 
     const [notes, pdfs, assignments, vocabulary, vocabularyPdfs, vocabularyImages, vocabularyMarkdowns, videos, speechSettings] = await Promise.all([
       pool.query(
         `SELECT id, lesson_id, title, content_markdown, color, created_by, created_at, updated_at
          FROM guide_lesson_notes
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id ASC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
          FROM guide_lesson_pdfs
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, title, description, created_by, created_at, updated_at
          FROM guide_lesson_assignments
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, word, translation, example, created_by, created_at, updated_at
          FROM guide_lesson_vocabularies
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
          FROM guide_lesson_vocabulary_pdfs
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
          FROM guide_lesson_vocabulary_images
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, content_markdown, created_by, created_at, updated_at
          FROM guide_lesson_vocabulary_markdowns
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
       pool.query(
         `SELECT id, lesson_id, title, youtube_url, youtube_video_id, created_by, created_at
          FROM guide_lesson_videos
-         WHERE lesson_id = $1
+         WHERE lesson_id = $1 AND branch_id = $2
          ORDER BY id DESC`,
-        [lessonId]
+        [lessonId, branchId]
       ),
-      getSpeechSettingsForUser(req.user.id),
+      getSpeechSettingsForUser(req.user.id, branchId),
     ]);
 
     const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
@@ -1674,13 +1722,14 @@ const listLessonPdfs = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const rolePrefix = req.baseUrl.startsWith('/api/admin') ? '/api/admin' : '/api/teacher';
     const result = await pool.query(
       `SELECT id, lesson_id, title, file_name, file_size_bytes, mime_type, created_by, created_at
        FROM guide_lesson_pdfs
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
 
     return sendSuccess(res, result.rows.map((row) => ({
@@ -1697,12 +1746,13 @@ const listAssignments = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, lesson_id, title, description, created_by, created_at, updated_at
        FROM guide_lesson_assignments
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
     return sendSuccess(res, result.rows.map(mapAssignmentRow));
   } catch (error) {
@@ -1715,12 +1765,13 @@ const listVocabularies = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, lesson_id, word, translation, example, created_by, created_at, updated_at
        FROM guide_lesson_vocabularies
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
     return sendSuccess(res, result.rows.map(mapVocabularyRow));
   } catch (error) {
@@ -1730,7 +1781,8 @@ const listVocabularies = async (req, res) => {
 
 const getSpeechSettings = async (req, res) => {
   try {
-    const settings = await getSpeechSettingsForUser(req.user.id);
+    const branchId = getScopedBranchId(req);
+    const settings = await getSpeechSettingsForUser(req.user.id, branchId);
     return sendSuccess(res, settings);
   } catch (error) {
     return sendError(res, 'Failed to fetch speech settings', 500, { detail: error.message });
@@ -1750,13 +1802,14 @@ const updateSpeechSettings = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
-      `INSERT INTO guide_user_speech_settings (user_id, speech_rate)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id)
+      `INSERT INTO guide_user_speech_settings (user_id, speech_rate, branch_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (branch_id, user_id)
        DO UPDATE SET speech_rate = EXCLUDED.speech_rate, updated_at = CURRENT_TIMESTAMP
        RETURNING speech_rate, updated_at`,
-      [req.user.id, speechRate]
+      [req.user.id, speechRate, branchId]
     );
 
     return sendSuccess(res, {
@@ -1775,12 +1828,13 @@ const listVideos = async (req, res) => {
   if (!lessonId) return sendError(res, 'Invalid lessonId');
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT id, lesson_id, title, youtube_url, youtube_video_id, created_by, created_at
        FROM guide_lesson_videos
-       WHERE lesson_id = $1
+       WHERE lesson_id = $1 AND branch_id = $2
        ORDER BY id DESC`,
-      [lessonId]
+      [lessonId, branchId]
     );
 
     return sendSuccess(res, result.rows.map((row) => ({

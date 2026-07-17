@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const isValidMonth = (m) => /^\d{4}-\d{2}$/.test(String(m || ''));
 const isValidDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
@@ -13,6 +14,7 @@ exports.getMonthLateByTeachers = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const result = await pool.query(
       `SELECT
          u.id AS teacher_id,
@@ -39,10 +41,12 @@ exports.getMonthLateByTeachers = async (req, res) => {
          FROM teacher_late_records r
          WHERE r.teacher_id = u.id
            AND TO_CHAR(r.late_date, 'YYYY-MM') = $1
+           AND r.branch_id = $2
        ) agg ON true
        WHERE u.role = 'teacher'
+         AND u.branch_id = $2
        ORDER BY u.surname NULLS LAST, u.name NULLS LAST, u.id`,
-      [monthName]
+      [monthName, branchId]
     );
 
     return res.json({
@@ -82,16 +86,20 @@ exports.createLateRecord = async (req, res) => {
   }
 
   try {
-    const teacher = await pool.query(`SELECT id FROM users WHERE id = $1 AND role = 'teacher'`, [teacherId]);
+    const branchId = getScopedBranchId(req);
+    const teacher = await pool.query(
+      `SELECT id FROM users WHERE id = $1 AND role = 'teacher' AND branch_id = $2`,
+      [teacherId, branchId]
+    );
     if (!teacher.rows.length) {
       return res.status(404).json({ success: false, message: "O'qituvchi topilmadi" });
     }
 
     const ins = await pool.query(
-      `INSERT INTO teacher_late_records (teacher_id, late_date, minutes, description, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO teacher_late_records (teacher_id, late_date, minutes, description, created_by, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [teacherId, lateDate, Math.round(minutes), description, req.user.id]
+      [teacherId, lateDate, Math.round(minutes), description, req.user.id, branchId]
     );
 
     return res.json({ success: true, message: "Kechikish qo'shildi", data: ins.rows[0] });
@@ -113,7 +121,11 @@ exports.deleteLateRecord = async (req, res) => {
   }
 
   try {
-    const del = await pool.query(`DELETE FROM teacher_late_records WHERE id = $1 RETURNING *`, [id]);
+    const branchId = getScopedBranchId(req);
+    const del = await pool.query(
+      `DELETE FROM teacher_late_records WHERE id = $1 AND branch_id = $2 RETURNING *`,
+      [id, branchId]
+    );
     if (!del.rows.length) {
       return res.status(404).json({ success: false, message: 'Yozuv topilmadi' });
     }

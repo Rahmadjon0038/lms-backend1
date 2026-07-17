@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 const isValidMonthName = (value) => typeof value === 'string' && /^\d{4}-\d{2}$/.test(value.trim());
 
@@ -21,11 +22,12 @@ const createOrUpdateAdminSalary = async (req, res) => {
   }
 
   try {
+    const branchId = getScopedBranchId(req);
     const adminCheck = await pool.query(
       `SELECT id, name, surname, status
        FROM users
-       WHERE id = $1 AND role = 'admin'`,
-      [adminId]
+       WHERE id = $1 AND role = 'admin' AND branch_id = $2`,
+      [adminId, branchId]
     );
 
     if (adminCheck.rows.length === 0) {
@@ -35,16 +37,16 @@ const createOrUpdateAdminSalary = async (req, res) => {
     const existing = await pool.query(
       `SELECT id
        FROM admin_salary_payouts
-       WHERE admin_id = $1 AND month_name = $2`,
-      [adminId, monthName]
+       WHERE admin_id = $1 AND month_name = $2 AND branch_id = $3`,
+      [adminId, monthName, branchId]
     );
 
     if (existing.rows.length === 0) {
       const insertRes = await pool.query(
-        `INSERT INTO admin_salary_payouts (admin_id, month_name, amount, description, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $5)
+        `INSERT INTO admin_salary_payouts (admin_id, month_name, amount, description, created_by, updated_by, branch_id)
+         VALUES ($1, $2, $3, $4, $5, $5, $6)
          RETURNING id, admin_id, month_name, amount, description, created_by, updated_by, created_at, updated_at`,
-        [adminId, monthName, numericAmount, description || null, req.user.id]
+        [adminId, monthName, numericAmount, description || null, req.user.id, branchId]
       );
 
       return res.status(201).json({
@@ -61,9 +63,9 @@ const createOrUpdateAdminSalary = async (req, res) => {
            description = $2,
            updated_by = $3,
            updated_at = CURRENT_TIMESTAMP
-       WHERE admin_id = $4 AND month_name = $5
+       WHERE admin_id = $4 AND month_name = $5 AND branch_id = $6
        RETURNING id, admin_id, month_name, amount, description, created_by, updated_by, created_at, updated_at`,
-      [numericAmount, description || null, req.user.id, adminId, monthName]
+      [numericAmount, description || null, req.user.id, adminId, monthName, branchId]
     );
 
     return res.json({
@@ -80,9 +82,12 @@ const createOrUpdateAdminSalary = async (req, res) => {
 
 const getAdminSalaryList = async (req, res) => {
   const { admin_id, month_name } = req.query || {};
+  const branchId = getScopedBranchId(req);
   const filters = [];
-  const params = [];
+  const params = [branchId];
   let idx = 1;
+  filters.push(`asp.branch_id = $${idx++}`);
+  filters.push(`u.branch_id = asp.branch_id`);
 
   if (admin_id !== undefined) {
     const adminId = Number(admin_id);
@@ -137,9 +142,11 @@ const getAdminSalaryList = async (req, res) => {
 // admin_id berilsa faqat o'sha admin yozuvlari, ikkalasisiz — butun tarix
 const clearAdminSalaryHistory = async (req, res) => {
   const { admin_id, month_name } = req.query || {};
+  const branchId = getScopedBranchId(req);
   const filters = [];
-  const params = [];
+  const params = [branchId];
   let idx = 1;
+  filters.push(`branch_id = $${idx++}`);
 
   if (admin_id !== undefined) {
     const adminId = Number(admin_id);

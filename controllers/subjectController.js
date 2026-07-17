@@ -1,12 +1,14 @@
 const pool = require('../config/db');
+const { getScopedBranchId } = require('../utils/branch');
 
 // 1. Fan yaratish (Admin)
 exports.createSubject = async (req, res) => {
     const { name } = req.body;
     try {
+        const branchId = getScopedBranchId(req);
         const result = await pool.query(
-            'INSERT INTO subjects (name) VALUES ($1) RETURNING *',
-            [name]
+            'INSERT INTO subjects (name, branch_id) VALUES ($1, $2) RETURNING *',
+            [name, branchId]
         );
         res.status(201).json({ 
             success: true, 
@@ -21,6 +23,7 @@ exports.createSubject = async (req, res) => {
 // 2.1. Fanlar ro'yxatini olish (Teacher registratsiyasi uchun) - Yangi teacher_subjects bilan
 exports.getSubjectsForTeacher = async (req, res) => {
     try {
+        const branchId = getScopedBranchId(req);
         const result = await pool.query(`
             SELECT 
                 s.id, 
@@ -41,12 +44,13 @@ exports.getSubjectsForTeacher = async (req, res) => {
                     ELSE NULL END
                 ) FILTER (WHERE g.id IS NOT NULL) as groups
             FROM subjects s
-            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id
-            LEFT JOIN groups g ON s.id = g.subject_id AND g.status = 'active'
+            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id AND ts.branch_id = s.branch_id
+            LEFT JOIN groups g ON s.id = g.subject_id AND g.status = 'active' AND g.branch_id = s.branch_id
             LEFT JOIN users u ON g.teacher_id = u.id
+            WHERE s.branch_id = $1
             GROUP BY s.id, s.name
             ORDER BY s.name
-        `);
+        `, [branchId]);
         
         res.json({ 
             success: true, 
@@ -68,18 +72,20 @@ exports.getSubjectsForTeacher = async (req, res) => {
 // 2. Barcha fanlarni olish - Yangi teacher_subjects bilan
 exports.getAllSubjects = async (req, res) => {
     try {
+        const branchId = getScopedBranchId(req);
         const result = await pool.query(`
             SELECT s.*, 
                    COUNT(DISTINCT g.id) as groups_count,
                    COUNT(sg.student_id) as students_count,
                    COUNT(DISTINCT ts.teacher_id) as teachers_count
             FROM subjects s
-            LEFT JOIN groups g ON s.id = g.subject_id 
-            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
-            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id
+            LEFT JOIN groups g ON s.id = g.subject_id AND g.branch_id = s.branch_id
+            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active' AND sg.branch_id = s.branch_id
+            LEFT JOIN teacher_subjects ts ON s.id = ts.subject_id AND ts.branch_id = s.branch_id
+            WHERE s.branch_id = $1
             GROUP BY s.id, s.name
             ORDER BY s.name
-        `);
+        `, [branchId]);
         res.json({ 
             success: true, 
             subjects: result.rows 
@@ -94,9 +100,10 @@ exports.updateSubject = async (req, res) => {
     const { id } = req.params;
     const { name } = req.body;
     try {
+        const branchId = getScopedBranchId(req);
         const result = await pool.query(
-            'UPDATE subjects SET name = COALESCE($1, name) WHERE id = $2 RETURNING *',
-            [name, id]
+            'UPDATE subjects SET name = COALESCE($1, name) WHERE id = $2 AND branch_id = $3 RETURNING *',
+            [name, id, branchId]
         );
         if (result.rows.length === 0) {
             return res.status(404).json({ message: "Fan topilmadi" });
@@ -116,12 +123,13 @@ exports.deleteSubject = async (req, res) => {
     const { id } = req.params;
     const client = await pool.connect();
     try {
+        const branchId = getScopedBranchId(req);
         await client.query('BEGIN');
 
         // Avval bu fan bilan bog'liq guruhlar borligini tekshirish
         const groupCheck = await client.query(
-            'SELECT COUNT(*) FROM groups WHERE subject_id = $1',
-            [id]
+            'SELECT COUNT(*) FROM groups WHERE subject_id = $1 AND branch_id = $2',
+            [id, branchId]
         );
         
         if (parseInt(groupCheck.rows[0].count) > 0) {
@@ -134,19 +142,19 @@ exports.deleteSubject = async (req, res) => {
         // Eski sxemada users.subject_id FK fan o'chirishni ushlab qolishi mumkin.
         // Shu sabab bog'lanishni oldin uzib qo'yamiz.
         await client.query(
-            'UPDATE users SET subject_id = NULL WHERE subject_id = $1',
-            [id]
+            'UPDATE users SET subject_id = NULL WHERE subject_id = $1 AND branch_id = $2',
+            [id, branchId]
         );
 
         // Teacher-subject bog'lanishlarini ham tozalaymiz.
         await client.query(
-            'DELETE FROM teacher_subjects WHERE subject_id = $1',
-            [id]
+            'DELETE FROM teacher_subjects WHERE subject_id = $1 AND branch_id = $2',
+            [id, branchId]
         );
 
         const result = await client.query(
-            'DELETE FROM subjects WHERE id = $1 RETURNING *',
-            [id]
+            'DELETE FROM subjects WHERE id = $1 AND branch_id = $2 RETURNING *',
+            [id, branchId]
         );
         
         if (result.rows.length === 0) {
@@ -179,8 +187,9 @@ exports.deleteSubject = async (req, res) => {
 exports.getSubjectStats = async (req, res) => {
     const { id } = req.params;
     try {
+        const branchId = getScopedBranchId(req);
         // Fan mavjudligini tekshirish
-        const subject = await pool.query('SELECT * FROM subjects WHERE id = $1', [id]);
+        const subject = await pool.query('SELECT * FROM subjects WHERE id = $1 AND branch_id = $2', [id, branchId]);
         if (subject.rows.length === 0) {
             return res.status(404).json({ message: "Fan topilmadi" });
         }
@@ -195,9 +204,9 @@ exports.getSubjectStats = async (req, res) => {
                 SUM(CASE WHEN g.status = 'draft' THEN 1 ELSE 0 END) as draft_groups,
                 SUM(CASE WHEN g.status = 'blocked' THEN 1 ELSE 0 END) as blocked_groups
             FROM groups g
-            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active'
-            WHERE g.subject_id = $1
-        `, [id]);
+            LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.status = 'active' AND sg.branch_id = g.branch_id
+            WHERE g.subject_id = $1 AND g.branch_id = $2
+        `, [id, branchId]);
 
         res.json({
             success: true,

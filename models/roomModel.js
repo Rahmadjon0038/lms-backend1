@@ -50,11 +50,11 @@ const createRoomTable = async () => {
 
 // Xona qo'shish
 const createRoom = async (roomData) => {
-  const { room_number, capacity, has_projector, description, building, floor } = roomData;
+  const { room_number, capacity, has_projector, description, building, floor, branch_id } = roomData;
   
   const query = `
-    INSERT INTO rooms (room_number, capacity, has_projector, description, building, floor)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO rooms (room_number, capacity, has_projector, description, building, floor, branch_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING *
   `;
   
@@ -64,7 +64,8 @@ const createRoom = async (roomData) => {
     has_projector || false,
     description || null,
     building || null,
-    floor || null
+    floor || null,
+    branch_id || 1
   ];
   
   const result = await pool.query(query, values);
@@ -73,10 +74,10 @@ const createRoom = async (roomData) => {
 
 // Barcha xonalarni olish
 const getAllRooms = async (filters = {}) => {
-  let query = `SELECT id, room_number, capacity, has_projector, building, floor, description, is_available, created_at 
-               FROM rooms WHERE 1=1`;
-  const values = [];
-  let paramCount = 1;
+  let query = `SELECT id, branch_id, room_number, capacity, has_projector, building, floor, description, is_available, created_at 
+               FROM rooms WHERE branch_id = $1`;
+  const values = [filters.branch_id || 1];
+  let paramCount = 2;
 
   if (filters.is_available !== undefined) {
     query += ` AND is_available = $${paramCount}`;
@@ -97,25 +98,25 @@ const getAllRooms = async (filters = {}) => {
 };
 
 // Bitta xonani ID bo'yicha olish
-const getRoomById = async (id) => {
+const getRoomById = async (id, branchId = 1) => {
   const result = await pool.query(
-    'SELECT id, room_number, capacity, has_projector, building, floor, description, is_available, created_at FROM rooms WHERE id = $1', 
-    [id]
+    'SELECT id, branch_id, room_number, capacity, has_projector, building, floor, description, is_available, created_at FROM rooms WHERE id = $1 AND branch_id = $2',
+    [id, branchId]
   );
   return result.rows[0];
 };
 
 // Xonani room_number bo'yicha olish
-const getRoomByNumber = async (room_number) => {
+const getRoomByNumber = async (room_number, branchId = 1) => {
   const result = await pool.query(
-    'SELECT id, room_number, capacity, has_projector, building, floor, description, is_available FROM rooms WHERE room_number = $1', 
-    [room_number]
+    'SELECT id, branch_id, room_number, capacity, has_projector, building, floor, description, is_available FROM rooms WHERE room_number = $1 AND branch_id = $2',
+    [room_number, branchId]
   );
   return result.rows[0];
 };
 
 // Xonani yangilash
-const updateRoom = async (id, roomData) => {
+const updateRoom = async (id, roomData, branchId = 1) => {
   const fields = [];
   const values = [];
   let paramCount = 1;
@@ -134,21 +135,21 @@ const updateRoom = async (id, roomData) => {
     throw new Error("Yangilanishi kerak bo'lgan maydon topilmadi");
   }
 
-  values.push(id);
-  const query = `UPDATE rooms SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`;
+  values.push(id, branchId);
+  const query = `UPDATE rooms SET ${fields.join(', ')} WHERE id = $${paramCount} AND branch_id = $${paramCount + 1} RETURNING *`;
   
   const result = await pool.query(query, values);
   return result.rows[0];
 };
 
 // Xonani o'chirish
-const deleteRoom = async (id) => {
-  const result = await pool.query('DELETE FROM rooms WHERE id = $1 RETURNING *', [id]);
+const deleteRoom = async (id, branchId = 1) => {
+  const result = await pool.query('DELETE FROM rooms WHERE id = $1 AND branch_id = $2 RETURNING *', [id, branchId]);
   return result.rows[0];
 };
 
 // Xona schedule bo'yicha band yoki yo'qligini tekshirish
-const checkRoomAvailability = async (roomId, schedule, excludeGroupId = null) => {
+const checkRoomAvailability = async (roomId, schedule, excludeGroupId = null, branchId = 1) => {
   if (!roomId || !schedule || !schedule.days || !schedule.time) {
     return { isAvailable: true };
   }
@@ -157,14 +158,15 @@ const checkRoomAvailability = async (roomId, schedule, excludeGroupId = null) =>
     SELECT g.id, g.name, g.schedule, g.status
     FROM groups g
     WHERE g.room_id = $1
+    AND g.branch_id = $2
     AND (g.status = 'active' OR g.status = 'draft')
     AND g.schedule IS NOT NULL
   `;
 
-  const params = [roomId];
+  const params = [roomId, branchId];
 
   if (excludeGroupId) {
-    query += ` AND g.id != $2`;
+    query += ` AND g.id != $3`;
     params.push(excludeGroupId);
   }
 

@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { notifyUser } = require('./notificationController');
+const { getScopedBranchId } = require('../utils/branch');
 
 const UZBEK_MONTHS = [
   'yanvar',
@@ -65,6 +66,7 @@ exports.createMonthlySnapshot = async (req, res) => {
   try {
     const { month } = req.body;
     const { role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat admin snapshot yarata oladi
     if (role !== 'admin') {
@@ -86,8 +88,8 @@ exports.createMonthlySnapshot = async (req, res) => {
 
     // Avval mavjud snapshot ni tekshiramiz
     const existingCheck = await db.query(
-      'SELECT COUNT(*) as total FROM monthly_snapshots WHERE month = $1',
-      [month]
+      'SELECT COUNT(*) as total FROM monthly_snapshots WHERE month = $1 AND branch_id = $2',
+      [month, branchId]
     );
 
     const existingCount = parseInt(existingCheck.rows[0].total);
@@ -104,6 +106,7 @@ exports.createMonthlySnapshot = async (req, res) => {
     const createSnapshotQuery = `
       INSERT INTO monthly_snapshots (
         month, student_id, group_id,
+        branch_id,
         student_name, student_surname, student_phone, 
         student_father_name, student_father_phone,
         group_name, group_price, subject_name, teacher_name,
@@ -116,6 +119,7 @@ exports.createMonthlySnapshot = async (req, res) => {
         $1 as month,
         u.id as student_id,
         g.id as group_id,
+        $2 as branch_id,
         
         -- Student ma'lumotlari
         u.name as student_name,
@@ -157,16 +161,16 @@ exports.createMonthlySnapshot = async (req, res) => {
         
       FROM student_groups sg
       JOIN users u ON sg.student_id = u.id
-      JOIN groups g ON sg.group_id = g.id
-      JOIN subjects s ON g.subject_id = s.id
-      LEFT JOIN users t ON g.teacher_id = t.id
+      JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
+      JOIN subjects s ON g.subject_id = s.id AND s.branch_id = sg.branch_id
+      LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
       
       -- Attendance ma'lumotlari (eng oxirgi statusni olish)
       LEFT JOIN (
         SELECT DISTINCT ON (student_id, group_id)
           student_id, group_id, monthly_status
         FROM attendance 
-        WHERE month <= $1
+        WHERE month <= $1 AND branch_id = $2
         ORDER BY student_id, group_id, month DESC
       ) att ON att.student_id = u.id AND att.group_id = g.id
       
@@ -174,6 +178,7 @@ exports.createMonthlySnapshot = async (req, res) => {
       LEFT JOIN student_payments sp ON sp.student_id = u.id 
                                      AND sp.group_id = g.id 
                                      AND sp.month = $1
+                                     AND sp.branch_id = $2
       
       -- Darslar statistikasi (faqat qo'shilgandan keyin)
       LEFT JOIN (
@@ -184,14 +189,17 @@ exports.createMonthlySnapshot = async (req, res) => {
           COUNT(CASE WHEN a.status = 'present' OR a.status = 'keldi' THEN 1 END) as attended_lessons
         FROM lessons l
         LEFT JOIN attendance a ON l.id = a.lesson_id
-        LEFT JOIN student_groups sg ON a.student_id = sg.student_id AND l.group_id = sg.group_id
+        LEFT JOIN student_groups sg ON a.student_id = sg.student_id AND l.group_id = sg.group_id AND sg.branch_id = $2
         WHERE DATE_TRUNC('month', l.date) = DATE_TRUNC('month', ($1 || '-01')::date)
+          AND l.branch_id = $2
           AND COALESCE(l.is_holiday, false) = false
           AND l.date >= COALESCE(DATE(sg.joined_at), l.date) -- Faqat qo'shilgandan keyin
         GROUP BY l.group_id, a.student_id
       ) lesson_stats ON lesson_stats.group_id = g.id AND lesson_stats.student_id = u.id
       
       WHERE u.role = 'student'
+        AND u.branch_id = $2
+        AND sg.branch_id = $2
         AND sg.status = 'active'
         AND g.status = 'active'
         AND g.class_status = 'started'
@@ -200,7 +208,7 @@ exports.createMonthlySnapshot = async (req, res) => {
       ORDER BY g.name, u.name
     `;
 
-    const result = await db.query(createSnapshotQuery, [month]);
+    const result = await db.query(createSnapshotQuery, [month, branchId]);
     
     console.log(`✅ ${result.rowCount} ta talaba uchun snapshot yaratildi`);
 
@@ -208,20 +216,21 @@ exports.createMonthlySnapshot = async (req, res) => {
     if (result.rowCount === 0) {
       const diagnosticsQuery = `
         SELECT
-          (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started') AS active_started_groups,
-          (SELECT COUNT(*) FROM student_groups WHERE status = 'active') AS active_student_group_links,
+          (SELECT COUNT(*) FROM groups WHERE status = 'active' AND class_status = 'started' AND branch_id = $2) AS active_started_groups,
+          (SELECT COUNT(*) FROM student_groups WHERE status = 'active' AND branch_id = $2) AS active_student_group_links,
           (SELECT COUNT(*)
              FROM student_groups sg
-             JOIN users u ON sg.student_id = u.id
-             JOIN groups g ON sg.group_id = g.id
+             JOIN users u ON sg.student_id = u.id AND u.branch_id = sg.branch_id
+             JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
             WHERE u.role = 'student'
+              AND sg.branch_id = $2
               AND sg.status = 'active'
               AND g.status = 'active'
               AND g.class_status = 'started'
               AND TO_CHAR(sg.joined_at, 'YYYY-MM') <= $1
           ) AS eligible_records
       `;
-      const diagnostics = await db.query(diagnosticsQuery, [month]);
+      const diagnostics = await db.query(diagnosticsQuery, [month, branchId]);
 
       return res.status(400).json({
         success: false,
@@ -249,10 +258,10 @@ exports.createMonthlySnapshot = async (req, res) => {
         SUM(paid_amount) as total_paid,
         SUM(debt_amount) as total_debt
       FROM monthly_snapshots 
-      WHERE month = $1
+      WHERE month = $1 AND branch_id = $2
     `;
 
-    const statsResult = await db.query(statsQuery, [month]);
+    const statsResult = await db.query(statsQuery, [month, branchId]);
 
     res.json({
       success: true,
@@ -281,6 +290,7 @@ exports.getMonthlySnapshots = async (req, res) => {
   try {
     const { month, group_id, status, payment_status, teacher_id, subject_id, page, limit, search } = req.query;
     const { role: userRole, id: userId } = req.user;
+    const branchId = getScopedBranchId(req);
 
     let whereConditions = [];
     let params = [];
@@ -298,13 +308,17 @@ exports.getMonthlySnapshots = async (req, res) => {
     params.push(month);
     paramIndex++;
 
+    whereConditions.push(`ms.branch_id = $${paramIndex}`);
+    params.push(branchId);
+    paramIndex++;
+
     // Teacher faqat o'z guruhlarini ko'radi
     if (userRole === 'teacher') {
       const teacherGroupsQuery = `
         SELECT DISTINCT ms2.group_id 
         FROM monthly_snapshots ms2
-        JOIN groups g ON ms2.group_id = g.id
-        WHERE g.teacher_id = $${paramIndex} AND ms2.month = $1
+        JOIN groups g ON ms2.group_id = g.id AND g.branch_id = ms2.branch_id
+        WHERE g.teacher_id = $${paramIndex} AND ms2.month = $1 AND ms2.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${teacherGroupsQuery})`);
       params.push(userId);
@@ -356,7 +370,7 @@ exports.getMonthlySnapshots = async (req, res) => {
       const teacherFilterQuery = `
         SELECT DISTINCT g.id 
         FROM groups g 
-        WHERE g.teacher_id = $${paramIndex}
+        WHERE g.teacher_id = $${paramIndex} AND g.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${teacherFilterQuery})`);
       params.push(teacher_id);
@@ -368,7 +382,7 @@ exports.getMonthlySnapshots = async (req, res) => {
       const subjectFilterQuery = `
         SELECT DISTINCT g.id 
         FROM groups g 
-        WHERE g.subject_id = $${paramIndex}
+        WHERE g.subject_id = $${paramIndex} AND g.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${subjectFilterQuery})`);
       params.push(subject_id);
@@ -439,23 +453,26 @@ exports.getMonthlySnapshots = async (req, res) => {
       FROM monthly_snapshots ms
       LEFT JOIN student_discounts sd ON ms.student_id = sd.student_id 
         AND ms.group_id = sd.group_id
+        AND sd.branch_id = ms.branch_id
         AND sd.start_month <= ms.month 
         AND sd.end_month >= ms.month
         AND sd.is_active = true
-      LEFT JOIN users u ON ms.payment_made_by = u.id
-      LEFT JOIN users su ON ms.student_id = su.id
+      LEFT JOIN users u ON ms.payment_made_by = u.id AND u.branch_id = ms.branch_id
+      LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       LEFT JOIN (
         SELECT
           a.student_id,
           a.group_id,
+          a.branch_id,
           COALESCE(a.month, a.month_name) as month,
           COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false)) as marked_lessons,
           COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) as attended_marked,
           COUNT(*) FILTER (WHERE COALESCE(a.is_marked, false) AND a.status = 'kelmadi') as missed_marked
         FROM attendance a
-        GROUP BY a.student_id, a.group_id, COALESCE(a.month, a.month_name)
+        GROUP BY a.student_id, a.group_id, a.branch_id, COALESCE(a.month, a.month_name)
       ) att ON att.student_id = ms.student_id
            AND att.group_id = ms.group_id
+           AND att.branch_id = ms.branch_id
            AND att.month = ms.month
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
@@ -467,7 +484,7 @@ exports.getMonthlySnapshots = async (req, res) => {
     const countQuery = `
       SELECT COUNT(*) as total
       FROM monthly_snapshots ms
-      LEFT JOIN users su ON ms.student_id = su.id
+      LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       WHERE ${whereConditions.join(' AND ')}
     `;
     const countResult = await db.query(countQuery, params);
@@ -492,9 +509,10 @@ exports.getMonthlySnapshots = async (req, res) => {
         COUNT(CASE WHEN sd.id IS NOT NULL THEN 1 END) as students_with_discounts,
         SUM(COALESCE(ms.discount_amount, 0)) as total_discount_amount
       FROM monthly_snapshots ms
-      LEFT JOIN users su ON ms.student_id = su.id
+      LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       LEFT JOIN student_discounts sd ON ms.student_id = sd.student_id 
         AND ms.group_id = sd.group_id
+        AND sd.branch_id = ms.branch_id
         AND sd.start_month <= ms.month 
         AND sd.end_month >= ms.month
         AND sd.is_active = true
@@ -542,6 +560,7 @@ exports.updateMonthlySnapshot = async (req, res) => {
       attendance_percentage 
     } = req.body;
     const { role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat admin yangilashi mumkin
     if (role !== 'admin') {
@@ -553,8 +572,8 @@ exports.updateMonthlySnapshot = async (req, res) => {
 
     // Mavjud snapshot ni topamiz
     const existingSnapshot = await db.query(
-      'SELECT * FROM monthly_snapshots WHERE id = $1',
-      [id]
+      'SELECT * FROM monthly_snapshots WHERE id = $1 AND branch_id = $2',
+      [id, branchId]
     );
 
     if (existingSnapshot.rows.length === 0) {
@@ -651,9 +670,11 @@ exports.updateMonthlySnapshot = async (req, res) => {
       UPDATE monthly_snapshots 
       SET ${updates.join(', ')}
       WHERE id = $${paramIndex}
+        AND branch_id = $${paramIndex + 1}
       RETURNING *
     `;
     params.push(id);
+    params.push(branchId);
 
     const result = await db.query(updateQuery, params);
 
@@ -681,12 +702,13 @@ exports.updateMonthlySnapshot = async (req, res) => {
 
       spUpdates.push(`updated_at = CURRENT_TIMESTAMP`);
 
-      spParams.push(current.student_id, current.group_id, current.month);
+      spParams.push(current.student_id, current.group_id, current.month, branchId);
 
       await db.query(`
         UPDATE student_payments
         SET ${spUpdates.join(', ')}
         WHERE student_id = $${spIndex} AND group_id = $${spIndex + 1} AND month = $${spIndex + 2}
+          AND branch_id = $${spIndex + 3}
       `, spParams);
     }
 
@@ -698,7 +720,8 @@ exports.updateMonthlySnapshot = async (req, res) => {
       const existingAttendance = await db.query(`
         SELECT id FROM attendance 
         WHERE student_id = $1 AND group_id = $2 AND COALESCE(month, month_name) = $3
-      `, [current.student_id, current.group_id, current.month]);
+          AND branch_id = $4
+      `, [current.student_id, current.group_id, current.month, branchId]);
 
       if (existingAttendance.rows.length > 0) {
         // Mavjud yozuvni yangilash
@@ -706,15 +729,16 @@ exports.updateMonthlySnapshot = async (req, res) => {
           UPDATE attendance 
           SET monthly_status = $1, updated_at = NOW()
           WHERE student_id = $2 AND group_id = $3 AND COALESCE(month, month_name) = $4
-        `, [newMonthlyStatus, current.student_id, current.group_id, current.month]);
+            AND branch_id = $5
+        `, [newMonthlyStatus, current.student_id, current.group_id, current.month, branchId]);
         
         console.log(`✅ Attendance yangilandi`);
       } else {
         // Yangi attendance yozuv yaratish
         await db.query(`
-          INSERT INTO attendance (student_id, group_id, month, month_name, monthly_status, created_at, updated_at)
-          VALUES ($1, $2, $3, $3, $4, NOW(), NOW())
-        `, [current.student_id, current.group_id, current.month, newMonthlyStatus]);
+          INSERT INTO attendance (student_id, group_id, branch_id, month, month_name, monthly_status, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $4, $5, NOW(), NOW())
+        `, [current.student_id, current.group_id, branchId, current.month, newMonthlyStatus]);
         
         console.log(`✅ Yangi attendance yozuv yaratildi`);
       }
@@ -745,6 +769,7 @@ exports.deleteMonthlySnapshot = async (req, res) => {
   try {
     const { month } = req.params;
     const { role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat admin o'chirishi mumkin
     if (role !== 'admin') {
@@ -765,35 +790,35 @@ exports.deleteMonthlySnapshot = async (req, res) => {
     console.log(`🗑️ ${month} oy snapshot va bog'liq ma'lumotlarni o'chirish boshlandi...`);
 
     // 1. Avval shu oyning barcha to'lov tranzaksiyalarini o'chirish
-    const deleteTransactionsQuery = 'DELETE FROM payment_transactions WHERE month = $1';
-    const transactionsResult = await db.query(deleteTransactionsQuery, [month]);
+    const deleteTransactionsQuery = 'DELETE FROM payment_transactions WHERE month = $1 AND branch_id = $2';
+    const transactionsResult = await db.query(deleteTransactionsQuery, [month, branchId]);
     console.log(`   💳 To'lov tranzaksiyalari o'chirildi: ${transactionsResult.rowCount} ta`);
 
     // 1.5. Student_payments jadvalini ham tozalash
-    const deleteStudentPaymentsQuery = 'DELETE FROM student_payments WHERE month = $1';
-    const studentPaymentsResult = await db.query(deleteStudentPaymentsQuery, [month]);
+    const deleteStudentPaymentsQuery = 'DELETE FROM student_payments WHERE month = $1 AND branch_id = $2';
+    const studentPaymentsResult = await db.query(deleteStudentPaymentsQuery, [month, branchId]);
     console.log(`   💰 Talaba to'lov ma'lumotlari o'chirildi: ${studentPaymentsResult.rowCount} ta`);
 
     // 2. Shu oyning chegirmalarini o'chirish (yoki deaktivlashtirish)
     const deleteDiscountsQuery = `
       DELETE FROM student_discounts 
-      WHERE start_month = $1 AND end_month = $1
+      WHERE start_month = $1 AND end_month = $1 AND branch_id = $2
     `;
-    const discountsResult = await db.query(deleteDiscountsQuery, [month]);
+    const discountsResult = await db.query(deleteDiscountsQuery, [month, branchId]);
     console.log(`   📉 Chegirmalar o'chirildi: ${discountsResult.rowCount} ta`);
 
     // 3. Ko'p oylik chegirmalarni deaktivlashtirish (agar shu oyni qamrab olsa)
     const deactivateMultiMonthDiscountsQuery = `
       UPDATE student_discounts 
       SET is_active = false, updated_at = CURRENT_TIMESTAMP
-      WHERE start_month <= $1 AND end_month >= $1 AND is_active = true
+      WHERE start_month <= $1 AND end_month >= $1 AND is_active = true AND branch_id = $2
     `;
-    const deactivatedResult = await db.query(deactivateMultiMonthDiscountsQuery, [month]);
+    const deactivatedResult = await db.query(deactivateMultiMonthDiscountsQuery, [month, branchId]);
     console.log(`   📊 Ko'p oylik chegirmalar deaktivlashtirildi: ${deactivatedResult.rowCount} ta`);
 
     // 4. Nihoyat snapshot o'zini o'chirish
-    const deleteSnapshotsQuery = 'DELETE FROM monthly_snapshots WHERE month = $1';
-    const snapshotsResult = await db.query(deleteSnapshotsQuery, [month]);
+    const deleteSnapshotsQuery = 'DELETE FROM monthly_snapshots WHERE month = $1 AND branch_id = $2';
+    const snapshotsResult = await db.query(deleteSnapshotsQuery, [month, branchId]);
     console.log(`   📸 Snapshotlar o'chirildi: ${snapshotsResult.rowCount} ta`);
 
     const totalDeleted = transactionsResult.rowCount + studentPaymentsResult.rowCount + discountsResult.rowCount + snapshotsResult.rowCount;
@@ -832,6 +857,7 @@ exports.makeSnapshotPayment = async (req, res) => {
   try {
     const { student_id, group_id, month, amount, payment_method = 'cash', description } = req.body;
     const adminId = req.user.id;
+    const branchId = getScopedBranchId(req);
 
     // Validatsiya
     if (!student_id || !group_id || !month || !amount) {
@@ -850,8 +876,8 @@ exports.makeSnapshotPayment = async (req, res) => {
 
     // Snapshot mavjudligini tekshirish
     const snapshotCheck = await db.query(
-      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3',
-      [student_id, group_id, month]
+      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4',
+      [student_id, group_id, month, branchId]
     );
 
     if (snapshotCheck.rows.length === 0) {
@@ -867,22 +893,23 @@ exports.makeSnapshotPayment = async (req, res) => {
     // To'lov transaction yaratish
     await db.query(`
       INSERT INTO payment_transactions 
-      (student_id, group_id, month, amount, payment_method, description, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [student_id, group_id, month, amount, payment_method, description, adminId]);
+      (student_id, group_id, month, branch_id, amount, payment_method, description, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [student_id, group_id, month, branchId, amount, payment_method, description, adminId]);
 
     // Student_payments jadvalini yangilash
     await db.query(`
       INSERT INTO student_payments 
-      (student_id, group_id, month, required_amount, paid_amount, last_payment_date, created_by, updated_by)
-      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, $6)
+      (student_id, group_id, month, branch_id, required_amount, paid_amount, last_payment_date, created_by, updated_by)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $7)
       ON CONFLICT (student_id, group_id, month)
       DO UPDATE SET 
-        paid_amount = student_payments.paid_amount + $5,
+        branch_id = EXCLUDED.branch_id,
+        paid_amount = student_payments.paid_amount + $6,
         last_payment_date = CURRENT_TIMESTAMP,
-        updated_by = $6,
+        updated_by = $7,
         updated_at = CURRENT_TIMESTAMP
-    `, [student_id, group_id, month, snapshot.required_amount, amount, adminId]);
+    `, [student_id, group_id, month, branchId, snapshot.required_amount, amount, adminId]);
 
     // Snapshot jadvalini yangilash - chegirmani hisobga olish
     const newPaidAmount = parseFloat(snapshot.paid_amount) + parseFloat(amount);
@@ -908,7 +935,8 @@ exports.makeSnapshotPayment = async (req, res) => {
         payment_made_by = $4,
         updated_at = CURRENT_TIMESTAMP
       WHERE student_id = $5 AND group_id = $6 AND month = $7
-    `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month]);
+        AND branch_id = $8
+    `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month, branchId]);
 
     const paymentTitle = 'To\'lov qabul qilindi';
     const monthLabel = formatMonthLabel(month);
@@ -980,6 +1008,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
   try {
     const { student_id, group_id, month, discount_type, discount_value, description } = req.body;
     const adminId = req.user.id;
+    const branchId = getScopedBranchId(req);
 
     // Validatsiya
     if (!student_id || !group_id || !month || !discount_type || !discount_value) {
@@ -998,8 +1027,8 @@ exports.giveSnapshotDiscount = async (req, res) => {
 
     // Snapshot mavjudligini tekshirish
     const snapshotCheck = await db.query(
-      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3',
-      [student_id, group_id, month]
+      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4',
+      [student_id, group_id, month, branchId]
     );
 
     if (snapshotCheck.rows.length === 0) {
@@ -1024,8 +1053,8 @@ exports.giveSnapshotDiscount = async (req, res) => {
     // Mavjud chegirmani tekshirish
     const existingDiscountCheck = await db.query(`
       SELECT * FROM student_discounts 
-      WHERE student_id = $1 AND group_id = $2 AND start_month = $3
-    `, [student_id, group_id, month]);
+      WHERE student_id = $1 AND group_id = $2 AND start_month = $3 AND branch_id = $4
+    `, [student_id, group_id, month, branchId]);
 
     if (existingDiscountCheck.rows.length > 0) {
       // Mavjud chegirmani yangilash
@@ -1033,17 +1062,17 @@ exports.giveSnapshotDiscount = async (req, res) => {
         UPDATE student_discounts 
         SET discount_type = $1, discount_value = $2, description = $3, 
             is_active = true, created_by = $4, updated_at = CURRENT_TIMESTAMP
-        WHERE student_id = $5 AND group_id = $6 AND start_month = $7
-      `, [discount_type, discount_value, description, adminId, student_id, group_id, month]);
+        WHERE student_id = $5 AND group_id = $6 AND start_month = $7 AND branch_id = $8
+      `, [discount_type, discount_value, description, adminId, student_id, group_id, month, branchId]);
       
       console.log(`🔄 Mavjud chegirma yangilandi`);
     } else {
       // Yangi chegirma yaratish
       await db.query(`
         INSERT INTO student_discounts 
-        (student_id, group_id, discount_type, discount_value, start_month, end_month, description, is_active, created_by)
-        VALUES ($1, $2, $3, $4, $5, $5, $6, true, $7)
-      `, [student_id, group_id, discount_type, discount_value, month, description, adminId]);
+        (student_id, group_id, branch_id, discount_type, discount_value, start_month, end_month, description, is_active, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $6, $7, true, $8)
+      `, [student_id, group_id, branchId, discount_type, discount_value, month, description, adminId]);
       
       console.log(`✅ Yangi chegirma yaratildi`);
     }
@@ -1076,9 +1105,9 @@ exports.giveSnapshotDiscount = async (req, res) => {
         debt_amount = $2,
         payment_status = $3,
         updated_at = CURRENT_TIMESTAMP
-      WHERE student_id = $4 AND group_id = $5 AND month = $6
+      WHERE student_id = $4 AND group_id = $5 AND month = $6 AND branch_id = $7
       RETURNING *
-    `, [discountAmount, newDebtAmount, newPaymentStatus, student_id, group_id, month]);
+    `, [discountAmount, newDebtAmount, newPaymentStatus, student_id, group_id, month, branchId]);
 
     console.log(`📸 Snapshot yangilandi: ${updateResult.rowCount} ta yozuv`);
 
@@ -1169,6 +1198,7 @@ exports.resetStudentPayment = async (req, res) => {
   try {
     const { student_id, group_id, month } = req.body;
     const { role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat admin tozalashi mumkin
     if (role !== 'admin') {
@@ -1188,8 +1218,8 @@ exports.resetStudentPayment = async (req, res) => {
 
     // Snapshot mavjudligini tekshirish
     const snapshotCheck = await db.query(
-      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3',
-      [student_id, group_id, month]
+      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4',
+      [student_id, group_id, month, branchId]
     );
 
     if (snapshotCheck.rows.length === 0) {
@@ -1212,15 +1242,16 @@ exports.resetStudentPayment = async (req, res) => {
       SET is_active = false, updated_at = CURRENT_TIMESTAMP
       WHERE student_id = $1 AND group_id = $2 
         AND start_month <= $3 AND end_month >= $3 AND is_active = true
-    `, [student_id, group_id, month]);
+        AND branch_id = $4
+    `, [student_id, group_id, month, branchId]);
 
     console.log(`   📉 Chegirmalar o'chirildi: ${deactivateDiscountsResult.rowCount} ta`);
 
     // 2. To'lov tranzaksiyalarini o'chirish
     const deleteTransactionsResult = await db.query(`
       DELETE FROM payment_transactions 
-      WHERE student_id = $1 AND group_id = $2 AND month = $3
-    `, [student_id, group_id, month]);
+      WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
+    `, [student_id, group_id, month, branchId]);
 
     console.log(`   💳 Tranzaksiyalar o'chirildi: ${deleteTransactionsResult.rowCount} ta`);
 
@@ -1235,9 +1266,9 @@ exports.resetStudentPayment = async (req, res) => {
         last_payment_date = NULL,
         payment_made_by = NULL,
         snapshot_updated_at = CURRENT_TIMESTAMP
-      WHERE student_id = $1 AND group_id = $2 AND month = $3
+      WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
       RETURNING *
-    `, [student_id, group_id, month]);
+    `, [student_id, group_id, month, branchId]);
 
     console.log(`   📸 Snapshot tozalandi: ${resetSnapshot.rowCount} ta yozuv`);
 
@@ -1287,6 +1318,7 @@ exports.removeStudentFromSnapshot = async (req, res) => {
   try {
     const { student_id, group_id, month } = req.body;
     const { role } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Faqat admin olib tashlay oladi
     if (role !== 'admin') {
@@ -1313,8 +1345,8 @@ exports.removeStudentFromSnapshot = async (req, res) => {
 
     // Snapshot mavjudligini tekshirish
     const snapshotCheck = await db.query(
-      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3',
-      [student_id, group_id, month]
+      'SELECT * FROM monthly_snapshots WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4',
+      [student_id, group_id, month, branchId]
     );
 
     if (snapshotCheck.rows.length === 0) {
@@ -1334,21 +1366,21 @@ exports.removeStudentFromSnapshot = async (req, res) => {
     // 1. To'lov tranzaksiyalarini o'chirish
     const deleteTransactionsResult = await db.query(`
       DELETE FROM payment_transactions 
-      WHERE student_id = $1 AND group_id = $2 AND month = $3
-    `, [student_id, group_id, month]);
+      WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
+    `, [student_id, group_id, month, branchId]);
 
     // 2. Student_payments yozuvini o'chirish (agar mavjud bo'lsa)
     const deleteStudentPaymentsResult = await db.query(`
       DELETE FROM student_payments
-      WHERE student_id = $1 AND group_id = $2 AND month = $3
-    `, [student_id, group_id, month]);
+      WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
+    `, [student_id, group_id, month, branchId]);
 
     // 3. Snapshot yozuvini o'chirish
     const deleteSnapshotResult = await db.query(`
       DELETE FROM monthly_snapshots 
-      WHERE student_id = $1 AND group_id = $2 AND month = $3
+      WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
       RETURNING *
-    `, [student_id, group_id, month]);
+    `, [student_id, group_id, month, branchId]);
 
     if (deleteSnapshotResult.rowCount === 0) {
       return res.status(404).json({
@@ -1390,10 +1422,11 @@ exports.removeStudentFromSnapshot = async (req, res) => {
 exports.getSnapshotTransactions = async (req, res) => {
   try {
     const { student_id, group_id, month } = req.query;
+    const branchId = getScopedBranchId(req);
 
-    let whereConditions = ['1=1'];
-    let params = [];
-    let paramIndex = 1;
+    let whereConditions = ['pt.branch_id = $1'];
+    let params = [branchId];
+    let paramIndex = 2;
 
     if (student_id) {
       whereConditions.push(`pt.student_id = $${paramIndex}`);
@@ -1424,9 +1457,9 @@ exports.getSnapshotTransactions = async (req, res) => {
         ELSE NULL END as admin_name,
         TO_CHAR(pt.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as transaction_date
       FROM payment_transactions pt
-      JOIN users u ON pt.student_id = u.id
-      JOIN groups g ON pt.group_id = g.id
-      LEFT JOIN users admin ON pt.created_by = admin.id
+      JOIN users u ON pt.student_id = u.id AND u.branch_id = pt.branch_id
+      JOIN groups g ON pt.group_id = g.id AND g.branch_id = pt.branch_id
+      LEFT JOIN users admin ON pt.created_by = admin.id AND admin.branch_id = pt.branch_id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY pt.created_at DESC
     `;
@@ -1455,6 +1488,7 @@ exports.getStudentAttendance = async (req, res) => {
   try {
     const { student_id, group_id, month } = req.query;
     const { role, id: userId } = req.user;
+    const branchId = getScopedBranchId(req);
     let targetStudentId = student_id;
 
     // Validatsiya
@@ -1493,8 +1527,8 @@ exports.getStudentAttendance = async (req, res) => {
     // Teacher faqat o'z guruhining davomatini ko'rishi mumkin
     if (role === 'teacher') {
       const teacherGroupCheck = await db.query(
-        'SELECT id FROM groups WHERE id = $1 AND teacher_id = $2',
-        [group_id, userId]
+        'SELECT id FROM groups WHERE id = $1 AND teacher_id = $2 AND branch_id = $3',
+        [group_id, userId, branchId]
       );
 
       if (teacherGroupCheck.rows.length === 0) {
@@ -1525,10 +1559,10 @@ exports.getStudentAttendance = async (req, res) => {
         TO_CHAR(ms.snapshot_created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as snapshot_date,
         TO_CHAR(ms.snapshot_updated_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as last_updated
       FROM monthly_snapshots ms
-      WHERE ms.student_id = $1 AND ms.group_id = $2 AND ms.month = $3
+      WHERE ms.student_id = $1 AND ms.group_id = $2 AND ms.month = $3 AND ms.branch_id = $4
     `;
 
-    const snapshotResult = await db.query(snapshotQuery, [targetStudentId, group_id, month]);
+    const snapshotResult = await db.query(snapshotQuery, [targetStudentId, group_id, month, branchId]);
 
     let snapshot;
     
@@ -1545,14 +1579,15 @@ exports.getStudentAttendance = async (req, res) => {
           s.name as subject_name,
           CONCAT(t.name, ' ', t.surname) as teacher_name
         FROM student_groups sg
-        JOIN users u ON sg.student_id = u.id
-        JOIN groups g ON sg.group_id = g.id
-        JOIN subjects s ON g.subject_id = s.id
-        LEFT JOIN users t ON g.teacher_id = t.id
+        JOIN users u ON sg.student_id = u.id AND u.branch_id = sg.branch_id
+        JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
+        JOIN subjects s ON g.subject_id = s.id AND s.branch_id = sg.branch_id
+        LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
         WHERE sg.student_id = $1 AND sg.group_id = $2 AND sg.status = 'active'
+          AND sg.branch_id = $3
       `;
       
-      const studentGroupResult = await db.query(studentGroupQuery, [targetStudentId, group_id]);
+      const studentGroupResult = await db.query(studentGroupQuery, [targetStudentId, group_id, branchId]);
       
       if (studentGroupResult.rows.length === 0) {
         return res.status(404).json({
@@ -1599,14 +1634,15 @@ exports.getStudentAttendance = async (req, res) => {
         TO_CHAR(l.date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY') as formatted_date,
         TO_CHAR(a.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as marked_at
       FROM lessons l
-      LEFT JOIN attendance a ON l.id = a.lesson_id AND a.student_id = $1
-      LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2
+      LEFT JOIN attendance a ON l.id = a.lesson_id AND a.student_id = $1 AND a.branch_id = $4
+      LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2 AND sg.branch_id = $4
       WHERE l.group_id = $2 
+        AND l.branch_id = $4
         AND TO_CHAR(l.date, 'YYYY-MM') = $3
       ORDER BY l.date ASC
     `;
 
-    const dailyResult = await db.query(dailyAttendanceQuery, [targetStudentId, group_id, month]);
+    const dailyResult = await db.query(dailyAttendanceQuery, [targetStudentId, group_id, month, branchId]);
 
     // Real lessons count (agar snapshot bo'lmasa)
     if (snapshot.id === null && dailyResult.rows.length > 0) {
@@ -1692,6 +1728,7 @@ exports.getStudentAttendance = async (req, res) => {
 exports.getMonthlySnapshotSummary = async (req, res) => {
   try {
     const { month } = req.query;
+    const branchId = getScopedBranchId(req);
 
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({
@@ -1711,16 +1748,19 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       SELECT
         (SELECT COUNT(*)
            FROM users u
-           LEFT JOIN student_groups sg ON sg.student_id = u.id
-          WHERE u.role = 'student')::int as total_students,
+           LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
+          WHERE u.role = 'student'
+            AND u.branch_id = $1)::int as total_students,
         (SELECT COUNT(*)
            FROM student_groups sg
-           JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-          WHERE sg.status = 'active')::int as active_students,
+           JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+          WHERE sg.status = 'active'
+            AND sg.branch_id = $1)::int as active_students,
         (SELECT COUNT(*)
            FROM student_groups sg
-           JOIN users u ON u.id = sg.student_id AND u.role = 'student'
-          WHERE sg.status = 'stopped')::int as stopped_students
+           JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+          WHERE sg.status = 'stopped'
+            AND sg.branch_id = $1)::int as stopped_students
     `;
 
     const summaryQuery = `
@@ -1733,12 +1773,12 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         SUM(debt_amount) as total_debt,
         SUM(CASE WHEN monthly_status = 'active' THEN debt_amount ELSE 0 END) as active_debt
       FROM monthly_snapshots ms
-      WHERE ms.month = $1
+      WHERE ms.month = $1 AND ms.branch_id = $2
     `;
 
     const [studentCountsResult, summaryResult] = await Promise.all([
-      db.query(studentCountsQuery),
-      db.query(summaryQuery, [month]),
+      db.query(studentCountsQuery, [branchId]),
+      db.query(summaryQuery, [month, branchId]),
     ]);
 
     // Guruh bo'yicha breakdown
@@ -1752,12 +1792,12 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_count,
         COUNT(CASE WHEN monthly_status = 'active' THEN 1 END) as active_count
       FROM monthly_snapshots 
-      WHERE month = $1
+      WHERE month = $1 AND branch_id = $2
       GROUP BY group_id, group_name
       ORDER BY group_name
     `;
 
-    const groupResult = await db.query(groupBreakdownQuery, [month]);
+    const groupResult = await db.query(groupBreakdownQuery, [month, branchId]);
 
     // Chegirmalar statistikasi
     const discountQuery = `
@@ -1770,13 +1810,15 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       FROM monthly_snapshots ms
       JOIN student_discounts sd ON ms.student_id = sd.student_id 
         AND ms.group_id = sd.group_id
+        AND sd.branch_id = ms.branch_id
       WHERE ms.month = $1 
+        AND ms.branch_id = $2
         AND sd.start_month <= $1 
         AND sd.end_month >= $1
         AND sd.is_active = true
     `;
 
-    const discountResult = await db.query(discountQuery, [month]);
+    const discountResult = await db.query(discountQuery, [month, branchId]);
 
     // To'lov metodlari statistikasi (agar kerak bo'lsa)
     const paymentMethodQuery = `
@@ -1785,12 +1827,12 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         COUNT(*) as transaction_count,
         SUM(amount) as total_amount
       FROM payment_transactions pt
-      WHERE pt.month = $1
+      WHERE pt.month = $1 AND pt.branch_id = $2
       GROUP BY payment_method
       ORDER BY total_amount DESC
     `;
 
-    const paymentMethodResult = await db.query(paymentMethodQuery, [month]);
+    const paymentMethodResult = await db.query(paymentMethodQuery, [month, branchId]);
 
     res.json({
       success: true,
@@ -1819,6 +1861,7 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
  */
 exports.getAvailableSnapshots = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const query = `
       SELECT 
         month,
@@ -1830,11 +1873,12 @@ exports.getAvailableSnapshots = async (req, res) => {
         TO_CHAR(MIN(snapshot_created_at) AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as created_at,
         TO_CHAR(MAX(snapshot_updated_at) AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as updated_at
       FROM monthly_snapshots
+      WHERE branch_id = $1
       GROUP BY month
       ORDER BY month DESC
     `;
 
-    const result = await db.query(query);
+    const result = await db.query(query, [branchId]);
 
     res.json({
       success: true,
@@ -1859,6 +1903,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
     const { month } = req.body;
     const userId = req.user.id;
     const userRole = req.user.role;
+    const branchId = getScopedBranchId(req);
 
     if (!month) {
       return res.status(400).json({
@@ -1871,9 +1916,9 @@ exports.createSnapshotForNewStudents = async (req, res) => {
     const snapshotCreatedQuery = `
       SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
-      WHERE month = $1
+      WHERE month = $1 AND branch_id = $2
     `;
-    const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month]);
+    const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month, branchId]);
     const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.initial_snapshot_date;
 
     if (!snapshotCreatedDate) {
@@ -1898,11 +1943,12 @@ exports.createSnapshotForNewStudents = async (req, res) => {
           sub.name as subject_name,
           CONCAT(t.name, ' ', t.surname) as teacher_name
         FROM student_groups sg
-        JOIN users u ON sg.student_id = u.id
-        JOIN groups g ON sg.group_id = g.id
-        JOIN subjects sub ON g.subject_id = sub.id
-        LEFT JOIN users t ON g.teacher_id = t.id
+        JOIN users u ON sg.student_id = u.id AND u.branch_id = sg.branch_id
+        JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
+        JOIN subjects sub ON g.subject_id = sub.id AND sub.branch_id = sg.branch_id
+        LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
         WHERE sg.status = 'active'
+          AND sg.branch_id = $2
           AND COALESCE(g.is_active, true) = true
           AND COALESCE(g.status, 'draft') <> 'blocked'
           AND u.role = 'student'
@@ -1913,14 +1959,15 @@ exports.createSnapshotForNewStudents = async (req, res) => {
             WHERE ms.student_id = sg.student_id 
               AND ms.group_id = sg.group_id 
               AND ms.month = $1
+              AND ms.branch_id = sg.branch_id
           )
     `; 
 
-    let params = [month];
+    let params = [month, branchId];
 
     // Role-based access control
     if (userRole === 'teacher') {
-      newStudentsQuery += ` AND g.teacher_id = $2`;
+      newStudentsQuery += ` AND g.teacher_id = $3`;
       params.push(userId);
     }
 
@@ -1942,14 +1989,15 @@ exports.createSnapshotForNewStudents = async (req, res) => {
           COUNT(l.id) as total_lessons,
           COUNT(CASE WHEN a.status = 'keldi' OR a.status = 'present' THEN 1 END) as attended_lessons
         FROM lessons l
-        LEFT JOIN attendance a ON l.id = a.lesson_id AND a.student_id = $1
-        LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2
+        LEFT JOIN attendance a ON l.id = a.lesson_id AND a.student_id = $1 AND a.branch_id = $4
+        LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2 AND sg.branch_id = $4
         WHERE l.group_id = $2
+          AND l.branch_id = $4
           AND TO_CHAR(l.date, 'YYYY-MM') = $3
           AND COALESCE(l.is_holiday, false) = false
           AND l.date >= COALESCE(DATE(sg.joined_at), l.date) -- Faqat qo'shilgandan keyin
       `;
-      const attendanceResult = await db.query(attendanceQuery, [student.student_id, student.group_id, month]);
+      const attendanceResult = await db.query(attendanceQuery, [student.student_id, student.group_id, month, branchId]);
       const attendance = attendanceResult.rows[0] || { total_lessons: 0, attended_lessons: 0 };
 
       // To'lov ma'lumotlarini hisoblaymiz
@@ -1960,20 +2008,21 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         FROM payments
         WHERE student_id = $1 
           AND group_id = $2
+          AND branch_id = $4
           AND TO_CHAR(created_at, 'YYYY-MM') = $3
       `;
-      const paymentResult = await db.query(paymentQuery, [student.student_id, student.group_id, month]);
+      const paymentResult = await db.query(paymentQuery, [student.student_id, student.group_id, month, branchId]);
       const payment = paymentResult.rows[0] || { paid_amount: 0, last_payment_date: null };
 
       // Monthly status ni topamiz (attendance jadvalidan)
       const statusQuery = `
         SELECT monthly_status
         FROM attendance
-        WHERE student_id = $1 AND group_id = $2 AND month = $3
+        WHERE student_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4
         ORDER BY created_at DESC
         LIMIT 1
       `;
-      const statusResult = await db.query(statusQuery, [student.student_id, student.group_id, month]);
+      const statusResult = await db.query(statusQuery, [student.student_id, student.group_id, month, branchId]);
       const monthlyStatus = statusResult.rows[0]?.monthly_status || 'active';
 
       // Chegirma ma'lumotlarini topamiz
@@ -1984,11 +2033,12 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         FROM student_discounts
         WHERE student_id = $1 
           AND group_id = $2
+          AND branch_id = $4
           AND start_month <= $3
           AND end_month >= $3
           AND is_active = true
       `;
-      const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, month]);
+      const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, month, branchId]);
       const discount = discountResult.rows[0];
 
       let discountAmount = 0;
@@ -2020,6 +2070,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
       const insertQuery = `
         INSERT INTO monthly_snapshots (
           month, student_id, group_id, student_name, student_surname,
+          branch_id,
           student_phone, student_father_name, student_father_phone,
           group_name, group_price, subject_name, teacher_name,
           monthly_status, payment_status, required_amount, paid_amount,
@@ -2027,10 +2078,11 @@ exports.createSnapshotForNewStudents = async (req, res) => {
           total_lessons, attended_lessons, attendance_percentage,
           snapshot_created_at, snapshot_updated_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-          $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW()
+          $1, $2, $3, $4, $5, $23, $6, $7, $8, $9, $10, $11, $12, $13,
+          $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW()
         )
         ON CONFLICT (month, student_id, group_id) DO UPDATE SET
+          branch_id = EXCLUDED.branch_id,
           student_name = EXCLUDED.student_name,
           student_surname = EXCLUDED.student_surname,
           student_phone = EXCLUDED.student_phone,
@@ -2063,6 +2115,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         requiredAmount, paidAmount, discountAmount, debtAmount,
         payment.last_payment_date, attendance.total_lessons,
         attendance.attended_lessons, attendancePercentage
+        , branchId
       ];
 
       const snapshotResult = await db.query(insertQuery, insertParams);
@@ -2072,11 +2125,11 @@ exports.createSnapshotForNewStudents = async (req, res) => {
       await db.query(
         `
           INSERT INTO student_payments (
-            student_id, group_id, month, required_amount, paid_amount,
+            student_id, group_id, month, branch_id, required_amount, paid_amount,
             discount_amount, last_payment_date, created_by, updated_by,
             created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $8, NOW(), NOW()
+            $1, $2, $3, $9, $4, $5, $6, $7, $8, $8, NOW(), NOW()
           )
           ON CONFLICT (student_id, group_id, month) DO UPDATE SET
             required_amount = EXCLUDED.required_amount,
@@ -2095,6 +2148,7 @@ exports.createSnapshotForNewStudents = async (req, res) => {
           discountAmount,
           payment.last_payment_date,
           userId
+          , branchId
         ]
       );
 
@@ -2128,6 +2182,7 @@ exports.getNewStudentsNotification = async (req, res) => {
   try {
     const { month } = req.query;
     const { role: userRole, id: userId } = req.user;
+    const branchId = getScopedBranchId(req);
 
     // Month validation
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
@@ -2141,9 +2196,9 @@ exports.getNewStudentsNotification = async (req, res) => {
     const snapshotCreatedQuery = `
       SELECT MIN(snapshot_created_at) as initial_snapshot_date
       FROM monthly_snapshots 
-      WHERE month = $1
+      WHERE month = $1 AND branch_id = $2
     `;
-    const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month]);
+    const snapshotCreatedResult = await db.query(snapshotCreatedQuery, [month, branchId]);
     const snapshotCreatedDate = snapshotCreatedResult.rows[0]?.initial_snapshot_date;
 
     if (!snapshotCreatedDate) {
@@ -2182,10 +2237,10 @@ exports.getNewStudentsNotification = async (req, res) => {
         COALESCE(attendance_count.attended, 0) as lessons_attended
         
       FROM student_groups sg
-      JOIN users u ON sg.student_id = u.id
-      JOIN groups g ON sg.group_id = g.id
-      JOIN subjects s ON g.subject_id = s.id
-      LEFT JOIN users t ON g.teacher_id = t.id
+      JOIN users u ON sg.student_id = u.id AND u.branch_id = sg.branch_id
+      JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
+      JOIN subjects s ON g.subject_id = s.id AND s.branch_id = sg.branch_id
+      LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
       
       -- O'sha oydagi darslar mavjudligini tekshirish
       LEFT JOIN (
@@ -2194,6 +2249,7 @@ exports.getNewStudentsNotification = async (req, res) => {
           COUNT(l.id) as total_lessons
         FROM lessons l
         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
+          AND l.branch_id = $2
           AND COALESCE(l.is_holiday, false) = false
         GROUP BY l.group_id
       ) lesson_count ON lesson_count.group_id = g.id
@@ -2205,8 +2261,9 @@ exports.getNewStudentsNotification = async (req, res) => {
           l.group_id,
           COUNT(a.id) as attended
         FROM attendance a
-        JOIN lessons l ON a.lesson_id = l.id
+        JOIN lessons l ON a.lesson_id = l.id AND l.branch_id = a.branch_id
         WHERE TO_CHAR(l.date, 'YYYY-MM') = $1
+          AND a.branch_id = $2
           AND COALESCE(l.is_holiday, false) = false
           AND (a.status = 'keldi' OR a.status = 'present')
         GROUP BY a.student_id, l.group_id
@@ -2214,6 +2271,7 @@ exports.getNewStudentsNotification = async (req, res) => {
                          AND attendance_count.group_id = sg.group_id
       
       WHERE sg.status = 'active'
+        AND sg.branch_id = $2
         AND COALESCE(g.is_active, true) = true
         AND COALESCE(g.status, 'draft') <> 'blocked'
         AND u.role = 'student'
@@ -2226,14 +2284,15 @@ exports.getNewStudentsNotification = async (req, res) => {
           WHERE ms.student_id = sg.student_id 
             AND ms.group_id = sg.group_id 
             AND ms.month = $1
+            AND ms.branch_id = sg.branch_id
         )
     `;
 
-    let params = [month];
+    let params = [month, branchId];
 
     // Teacher faqat o'z guruhlarini ko'radi
     if (userRole === 'teacher') {
-      newStudentsQuery += ` AND g.teacher_id = $2`;
+      newStudentsQuery += ` AND g.teacher_id = $3`;
       params.push(userId);
     }
 
@@ -2276,6 +2335,7 @@ exports.exportSnapshotsToExcel = async (req, res) => {
     const XLSX = require('xlsx');
     const { month, group_id, status, payment_status, teacher_id, subject_id, search } = req.query;
     const { role: userRole, id: userId } = req.user;
+    const branchId = getScopedBranchId(req);
 
     let whereConditions = [];
     let params = [];
@@ -2293,13 +2353,17 @@ exports.exportSnapshotsToExcel = async (req, res) => {
     params.push(month);
     paramIndex++;
 
+    whereConditions.push(`ms.branch_id = $${paramIndex}`);
+    params.push(branchId);
+    paramIndex++;
+
     // Teacher faqat o'z guruhlarini ko'radi
     if (userRole === 'teacher') {
       const teacherGroupsQuery = `
         SELECT DISTINCT ms2.group_id 
         FROM monthly_snapshots ms2
-        JOIN groups g ON ms2.group_id = g.id
-        WHERE g.teacher_id = $${paramIndex} AND ms2.month = $1
+        JOIN groups g ON ms2.group_id = g.id AND g.branch_id = ms2.branch_id
+        WHERE g.teacher_id = $${paramIndex} AND ms2.month = $1 AND ms2.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${teacherGroupsQuery})`);
       params.push(userId);
@@ -2350,7 +2414,7 @@ exports.exportSnapshotsToExcel = async (req, res) => {
       const teacherFilterQuery = `
         SELECT DISTINCT g.id 
         FROM groups g 
-        WHERE g.teacher_id = $${paramIndex}
+        WHERE g.teacher_id = $${paramIndex} AND g.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${teacherFilterQuery})`);
       params.push(teacher_id);
@@ -2361,7 +2425,7 @@ exports.exportSnapshotsToExcel = async (req, res) => {
       const subjectFilterQuery = `
         SELECT DISTINCT g.id 
         FROM groups g 
-        WHERE g.subject_id = $${paramIndex}
+        WHERE g.subject_id = $${paramIndex} AND g.branch_id = $2
       `;
       whereConditions.push(`ms.group_id IN (${subjectFilterQuery})`);
       params.push(subject_id);
@@ -2418,10 +2482,11 @@ exports.exportSnapshotsToExcel = async (req, res) => {
       FROM monthly_snapshots ms
       LEFT JOIN student_discounts sd ON ms.student_id = sd.student_id 
         AND ms.group_id = sd.group_id
+        AND sd.branch_id = ms.branch_id
         AND sd.start_month <= ms.month 
         AND sd.end_month >= ms.month
         AND sd.is_active = true
-      LEFT JOIN users su ON ms.student_id = su.id
+      LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
     `;

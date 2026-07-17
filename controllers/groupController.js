@@ -5,8 +5,9 @@ exports.deleteGroup = async (req, res) => {
         return res.status(400).json({ message: "ID raqam bo'lishi shart!" });
     }
     try {
+        const branchId = getScopedBranchId(req);
         // Avval student_groupsdan ham o'chadi (ON DELETE CASCADE)
-        const result = await pool.query("DELETE FROM groups WHERE id = $1 RETURNING *", [id]);
+        const result = await pool.query("DELETE FROM groups WHERE id = $1 AND branch_id = $2 RETURNING *", [id, branchId]);
         if (result.rows.length === 0) return res.status(404).json({ message: "Guruh topilmadi" });
         res.json({ success: true, message: "Guruh o'chirildi" });
     } catch (err) {
@@ -18,6 +19,7 @@ const crypto = require('crypto');
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'http://localhost:5000';
 const { getTeacherSubjects } = require('../models/teacherSubjectModel');
 const { checkRoomAvailability } = require('../models/roomModel');
+const { getScopedBranchId } = require('../utils/branch');
 
 // Tasodifiy 6-8 belgili kod yaratish (Masalan: GR-A1B2C3)
 const generateUniqueCode = () => {
@@ -105,33 +107,34 @@ const normalizeUnassignedReason = (reason) => {
     return normalized || "Sabab ko'rsatilmagan";
 };
 
-const getGroupMembershipMeta = async (groupId) => {
+const getGroupMembershipMeta = async (groupId, branchId = 1) => {
     const groupRes = await pool.query(
-        `SELECT g.id, g.name as group_name, g.teacher_id, g.status, g.is_active,
+        `SELECT g.id, g.name as group_name, g.teacher_id, g.status, g.is_active, g.branch_id,
                 u.name || ' ' || u.surname as teacher_name
          FROM groups g
-         LEFT JOIN users u ON g.teacher_id = u.id
-         WHERE g.id = $1`,
-        [groupId]
+         LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+         WHERE g.id = $1 AND g.branch_id = $2`,
+        [groupId, branchId]
     );
     return groupRes.rows[0] || null;
 };
 
-const syncStudentPrimaryGroup = async (studentId, unassignedReason = null) => {
+const syncStudentPrimaryGroup = async (studentId, unassignedReason = null, branchId = 1) => {
     const activeGroupRes = await pool.query(
         `SELECT sg.group_id,
                 g.name as group_name,
                 g.teacher_id,
                 t.name || ' ' || t.surname as teacher_name
          FROM student_groups sg
-         JOIN groups g ON g.id = sg.group_id
-         LEFT JOIN users t ON g.teacher_id = t.id
+         JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
+         LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
          WHERE sg.student_id = $1
+           AND sg.branch_id = $2
            AND sg.status = 'active'
          ORDER BY sg.joined_at DESC NULLS LAST,
                   sg.group_id DESC
          LIMIT 1`,
-        [studentId]
+        [studentId, branchId]
     );
 
     if (activeGroupRes.rows.length > 0) {
@@ -163,7 +166,7 @@ const syncStudentPrimaryGroup = async (studentId, unassignedReason = null) => {
 };
 
 // Teacher schedule conflict tekshirish
-const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId = null) => {
+const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId = null, branchId = 1) => {
     if (!teacherId || !schedule || !schedule.days || !schedule.time) {
         return { hasConflict: false };
     }
@@ -174,14 +177,15 @@ const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId 
             SELECT id, name, schedule, status 
             FROM groups 
             WHERE teacher_id = $1 
+            AND branch_id = $2
             AND (status = 'active' OR status = 'draft') 
             AND schedule IS NOT NULL
         `;
         
-        const params = [teacherId];
+        const params = [teacherId, branchId];
         
         if (excludeGroupId) {
-            query += ` AND id != $2`;
+            query += ` AND id != $3`;
             params.push(excludeGroupId);
         }
         
@@ -214,18 +218,18 @@ const checkTeacherScheduleConflict = async (teacherId, schedule, excludeGroupId 
 };
 
 // Vaqt to'qnashuvini tekshirish helper funksiyasi
-const checkScheduleConflict = async (teacherId, newSchedule, excludeGroupId = null) => {
+const checkScheduleConflict = async (teacherId, newSchedule, excludeGroupId = null, branchId = 1) => {
     if (!teacherId || !newSchedule) return { hasConflict: false };
     
     try {
         // Teacher ning barcha guruhlarining jadvalini olish (active guruhlar)
         let query = `SELECT id, name, schedule FROM groups 
-                     WHERE teacher_id = $1 AND schedule IS NOT NULL AND status != 'blocked'`;
-        let params = [teacherId];
+                     WHERE teacher_id = $1 AND branch_id = $2 AND schedule IS NOT NULL AND status != 'blocked'`;
+        let params = [teacherId, branchId];
         
         // Agar guruhni yangilayotgan bo'lsak, o'sha guruhni chiqarib qo'yamiz
         if (excludeGroupId) {
-            query += ` AND id != $2`;
+            query += ` AND id != $3`;
             params.push(excludeGroupId);
         }
         
@@ -313,6 +317,7 @@ exports.createGroup = async (req, res) => {
     const effectiveTeacherId = isTeacher ? authenticatedTeacherId : requestedTeacherId;
     
     try {
+        const branchId = getScopedBranchId(req);
         if (isTeacher && !hasValidAuthenticatedTeacherId) {
             return res.status(401).json({
                 message: "Teacher tokenida id noto'g'ri"
@@ -333,7 +338,7 @@ exports.createGroup = async (req, res) => {
 
         // Agar teacher_id va subject_id berilgan bo'lsa, teacher bu fanni o'qitishini tekshirish
         if (effectiveTeacherId && subject_id) {
-            const teacherSubjects = await getTeacherSubjects(effectiveTeacherId);
+            const teacherSubjects = await getTeacherSubjects(effectiveTeacherId, branchId);
             const canTeachSubject = teacherSubjects.some(sub => sub.id === subject_id);
             
             if (!canTeachSubject) {
@@ -348,7 +353,7 @@ exports.createGroup = async (req, res) => {
         
         // Teacher schedule conflict tekshirish
         if (effectiveTeacherId && schedule) {
-            const conflict = await checkTeacherScheduleConflict(effectiveTeacherId, schedule);
+            const conflict = await checkTeacherScheduleConflict(effectiveTeacherId, schedule, null, branchId);
             if (conflict.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacher tanlangan kun va vaqtda boshqa guruhda dars bor!",
@@ -362,7 +367,7 @@ exports.createGroup = async (req, res) => {
 
         // Schedule conflict tekshiruvi
         if (effectiveTeacherId && schedule) {
-            const conflictCheck = await checkScheduleConflict(effectiveTeacherId, schedule);
+            const conflictCheck = await checkScheduleConflict(effectiveTeacherId, schedule, null, branchId);
             if (conflictCheck.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacherning ko'rsatilgan kunda va vaqtda boshqa guruhida darsi bor!",
@@ -382,7 +387,7 @@ exports.createGroup = async (req, res) => {
 
         // Xona conflict tekshirish
         if (room_id && schedule) {
-            const roomCheck = await checkRoomAvailability(room_id, schedule);
+            const roomCheck = await checkRoomAvailability(room_id, schedule, null, branchId);
             if (!roomCheck.isAvailable) {
                 return res.status(400).json({
                     message: "Bu xona tanlangan kun va vaqtda band!",
@@ -395,8 +400,8 @@ exports.createGroup = async (req, res) => {
         }
 
         const result = await pool.query(
-            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price, status, room_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+            `INSERT INTO groups (name, teacher_id, unique_code, start_date, schedule, subject_id, price, status, room_id, branch_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
             [
                 name, 
                 effectiveTeacherId,
@@ -406,7 +411,8 @@ exports.createGroup = async (req, res) => {
                 subject_id,
                 price,
                 status || 'draft', // Default status
-                room_id || null
+                room_id || null,
+                branchId
             ]
         );
         res.status(201).json({ success: true, group: result.rows[0] });
@@ -424,11 +430,12 @@ exports.updateGroup = async (req, res) => {
     let transactionStarted = false;
     
     try {
+        const branchId = getScopedBranchId(req);
         const currentGroupResult = await pool.query(
-            `SELECT id, name, teacher_id, room_id, subject_id, schedule, price
+            `SELECT id, name, teacher_id, room_id, subject_id, schedule, price, branch_id
              FROM groups
-             WHERE id = $1`,
-            [id]
+             WHERE id = $1 AND branch_id = $2`,
+            [id, branchId]
         );
         if (currentGroupResult.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
@@ -483,7 +490,7 @@ exports.updateGroup = async (req, res) => {
         
         // Teacher va subject validation - agar ikkalasi ham berilgan bo'lsa
         if (teacherForValidation && processedSubjectId) {
-            const teacherSubjects = await getTeacherSubjects(teacherForValidation);
+            const teacherSubjects = await getTeacherSubjects(teacherForValidation, branchId);
             const canTeachSubject = teacherSubjects.some(sub => sub.id === processedSubjectId);
             
             if (!canTeachSubject) {
@@ -498,7 +505,7 @@ exports.updateGroup = async (req, res) => {
         
         // Teacher schedule conflict tekshirish (faqat teacher_id yoki schedule o'zgarsa)
         if (teacherForValidation && schedule) {
-            const conflict = await checkTeacherScheduleConflict(teacherForValidation, schedule, id);
+            const conflict = await checkTeacherScheduleConflict(teacherForValidation, schedule, id, branchId);
             if (conflict.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacher tanlangan kun va vaqtda boshqa guruhda dars bor!",
@@ -512,7 +519,7 @@ exports.updateGroup = async (req, res) => {
 
         // Schedule conflict tekshiruvi - faqat teacher va schedule o'zgartirish paytida
         if (teacherForValidation && schedule) {
-            const conflictCheck = await checkScheduleConflict(teacherForValidation, schedule, id);
+            const conflictCheck = await checkScheduleConflict(teacherForValidation, schedule, id, branchId);
             if (conflictCheck.hasConflict) {
                 return res.status(400).json({
                     message: "Bu teacherning ko'rsatilgan kunda va vaqtda boshqa guruhida darsi bor!",
@@ -532,7 +539,7 @@ exports.updateGroup = async (req, res) => {
 
         // Xona conflict tekshirish
         if (roomForValidation && schedule) {
-            const roomCheck = await checkRoomAvailability(roomForValidation, schedule, id);
+            const roomCheck = await checkRoomAvailability(roomForValidation, schedule, id, branchId);
             if (!roomCheck.isAvailable) {
                 return res.status(400).json({
                     message: "Bu xona tanlangan kun va vaqtda band!",
@@ -561,8 +568,8 @@ exports.updateGroup = async (req, res) => {
                   WHEN $9::date IS NOT NULL THEN $9::date
                   ELSE schedule_effective_from
                 END
-             WHERE id = $10 RETURNING *`,
-            [name, finalTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, finalSubjectId, finalRoomId, effectiveFrom, id]
+             WHERE id = $10 AND branch_id = $11 RETURNING *`,
+            [name, finalTeacherId, is_active, schedule ? JSON.stringify(schedule) : null, processedStartDate, price, finalSubjectId, finalRoomId, effectiveFrom, id, branchId]
         );
         if (result.rows.length === 0) {
             await pool.query('ROLLBACK');
@@ -665,6 +672,7 @@ exports.updateGroup = async (req, res) => {
 exports.updateGroupStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body; // 'draft', 'active', 'blocked'
+    const branchId = getScopedBranchId(req);
     
     // Status validatsiya
     const validStatuses = ['draft', 'active', 'blocked'];
@@ -678,8 +686,8 @@ exports.updateGroupStatus = async (req, res) => {
         const groupCheck = await pool.query(
             `SELECT id, teacher_id, status
              FROM groups
-             WHERE id = $1`,
-            [id]
+             WHERE id = $1 AND branch_id = $2`,
+            [id, branchId]
         );
         if (groupCheck.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
@@ -700,8 +708,8 @@ exports.updateGroupStatus = async (req, res) => {
             const activeStudentsCheck = await pool.query(
                 `SELECT COUNT(*) as count 
                  FROM student_groups 
-                 WHERE group_id = $1 AND status = 'active'`,
-                [id]
+                 WHERE group_id = $1 AND branch_id = $2 AND status = 'active'`,
+                [id, branchId]
             );
             
             const activeStudentsCount = parseInt(activeStudentsCheck.rows[0].count);
@@ -725,12 +733,12 @@ exports.updateGroupStatus = async (req, res) => {
             updateFields.class_start_date = new Date();
             updateFields.class_status = 'started';
             
-            updateQuery += 'status = $1, class_start_date = $2, class_status = $3 WHERE id = $4';
-            updateValues = [status, new Date(), 'started', id];
+            updateQuery += 'status = $1, class_start_date = $2, class_status = $3 WHERE id = $4 AND branch_id = $5';
+            updateValues = [status, new Date(), 'started', id, branchId];
         } else {
             updateFields.status = status;
-            updateQuery += 'status = $1 WHERE id = $2';
-            updateValues = [status, id];
+            updateQuery += 'status = $1 WHERE id = $2 AND branch_id = $3';
+            updateValues = [status, id, branchId];
         }
         
         const result = await pool.query(
@@ -748,8 +756,8 @@ exports.updateGroupStatus = async (req, res) => {
             await pool.query(
                 `UPDATE student_groups 
                  SET status = 'stopped', left_at = $2
-                 WHERE group_id = $1 AND status = 'active'`,
-                [id, new Date()]
+                 WHERE group_id = $1 AND branch_id = $3 AND status = 'active'`,
+                [id, new Date(), branchId]
             );
             
             // Guruh bloklanganda talabalarning course ma'lumotlarini yangilash
@@ -760,17 +768,17 @@ exports.updateGroupStatus = async (req, res) => {
                  WHERE id IN (
                      SELECT sg.student_id 
                      FROM student_groups sg 
-                     WHERE sg.group_id = $2 AND sg.status = 'stopped'
-                 ) AND course_status = 'in_progress'`,
-                [new Date(), id]
+                     WHERE sg.group_id = $2 AND sg.branch_id = $3 AND sg.status = 'stopped'
+                 ) AND branch_id = $3 AND course_status = 'in_progress'`,
+                [new Date(), id, branchId]
             );
         } else if (status === 'active') {
             // Guruh aktiv bo'lganda talabalar statusini 'active' ga qaytarish
             await pool.query(
                 `UPDATE student_groups 
                  SET status = 'active', left_at = NULL
-                 WHERE group_id = $1 AND status = 'stopped'`,
-                [id]
+                 WHERE group_id = $1 AND branch_id = $2 AND status = 'stopped'`,
+                [id, branchId]
             );
             
             // Guruh aktiv bo'lganda talabalarning course ma'lumotlarini qaytarish
@@ -781,9 +789,9 @@ exports.updateGroupStatus = async (req, res) => {
                  WHERE id IN (
                      SELECT sg.student_id 
                      FROM student_groups sg 
-                     WHERE sg.group_id = $1 AND sg.status = 'active'
-                 ) AND course_status = 'stopped'`,
-                [id]
+                     WHERE sg.group_id = $1 AND sg.branch_id = $2 AND sg.status = 'active'
+                 ) AND branch_id = $2 AND course_status = 'stopped'`,
+                [id, branchId]
             );
         }
 
@@ -796,9 +804,9 @@ exports.updateGroupStatus = async (req, res) => {
                  WHERE id IN (
                      SELECT sg.student_id 
                      FROM student_groups sg 
-                     WHERE sg.group_id = $2 AND sg.status = 'active'
-                 ) AND course_status = 'not_started'`,
-                [new Date(), id]
+                     WHERE sg.group_id = $2 AND sg.branch_id = $3 AND sg.status = 'active'
+                 ) AND branch_id = $3 AND course_status = 'not_started'`,
+                [new Date(), id, branchId]
             );
         }
 
@@ -825,13 +833,14 @@ exports.updateGroupStatus = async (req, res) => {
 exports.removeStudentFromGroup = async (req, res) => {
     const group_id = parseInt(req.params.group_id);
     const student_id = parseInt(req.params.student_id);
+    const branchId = getScopedBranchId(req);
     const reason = normalizeUnassignedReason(
         req.body?.reason || req.body?.unassigned_reason || req.query?.reason || req.query?.unassigned_reason
     );
     try {
         const groupRes = await pool.query(
-            'SELECT id, teacher_id FROM groups WHERE id = $1',
-            [group_id]
+            'SELECT id, teacher_id FROM groups WHERE id = $1 AND branch_id = $2',
+            [group_id, branchId]
         );
         if (groupRes.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
@@ -841,11 +850,11 @@ exports.removeStudentFromGroup = async (req, res) => {
         }
 
         const result = await pool.query(
-            "DELETE FROM student_groups WHERE group_id = $1 AND student_id = $2 RETURNING *",
-            [group_id, student_id]
+            "DELETE FROM student_groups WHERE group_id = $1 AND student_id = $2 AND branch_id = $3 RETURNING *",
+            [group_id, student_id, branchId]
         );
         if (result.rows.length === 0) return res.status(404).json({ message: "Bu student guruhda topilmadi" });
-        await syncStudentPrimaryGroup(student_id, reason);
+        await syncStudentPrimaryGroup(student_id, reason, branchId);
         res.json({ success: true, message: "Student guruhdan o'chirildi" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 };
@@ -854,10 +863,11 @@ exports.removeStudentFromGroup = async (req, res) => {
 exports.adminAddStudentToGroup = async (req, res) => {
     const { student_id, group_id } = req.body;
     try {
+        const branchId = getScopedBranchId(req);
         // Student statusini tekshirish
         const studentCheck = await pool.query(
-            'SELECT id, name, surname, status FROM users WHERE id = $1 AND role = $2',
-            [student_id, 'student']
+            'SELECT id, name, surname, status FROM users WHERE id = $1 AND role = $2 AND branch_id = $3',
+            [student_id, 'student', branchId]
         );
 
         if (studentCheck.rows.length === 0) {
@@ -889,9 +899,9 @@ exports.adminAddStudentToGroup = async (req, res) => {
         const groupRes = await pool.query(
             `SELECT g.id, g.name as group_name, g.price, g.teacher_id, g.status, u.name || ' ' || u.surname as teacher_name 
              FROM groups g 
-             LEFT JOIN users u ON g.teacher_id = u.id 
-             WHERE g.id = $1`,
-            [group_id]
+             LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+             WHERE g.id = $1 AND g.branch_id = $2`,
+            [group_id, branchId]
         );
         if (groupRes.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
@@ -918,15 +928,16 @@ exports.adminAddStudentToGroup = async (req, res) => {
         }
         
         const result = await pool.query(
-            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)
+            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL, $4)
              ON CONFLICT (student_id, group_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 joined_at = CURRENT_TIMESTAMP,
-                left_at = NULL
+                left_at = NULL,
+                branch_id = EXCLUDED.branch_id
              WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
              RETURNING *`,
-            [student_id, group_id, studentGroupStatus]
+            [student_id, group_id, studentGroupStatus, branchId]
         );
 
         if (result.rows.length === 0) {
@@ -944,8 +955,9 @@ exports.adminAddStudentToGroup = async (req, res) => {
               teacher_id = $3,
               unassigned_reason = NULL
              WHERE id = $4
+               AND branch_id = $5
              RETURNING id, name, surname, group_id, group_name, teacher_id`,
-            [groupData.id, groupData.group_name, groupData.teacher_id, student_id]
+            [groupData.id, groupData.group_name, groupData.teacher_id, student_id, branchId]
         );
 
         // Agar guruh allaqachon active bo'lsa, studentning course statusini avtomatik boshlash
@@ -954,8 +966,8 @@ exports.adminAddStudentToGroup = async (req, res) => {
                 `UPDATE users 
                  SET course_status = 'in_progress', 
                      course_start_date = CURRENT_TIMESTAMP 
-                 WHERE id = $1 AND course_status = 'not_started'`,
-                [student_id]
+                 WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                [student_id, branchId]
             );
         }
 
@@ -986,6 +998,7 @@ exports.adminAddStudentToGroup = async (req, res) => {
 exports.adminBulkAddStudentsToGroup = async (req, res) => {
     const groupId = parseInt(req.body.group_id, 10);
     const studentIds = normalizeStudentIds(req.body.student_ids);
+    const branchId = getScopedBranchId(req);
 
     if (!Number.isInteger(groupId) || groupId <= 0) {
         return res.status(400).json({ message: "group_id to'g'ri raqam bo'lishi kerak" });
@@ -995,7 +1008,7 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
     }
 
     try {
-        const groupData = await getGroupMembershipMeta(groupId);
+        const groupData = await getGroupMembershipMeta(groupId, branchId);
         if (!groupData) {
             return res.status(404).json({ message: "Guruh topilmadi" });
         }
@@ -1009,8 +1022,8 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
         const studentsRes = await pool.query(
             `SELECT id, name, surname, status
              FROM users
-             WHERE role = 'student' AND id = ANY($1::int[])`,
-            [studentIds]
+             WHERE role = 'student' AND branch_id = $2 AND id = ANY($1::int[])`,
+            [studentIds, branchId]
         );
         const studentsMap = new Map(studentsRes.rows.map((s) => [s.id, s]));
 
@@ -1035,15 +1048,16 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
             }
 
             const insertResult = await pool.query(
-                `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
-                 VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, NULL)
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
+                 VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, NULL, $3)
                  ON CONFLICT (student_id, group_id) DO UPDATE SET
                     status = 'active',
                     joined_at = CURRENT_TIMESTAMP,
-                    left_at = NULL
+                    left_at = NULL,
+                    branch_id = EXCLUDED.branch_id
                  WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
                  RETURNING student_id`,
-                [studentId, groupId]
+                [studentId, groupId, branchId]
             );
 
             if (insertResult.rows.length === 0) {
@@ -1061,8 +1075,8 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
                      group_name = $2,
                      teacher_id = $3,
                      unassigned_reason = NULL
-                 WHERE id = $4`,
-                [groupData.id, groupData.group_name, groupData.teacher_id, studentId]
+                 WHERE id = $4 AND branch_id = $5`,
+                [groupData.id, groupData.group_name, groupData.teacher_id, studentId, branchId]
             );
 
             if (groupData.status === 'active') {
@@ -1070,8 +1084,8 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
                     `UPDATE users
                      SET course_status = 'in_progress',
                          course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
-                     WHERE id = $1 AND course_status = 'not_started'`,
-                    [studentId]
+                     WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                    [studentId, branchId]
                 );
             }
 
@@ -1107,6 +1121,7 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
 exports.bulkRemoveStudentsFromGroup = async (req, res) => {
     const groupId = parseInt(req.params.group_id, 10);
     const studentIds = normalizeStudentIds(req.body.student_ids);
+    const branchId = getScopedBranchId(req);
     const reason = normalizeUnassignedReason(
         req.body?.reason || req.body?.unassigned_reason || req.query?.reason || req.query?.unassigned_reason
     );
@@ -1119,7 +1134,7 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
     }
 
     try {
-        const groupData = await getGroupMembershipMeta(groupId);
+        const groupData = await getGroupMembershipMeta(groupId, branchId);
         if (!groupData) {
             return res.status(404).json({ message: "Guruh topilmadi" });
         }
@@ -1130,17 +1145,18 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
         const membersRes = await pool.query(
             `SELECT sg.student_id, u.name, u.surname
              FROM student_groups sg
-             JOIN users u ON u.id = sg.student_id
-             WHERE sg.group_id = $1 AND sg.student_id = ANY($2::int[])`,
-            [groupId, studentIds]
+             JOIN users u ON u.id = sg.student_id AND u.branch_id = sg.branch_id
+             WHERE sg.group_id = $1 AND sg.branch_id = $3 AND sg.student_id = ANY($2::int[])`,
+            [groupId, studentIds, branchId]
         );
         const memberMap = new Map(membersRes.rows.map((m) => [m.student_id, m]));
 
         const deleteRes = await pool.query(
             `DELETE FROM student_groups
              WHERE group_id = $1 AND student_id = ANY($2::int[])
+               AND branch_id = $3
              RETURNING student_id`,
-            [groupId, studentIds]
+            [groupId, studentIds, branchId]
         );
 
         const removedIds = deleteRes.rows.map((r) => r.student_id);
@@ -1154,7 +1170,7 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
                 continue;
             }
 
-            await syncStudentPrimaryGroup(studentId, reason);
+            await syncStudentPrimaryGroup(studentId, reason, branchId);
 
             const member = memberMap.get(studentId);
             removed.push({
@@ -1184,6 +1200,7 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
 exports.bulkChangeStudentGroup = async (req, res) => {
     const studentIds = normalizeStudentIds(req.body.student_ids);
     const newGroupId = parseInt(req.body.new_group_id, 10);
+    const branchId = getScopedBranchId(req);
     const fromGroupId = req.body.from_group_id !== undefined && req.body.from_group_id !== null
         ? parseInt(req.body.from_group_id, 10)
         : null;
@@ -1199,7 +1216,7 @@ exports.bulkChangeStudentGroup = async (req, res) => {
     }
 
     try {
-        const newGroup = await getGroupMembershipMeta(newGroupId);
+        const newGroup = await getGroupMembershipMeta(newGroupId, branchId);
         if (!newGroup) {
             return res.status(404).json({ message: "Yangi guruh topilmadi" });
         }
@@ -1211,7 +1228,7 @@ exports.bulkChangeStudentGroup = async (req, res) => {
         }
 
         if (req.user?.role === 'teacher' && fromGroupId) {
-            const fromGroup = await getGroupMembershipMeta(fromGroupId);
+            const fromGroup = await getGroupMembershipMeta(fromGroupId, branchId);
             if (!fromGroup) {
                 return res.status(404).json({ message: "Manba guruh topilmadi" });
             }
@@ -1224,9 +1241,9 @@ exports.bulkChangeStudentGroup = async (req, res) => {
             `SELECT u.id, u.name, u.surname, u.status, u.group_id, u.group_name,
                     g.teacher_id as current_group_teacher_id
              FROM users u
-             LEFT JOIN groups g ON g.id = u.group_id
-             WHERE u.role = 'student' AND u.id = ANY($1::int[])`,
-            [studentIds]
+             LEFT JOIN groups g ON g.id = u.group_id AND g.branch_id = u.branch_id
+             WHERE u.role = 'student' AND u.branch_id = $2 AND u.id = ANY($1::int[])`,
+            [studentIds, branchId]
         );
         const studentsMap = new Map(studentsRes.rows.map((s) => [s.id, s]));
 
@@ -1263,8 +1280,8 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                 // users.group_id bo'sh bo'lsa, yagona faol a'zolikni manba deb olamiz
                 const activeMemberships = await pool.query(
                     `SELECT group_id FROM student_groups
-                     WHERE student_id = $1 AND status = 'active'`,
-                    [studentId]
+                     WHERE student_id = $1 AND branch_id = $2 AND status = 'active'`,
+                    [studentId, branchId]
                 );
                 if (activeMemberships.rows.length === 1) {
                     sourceGroupId = activeMemberships.rows[0].group_id;
@@ -1280,7 +1297,7 @@ exports.bulkChangeStudentGroup = async (req, res) => {
             }
 
             if (req.user?.role === 'teacher' && sourceGroupId) {
-                const sourceGroup = await getGroupMembershipMeta(sourceGroupId);
+                const sourceGroup = await getGroupMembershipMeta(sourceGroupId, branchId);
                 if (!sourceGroup || sourceGroup.teacher_id !== req.user.id) {
                     failed.push({
                         student_id: studentId,
@@ -1294,19 +1311,20 @@ exports.bulkChangeStudentGroup = async (req, res) => {
             if (sourceGroupId) {
                 await pool.query(
                     `DELETE FROM student_groups
-                     WHERE student_id = $1 AND group_id = $2`,
-                    [studentId, sourceGroupId]
+                     WHERE student_id = $1 AND group_id = $2 AND branch_id = $3`,
+                    [studentId, sourceGroupId, branchId]
                 );
             }
 
             await pool.query(
-                `INSERT INTO student_groups (student_id, group_id, status)
-                 VALUES ($1, $2, 'active')
+                `INSERT INTO student_groups (student_id, group_id, status, branch_id)
+                 VALUES ($1, $2, 'active', $3)
                  ON CONFLICT (student_id, group_id) DO UPDATE SET
                     status = 'active',
                     joined_at = CURRENT_TIMESTAMP,
-                    left_at = NULL`,
-                [studentId, newGroupId]
+                    left_at = NULL,
+                    branch_id = EXCLUDED.branch_id`,
+                [studentId, newGroupId, branchId]
             );
 
             await pool.query(
@@ -1316,8 +1334,8 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                      teacher_id = $3,
                      teacher_name = $4,
                      unassigned_reason = NULL
-                 WHERE id = $5`,
-                [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, studentId]
+                 WHERE id = $5 AND branch_id = $6`,
+                [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, studentId, branchId]
             );
 
             if (newGroup.status === 'active') {
@@ -1325,8 +1343,8 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                     `UPDATE users
                      SET course_status = 'in_progress',
                          course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
-                     WHERE id = $1 AND course_status = 'not_started'`,
-                    [studentId]
+                     WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                    [studentId, branchId]
                 );
             }
 
@@ -1364,13 +1382,14 @@ exports.bulkChangeStudentGroup = async (req, res) => {
 exports.studentJoinByCode = async (req, res) => {
     const { unique_code } = req.body;
     try {
+        const branchId = getScopedBranchId(req);
         // Guruh ma'lumotlarini olish
         const group = await pool.query(
-            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active, g.status 
+            `SELECT g.id, g.name as group_name, g.price, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active, g.status, g.branch_id
              FROM groups g 
-             LEFT JOIN users u ON g.teacher_id = u.id 
-             WHERE g.unique_code = $1`,
-            [unique_code]
+             LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+             WHERE g.unique_code = $1 AND g.branch_id = $2`,
+            [unique_code, branchId]
         );
         if (!group.rows[0]) return res.status(404).json({ message: "Bunday kodli guruh mavjud emas" });
         if (!group.rows[0].is_active) return res.status(400).json({ message: "Guruh hozirda bloklangan" });
@@ -1386,15 +1405,16 @@ exports.studentJoinByCode = async (req, res) => {
         
         // Student_groups jadvaliga qo'shish
         const result = await pool.query(
-            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)
+            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL, $4)
              ON CONFLICT (student_id, group_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 joined_at = CURRENT_TIMESTAMP,
-                left_at = NULL
+                left_at = NULL,
+                branch_id = EXCLUDED.branch_id
              WHERE student_groups.status <> 'active' OR student_groups.left_at IS NOT NULL
              RETURNING *`,
-            [req.user.id, groupData.id, studentGroupStatus]
+            [req.user.id, groupData.id, studentGroupStatus, branchId]
         );
 
         if (result.rows.length === 0) {
@@ -1407,12 +1427,12 @@ exports.studentJoinByCode = async (req, res) => {
         // Users jadvalida studentning ma'lumotlarini yangilash
         await pool.query(
             `UPDATE users SET 
-              group_id = $1, 
-              group_name = $2, 
-              teacher_id = $3,
-              unassigned_reason = NULL
-             WHERE id = $4`,
-            [groupData.id, groupData.group_name, groupData.teacher_id, req.user.id]
+             group_id = $1, 
+             group_name = $2, 
+             teacher_id = $3,
+             unassigned_reason = NULL
+             WHERE id = $4 AND branch_id = $5`,
+            [groupData.id, groupData.group_name, groupData.teacher_id, req.user.id, branchId]
         );
 
         // Agar guruh allaqachon active bo'lsa, studentning course statusini avtomatik boshlash
@@ -1421,8 +1441,8 @@ exports.studentJoinByCode = async (req, res) => {
                 `UPDATE users 
                  SET course_status = 'in_progress', 
                      course_start_date = CURRENT_TIMESTAMP 
-                 WHERE id = $1 AND course_status = 'not_started'`,
-                [req.user.id]
+                 WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                [req.user.id, branchId]
             );
         }
 
@@ -1445,6 +1465,7 @@ exports.studentJoinByCode = async (req, res) => {
 // 6. Filtrlangan ro'yxat (Fan ma'lumoti bilan)
 exports.getAllGroups = async (req, res) => {
     const { teacher_id, subject_id, is_active, status } = req.query;
+    const branchId = getScopedBranchId(req);
     let query = `SELECT g.*, 
                         CONCAT(u.name, ' ', u.surname) as teacher_name,
                         s.name as subject_name,
@@ -1461,40 +1482,40 @@ exports.getAllGroups = async (req, res) => {
                             )
                             FROM teacher_subjects ts
                             JOIN subjects sub ON ts.subject_id = sub.id
-                            WHERE ts.teacher_id = u.id),
+                            WHERE ts.teacher_id = u.id AND ts.branch_id = g.branch_id AND sub.branch_id = g.branch_id),
                             '[]'::json
                         ) as teacher_subjects,
                         -- Guruhda talabalar statistikasi
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
-                            WHERE sg.group_id = g.id),
+                            WHERE sg.group_id = g.id AND sg.branch_id = g.branch_id),
                             0
                         ) as total_students_count,
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
-                            WHERE sg.group_id = g.id AND sg.status = 'active'),
+                            WHERE sg.group_id = g.id AND sg.status = 'active' AND sg.branch_id = g.branch_id),
                             0
                         ) as active_students_count,
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
-                            WHERE sg.group_id = g.id AND sg.status = 'stopped'),
+                            WHERE sg.group_id = g.id AND sg.status = 'stopped' AND sg.branch_id = g.branch_id),
                             0
                         ) as stopped_students_count,
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
-                            WHERE sg.group_id = g.id AND sg.status = 'finished'),
+                            WHERE sg.group_id = g.id AND sg.status = 'finished' AND sg.branch_id = g.branch_id),
                             0
                         ) as finished_students_count
                  FROM groups g 
-                 LEFT JOIN users u ON g.teacher_id = u.id 
-                 LEFT JOIN subjects s ON g.subject_id = s.id
-                 LEFT JOIN rooms r ON g.room_id = r.id
-                 WHERE 1=1`;
-    const params = [];
+                 LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+                 LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = g.branch_id
+                 LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = g.branch_id
+                 WHERE g.branch_id = $1`;
+    const params = [branchId];
 
     if (teacher_id) { params.push(parseInt(teacher_id)); query += ` AND g.teacher_id = $${params.length}`; }
     if (subject_id) { params.push(parseInt(subject_id)); query += ` AND g.subject_id = $${params.length}`; }
@@ -1526,6 +1547,7 @@ exports.getAllGroups = async (req, res) => {
 // 7. Bitta guruh (Batafsil ma'lumot va talabalar ro'yxati)
 exports.getGroupById = async (req, res) => {
     const id = parseInt(req.params.id);
+    const branchId = getScopedBranchId(req);
     
     // ID raqam ekanligini tekshirish
     if (isNaN(id)) {
@@ -1552,10 +1574,10 @@ exports.getGroupById = async (req, res) => {
                    r.has_projector,
                    r.description as room_description
             FROM groups g 
-            LEFT JOIN users u ON g.teacher_id = u.id 
-            LEFT JOIN subjects s ON g.subject_id = s.id
-            LEFT JOIN rooms r ON g.room_id = r.id
-            WHERE g.id = $1`, [id]);
+            LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+            LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = g.branch_id
+            LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = g.branch_id
+            WHERE g.id = $1 AND g.branch_id = $2`, [id, branchId]);
 
         if (group.rows.length === 0) {
             return res.status(404).json({ message: "Guruh topilmadi" });
@@ -1602,16 +1624,16 @@ exports.getGroupById = async (req, res) => {
                 sg.joined_at,
                 sg.left_at
             FROM users u
-            JOIN student_groups sg ON u.id = sg.student_id
-            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
+            JOIN student_groups sg ON u.id = sg.student_id AND u.branch_id = sg.branch_id
+            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
             LEFT JOIN (
                 SELECT student_id, SUM(points) as monthly_points
                 FROM student_point_events
-                WHERE group_id = $1 AND month_name = $2
+                WHERE group_id = $1 AND month_name = $2 AND branch_id = $3
                 GROUP BY student_id
             ) spe ON spe.student_id = u.id
-            WHERE sg.group_id = $1
-            ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth]);
+            WHERE sg.group_id = $1 AND sg.branch_id = $3
+            ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth, branchId]);
 
         res.json({ 
             success: true, 
@@ -1625,6 +1647,7 @@ exports.getGroupById = async (req, res) => {
 // 8. Guruhni butunlay o'chirish (Admin)
 exports.deleteGroup = async (req, res) => {
     const id = parseInt(req.params.id);
+    const branchId = getScopedBranchId(req);
 
     // ID raqam ekanligini tekshirish
     if (isNaN(id)) {
@@ -1633,8 +1656,8 @@ exports.deleteGroup = async (req, res) => {
 
     try {
         const result = await pool.query(
-            "DELETE FROM groups WHERE id = $1 RETURNING *",
-            [id]
+            "DELETE FROM groups WHERE id = $1 AND branch_id = $2 RETURNING *",
+            [id, branchId]
         );
 
         if (result.rows.length === 0) {
@@ -1705,6 +1728,7 @@ exports.getGroupViewForStudent = async (req, res) => {
 // 11. Studentni boshqa guruhga o'tkazish (Admin)
 exports.changeStudentGroup = async (req, res) => {
     const { student_id, new_group_id, old_group_id } = req.body;
+    const branchId = getScopedBranchId(req);
 
     if (!student_id || !new_group_id) {
         return res.status(400).json({
@@ -1722,8 +1746,8 @@ exports.changeStudentGroup = async (req, res) => {
     try {
         // Studentni tekshirish
         const studentCheck = await pool.query(
-            'SELECT id, name, surname, status, group_id, group_name FROM users WHERE id = $1 AND role = $2',
-            [student_id, 'student']
+            'SELECT id, name, surname, status, group_id, group_name FROM users WHERE id = $1 AND role = $2 AND branch_id = $3',
+            [student_id, 'student', branchId]
         );
 
         if (studentCheck.rows.length === 0) {
@@ -1761,8 +1785,8 @@ exports.changeStudentGroup = async (req, res) => {
         if (!oldGroupId) {
             const activeMemberships = await pool.query(
                 `SELECT group_id FROM student_groups
-                 WHERE student_id = $1 AND status = 'active'`,
-                [student_id]
+                 WHERE student_id = $1 AND branch_id = $2 AND status = 'active'`,
+                [student_id, branchId]
             );
             if (activeMemberships.rows.length === 1) {
                 oldGroupId = activeMemberships.rows[0].group_id;
@@ -1780,9 +1804,9 @@ exports.changeStudentGroup = async (req, res) => {
         const newGroupCheck = await pool.query(
             `SELECT g.id, g.name as group_name, g.teacher_id, u.name || ' ' || u.surname as teacher_name, g.is_active
              FROM groups g 
-             LEFT JOIN users u ON g.teacher_id = u.id 
-             WHERE g.id = $1`,
-            [new_group_id]
+             LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
+             WHERE g.id = $1 AND g.branch_id = $2`,
+            [new_group_id, branchId]
         );
 
         if (newGroupCheck.rows.length === 0) {
@@ -1800,7 +1824,7 @@ exports.changeStudentGroup = async (req, res) => {
         }
 
         if (req.user?.role === 'teacher' && oldGroupId) {
-            const oldGroup = await getGroupMembershipMeta(oldGroupId);
+            const oldGroup = await getGroupMembershipMeta(oldGroupId, branchId);
             if (!oldGroup) {
                 return res.status(404).json({ message: "Eski guruh topilmadi" });
             }
@@ -1812,15 +1836,15 @@ exports.changeStudentGroup = async (req, res) => {
         // Eski guruhdan o'chirish (agar mavjud bo'lsa)
         if (oldGroupId) {
             await pool.query(
-                `DELETE FROM student_groups WHERE student_id = $1 AND group_id = $2`,
-                [student_id, oldGroupId]
+                `DELETE FROM student_groups WHERE student_id = $1 AND group_id = $2 AND branch_id = $3`,
+                [student_id, oldGroupId, branchId]
             );
         }
 
         // Yangi guruhga qo'shish - yangi guruh holatiga qarab status belgilash
         const newGroupStatusCheck = await pool.query(
-            'SELECT status FROM groups WHERE id = $1',
-            [new_group_id]
+            'SELECT status FROM groups WHERE id = $1 AND branch_id = $2',
+            [new_group_id, branchId]
         );
         
         let studentGroupStatus = 'active';
@@ -1829,12 +1853,13 @@ exports.changeStudentGroup = async (req, res) => {
         }
         
         await pool.query(
-            `INSERT INTO student_groups (student_id, group_id, status) \n             VALUES ($1, $2, $3)
+            `INSERT INTO student_groups (student_id, group_id, status, branch_id) \n             VALUES ($1, $2, $3, $4)
              ON CONFLICT (student_id, group_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 joined_at = CURRENT_TIMESTAMP,
-                left_at = NULL`,
-            [student_id, new_group_id, studentGroupStatus]
+                left_at = NULL,
+                branch_id = EXCLUDED.branch_id`,
+            [student_id, new_group_id, studentGroupStatus, branchId]
         );
 
         // Users jadvalidagi ma'lumotlarni yangilash
@@ -1845,9 +1870,9 @@ exports.changeStudentGroup = async (req, res) => {
               teacher_id = $3, 
               teacher_name = $4,
               unassigned_reason = NULL
-             WHERE id = $5
+             WHERE id = $5 AND branch_id = $6
              RETURNING id, name, surname, group_id, group_name, teacher_id, teacher_name`,
-            [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, student_id]
+            [newGroup.id, newGroup.group_name, newGroup.teacher_id, newGroup.teacher_name, student_id, branchId]
         );
 
         res.json({
@@ -2995,7 +3020,7 @@ exports.getTeacherGroupDetails = async (req, res) => {
 
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
-            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
+            LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
             LEFT JOIN (
                 SELECT student_id, SUM(points) as monthly_points
                 FROM student_point_events

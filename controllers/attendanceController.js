@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const XLSX = require('xlsx');
 const { notifyUser } = require('./notificationController');
 const { MONTHLY_POINT_CAP } = require('../config/points');
+const { getScopedBranchId } = require('../utils/branch');
 
 /**
  * YANGI ATTENDANCE TIZIMI
@@ -124,41 +125,41 @@ const parseScheduleTimeRange = (schedule) => {
   return { start_time: '00:00:00', end_time: null };
 };
 
-const isHolidayDate = async (dateStr) => {
+const isHolidayDate = async (dateStr, branchId = 1) => {
   if (!isValidDate(dateStr)) return false;
-  const result = await pool.query(`SELECT 1 FROM holidays WHERE date = $1`, [dateStr]);
+  const result = await pool.query(`SELECT 1 FROM holidays WHERE date = $1 AND branch_id = $2`, [dateStr, branchId]);
   return result.rows.length > 0;
 };
 
-const getHolidayDatesForMonth = async (month) => {
+const getHolidayDatesForMonth = async (month, branchId = 1) => {
   if (!isValidMonth(month)) return new Set();
   const result = await pool.query(
     `SELECT TO_CHAR(date, 'YYYY-MM-DD') as date
      FROM holidays
-     WHERE TO_CHAR(date, 'YYYY-MM') = $1`,
-    [month]
+     WHERE TO_CHAR(date, 'YYYY-MM') = $1 AND branch_id = $2`,
+    [month, branchId]
   );
   return new Set(result.rows.map((r) => r.date));
 };
 
-const applyGlobalHoliday = async ({ date, isHoliday, userId }) => {
+const applyGlobalHoliday = async ({ date, isHoliday, userId, branchId = 1 }) => {
   if (isHoliday) {
     await pool.query(
-      `INSERT INTO holidays (date, created_by)
-       VALUES ($1::date, $2)
-       ON CONFLICT (date) DO NOTHING`,
-      [date, userId]
+      `INSERT INTO holidays (date, created_by, branch_id)
+       VALUES ($1::date, $2, $3)
+       ON CONFLICT (date, branch_id) DO NOTHING`,
+      [date, userId, branchId]
     );
   } else {
-    await pool.query(`DELETE FROM holidays WHERE date = $1::date`, [date]);
+    await pool.query(`DELETE FROM holidays WHERE date = $1::date AND branch_id = $2`, [date, branchId]);
   }
 
   const updateResult = await pool.query(
     `UPDATE lessons
      SET is_holiday = $2
-     WHERE date = $1::date
+     WHERE date = $1::date AND branch_id = $3
      RETURNING id`,
-    [date, Boolean(isHoliday)]
+    [date, Boolean(isHoliday), branchId]
   );
 
   return updateResult.rowCount;
@@ -175,14 +176,14 @@ const getShiftFromTime = (timeValue) => {
   return Number.isNaN(hour) ? 'morning' : (hour < 13 ? 'morning' : 'evening');
 };
 
-const resolveDefaultMonthlyStatus = async (studentId, groupId) => {
+const resolveDefaultMonthlyStatus = async (studentId, groupId, branchId = 1) => {
   const lastMonthStatus = await pool.query(
     `SELECT monthly_status
      FROM attendance
-     WHERE student_id = $1 AND group_id = $2
+     WHERE student_id = $1 AND group_id = $2 AND branch_id = $3
      ORDER BY created_at DESC
      LIMIT 1`,
-    [studentId, groupId]
+    [studentId, groupId, branchId]
   );
 
   if (lastMonthStatus.rows.length > 0) {
@@ -194,53 +195,56 @@ const resolveDefaultMonthlyStatus = async (studentId, groupId) => {
   return 'active';
 };
 
-const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
+const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate, branchId = 1) => {
   const month = String(lessonDate).slice(0, 7);
 
   await pool.query(
     `DELETE FROM attendance a
      WHERE a.lesson_id = $1
+       AND a.branch_id = $4
        AND NOT EXISTS (
          SELECT 1
          FROM student_groups sg
          WHERE sg.student_id = a.student_id
            AND sg.group_id = $2
+           AND sg.branch_id = $4
            AND DATE(sg.joined_at) <= $3::date
            AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $3::date)
        )`,
-    [lessonId, groupId, lessonDate]
+    [lessonId, groupId, lessonDate, branchId]
   );
 
   const eligibleStudents = await pool.query(
     `SELECT DISTINCT sg.student_id
      FROM student_groups sg
      WHERE sg.group_id = $1
+       AND sg.branch_id = $3
        AND DATE(sg.joined_at) <= $2::date
        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
-    [groupId, lessonDate]
+    [groupId, lessonDate, branchId]
   );
 
   let createdCount = 0;
   for (const student of eligibleStudents.rows) {
     const exists = await pool.query(
-      `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2`,
-      [lessonId, student.student_id]
+      `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2 AND branch_id = $3`,
+      [lessonId, student.student_id, branchId]
     );
 
     if (exists.rows.length === 0) {
-      const initialStatus = await resolveDefaultMonthlyStatus(student.student_id, groupId);
+      const initialStatus = await resolveDefaultMonthlyStatus(student.student_id, groupId, branchId);
       await pool.query(
-      `INSERT INTO attendance (lesson_id, student_id, group_id, month, month_name, status, monthly_status, is_marked)
-         VALUES ($1, $2, $3, $4, $4, $5, $6, false)`,
-        [lessonId, student.student_id, groupId, month, 'kelmadi', initialStatus]
+      `INSERT INTO attendance (lesson_id, student_id, group_id, month, month_name, status, monthly_status, is_marked, branch_id)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, false, $7)`,
+        [lessonId, student.student_id, groupId, month, 'kelmadi', initialStatus, branchId]
       );
       createdCount++;
     } else {
       await pool.query(
         `UPDATE attendance
          SET month = $1, month_name = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE lesson_id = $2 AND student_id = $3`,
-        [month, lessonId, student.student_id]
+         WHERE lesson_id = $2 AND student_id = $3 AND branch_id = $4`,
+        [month, lessonId, student.student_id, branchId]
       );
     }
   }
@@ -248,14 +252,14 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate) => {
   return { eligibleCount: eligibleStudents.rows.length, createdCount };
 };
 
-const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate = null }) => {
+const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate = null, branchId = 1 }) => {
   let groupResult;
   try {
     groupResult = await pool.query(
       `SELECT id, schedule, class_start_date, start_date, schedule_effective_from, teacher_id, subject_id, room_id
        FROM groups
-       WHERE id = $1`,
-      [groupId]
+       WHERE id = $1 AND branch_id = $2`,
+      [groupId, branchId]
     );
   } catch (error) {
     // Eski sxemada schedule_effective_from bo'lmasa ham davom etamiz.
@@ -263,8 +267,8 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
       groupResult = await pool.query(
         `SELECT id, schedule, class_start_date, start_date, teacher_id, subject_id, room_id
          FROM groups
-         WHERE id = $1`,
-        [groupId]
+         WHERE id = $1 AND branch_id = $2`,
+        [groupId, branchId]
       );
     } else {
       throw error;
@@ -312,11 +316,11 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   const existingLessons = await pool.query(
     `SELECT TO_CHAR(date, 'YYYY-MM-DD') as lesson_date, TO_CHAR(start_time, 'HH24:MI:SS') as start_time
      FROM lessons
-     WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2`,
-    [groupId, month]
+     WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2 AND branch_id = $3`,
+    [groupId, month, branchId]
   );
   const existingSlots = new Set(existingLessons.rows.map((r) => `${r.lesson_date}|${normalizeTimeValue(r.start_time)}`));
-  const holidayDates = await getHolidayDatesForMonth(month);
+  const holidayDates = await getHolidayDatesForMonth(month, branchId);
 
   const candidates = [];
   const cursor = new Date(firstDate);
@@ -335,8 +339,8 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   let generated = 0;
   for (const lessonDate of toCreate) {
     const inserted = await pool.query(
-      `INSERT INTO lessons (group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday)
-       VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
+      `INSERT INTO lessons (group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday, branch_id)
+       VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10, $11)
        ON CONFLICT (group_id, date, start_time) DO NOTHING
        RETURNING id`,
       [
@@ -349,7 +353,8 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
         slot.end_time,
         getDefaultLessonStatusForDate(lessonDate),
         createdBy,
-        holidayDates.has(lessonDate)
+        holidayDates.has(lessonDate),
+        branchId
       ]
     );
 
@@ -359,18 +364,18 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
     }
 
     const lessonId = inserted.rows[0].id;
-    await syncLessonAttendanceForDate(lessonId, groupId, lessonDate);
+    await syncLessonAttendanceForDate(lessonId, groupId, lessonDate, branchId);
     generated++;
   }
 
   return { generated, skipped: null };
 };
 
-const ensureGeneratedLessonsForScope = async ({ month, createdBy, teacherId = null }) => {
-  const params = [];
+const ensureGeneratedLessonsForScope = async ({ month, createdBy, teacherId = null, branchId = 1 }) => {
+  const params = [branchId];
   let teacherFilter = '';
   if (teacherId) {
-    teacherFilter = ` AND g.teacher_id = $1`;
+    teacherFilter = ` AND g.teacher_id = $2`;
     params.push(teacherId);
   }
 
@@ -378,6 +383,7 @@ const ensureGeneratedLessonsForScope = async ({ month, createdBy, teacherId = nu
     `SELECT g.id
      FROM groups g
      WHERE g.class_status = 'started'
+       AND g.branch_id = $1
        AND g.status IN ('active', 'blocked')
        AND g.teacher_id IS NOT NULL
        ${teacherFilter}`,
@@ -389,7 +395,8 @@ const ensureGeneratedLessonsForScope = async ({ month, createdBy, teacherId = nu
     const auto = await autoGenerateLessonsForMonth({
       groupId: row.id,
       month,
-      createdBy
+      createdBy,
+      branchId
     });
     generated += auto.generated || 0;
   }
@@ -415,6 +422,7 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
     const { date, month, shift } = req.query;
+    const branchId = getScopedBranchId(req);
     const normalizedDate = date ? (isValidDate(date) ? date : null) : null;
     const normalizedMonth = normalizeMonthParam(month) || (normalizedDate ? normalizedDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
     if (!normalizedMonth) {
@@ -466,18 +474,21 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM users u
        LEFT JOIN groups g ON g.teacher_id = u.id
+         AND g.branch_id = $2
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
        LEFT JOIN student_groups sg ON sg.group_id = g.id
+         AND sg.branch_id = $2
          AND DATE(sg.joined_at) <= $1::date
-       LEFT JOIN subjects s ON s.id = g.subject_id
-       LEFT JOIN rooms r ON r.id = g.room_id
+       LEFT JOIN subjects s ON s.id = g.subject_id AND s.branch_id = $2
+       LEFT JOIN rooms r ON r.id = g.room_id AND r.branch_id = $2
        WHERE u.role = 'teacher'
+         AND u.branch_id = $2
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [attendanceDate]
+      [attendanceDate, branchId]
     );
 
     const groupsForSchedule = await pool.query(
@@ -486,8 +497,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
        WHERE g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
+         AND g.branch_id = $2
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
-      [attendanceDate]
+      [attendanceDate, branchId]
     );
 
     const todayGroupsCount = new Map();
@@ -543,8 +555,10 @@ exports.getTeachersAttendanceList = async (req, res) => {
        JOIN groups g ON g.id = sg.group_id
        WHERE g.id = ANY($1::int[])
           AND DATE(sg.joined_at) <= $2::date
+          AND g.branch_id = $3
+          AND sg.branch_id = $3
         GROUP BY g.teacher_id`,
-        [allTodayGroupIds, attendanceDate]
+        [allTodayGroupIds, attendanceDate, branchId]
       );
 
       for (const row of scheduledStudentsResult.rows) {
@@ -571,14 +585,17 @@ exports.getTeachersAttendanceList = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND a.branch_id = $2
            AND EXISTS (
              SELECT 1 FROM student_groups sg
              WHERE sg.student_id = a.student_id
                AND sg.group_id = a.group_id
+               AND sg.branch_id = $2
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
          WHERE l.date = $1::date
+           AND l.branch_id = $2
            AND COALESCE(l.is_holiday, false) = false
            ${normalizedShift === 'morning'
              ? `AND l.start_time < '13:00:00'::time`
@@ -593,7 +610,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [attendanceDate]
+      [attendanceDate, branchId]
     );
 
     const completedMap = new Map();
@@ -655,6 +672,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
   const { date, month, day, shift } = req.query;
 
   try {
+    const branchId = getScopedBranchId(req);
     const teacherIdNum = Number(teacher_id);
     if (!Number.isInteger(teacherIdNum) || teacherIdNum <= 0) {
       return res.status(400).json({
@@ -666,8 +684,8 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
     const teacherResult = await pool.query(
       `SELECT id, name, surname
        FROM users
-       WHERE id = $1 AND role = 'teacher'`,
-      [teacherIdNum]
+       WHERE id = $1 AND role = 'teacher' AND branch_id = $2`,
+      [teacherIdNum, branchId]
     );
 
     if (teacherResult.rows.length === 0) {
@@ -718,18 +736,20 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
          COUNT(*) FILTER (WHERE sg.status = 'finished') as finished_students_count
        FROM groups g
-       LEFT JOIN subjects s ON s.id = g.subject_id
-       LEFT JOIN rooms r ON r.id = g.room_id
+       LEFT JOIN subjects s ON s.id = g.subject_id AND s.branch_id = g.branch_id
+       LEFT JOIN rooms r ON r.id = g.room_id AND r.branch_id = g.branch_id
        LEFT JOIN student_groups sg ON sg.group_id = g.id
+         AND sg.branch_id = g.branch_id
          AND DATE(sg.joined_at) <= $2::date
          AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        WHERE g.teacher_id = $1
+         AND g.branch_id = $3
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $2::date
        GROUP BY g.id, s.id, s.name, r.id, r.room_number
        ORDER BY g.name`,
-      [teacherIdNum, attendanceDate]
+      [teacherIdNum, attendanceDate, branchId]
     );
 
     let targetWeekday = null;
@@ -798,15 +818,18 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
            END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND a.branch_id = $3
            AND EXISTS (
              SELECT 1 FROM student_groups sg
              WHERE sg.student_id = a.student_id
                AND sg.group_id = a.group_id
+               AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
          WHERE l.teacher_id = $1
            AND l.date = $2::date
+           AND l.branch_id = $3
            AND COALESCE(l.is_holiday, false) = false
          GROUP BY l.id, l.group_id
        )
@@ -819,7 +842,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          BOOL_AND(attendance_completed) as all_attendance_completed
        FROM lesson_attendance
        GROUP BY group_id`,
-      [teacherIdNum, attendanceDate]
+      [teacherIdNum, attendanceDate, branchId]
     );
 
     const lessonStatsMap = new Map();
@@ -886,6 +909,7 @@ exports.getGroupsForAttendance = async (req, res) => {
   const { teacher_id, subject_id, status_filter = 'all', date, day, shift, count_mode } = req.query;
   
   try {
+    const branchId = getScopedBranchId(req);
     const countAllStudents = String(count_mode || '').trim().toLowerCase() === 'all';
     const attendanceDate = date || new Date().toISOString().slice(0, 10);
     let targetWeekday = null;
@@ -936,12 +960,13 @@ exports.getGroupsForAttendance = async (req, res) => {
         g.schedule,
         r.room_number
       FROM groups g
-      LEFT JOIN subjects s ON g.subject_id = s.id
-      LEFT JOIN users t ON g.teacher_id = t.id
+      LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = g.branch_id
+      LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = g.branch_id
       LEFT JOIN student_groups sg ON g.id = sg.group_id
+        AND sg.branch_id = g.branch_id
         AND sg.status = 'active'
         ${countAllStudents ? '' : 'AND DATE(sg.joined_at) <= $1::date AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)'}
-      LEFT JOIN rooms r ON g.room_id = r.id
+      LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = g.branch_id
       WHERE g.class_status = 'started'
     `;
     
@@ -951,6 +976,10 @@ exports.getGroupsForAttendance = async (req, res) => {
       params.push(attendanceDate);
       paramIndex++;
     }
+
+    query += ` AND g.branch_id = $${paramIndex}`;
+    params.push(branchId);
+    paramIndex++;
     
     // Status filter
     if (status_filter === 'active') {
@@ -1029,15 +1058,18 @@ exports.getGroupsForAttendance = async (req, res) => {
              END as attendance_completed
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
+           AND a.branch_id = $3
            AND EXISTS (
              SELECT 1 FROM student_groups sg
              WHERE sg.student_id = a.student_id
                AND sg.group_id = a.group_id
+               AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
          WHERE l.date = $1::date
            AND l.group_id = ANY($2::int[])
+           AND l.branch_id = $3
            AND COALESCE(l.is_holiday, false) = false
          GROUP BY l.id, l.group_id
        )
@@ -1050,7 +1082,7 @@ exports.getGroupsForAttendance = async (req, res) => {
            BOOL_AND(attendance_completed) as all_attendance_completed
          FROM lesson_attendance
          GROUP BY group_id`,
-        [attendanceDate, groupIds]
+        [attendanceDate, groupIds, branchId]
       );
 
       for (const row of lessonStatsResult.rows) {
@@ -1110,6 +1142,7 @@ exports.getGroupsForAttendance = async (req, res) => {
 exports.createLesson = async (req, res) => {
   const { group_id, date, teacher_id, subject_id, room_id, start_time, end_time, status } = req.body;
   const { id: userId, role } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     if (!group_id || !date) {
@@ -1136,8 +1169,8 @@ exports.createLesson = async (req, res) => {
     const groupResult = await pool.query(
       `SELECT id, teacher_id, subject_id, room_id
        FROM groups
-       WHERE id = $1`,
-      [group_id]
+       WHERE id = $1 AND branch_id = $2`,
+      [group_id, branchId]
     );
 
     if (groupResult.rows.length === 0) {
@@ -1158,7 +1191,7 @@ exports.createLesson = async (req, res) => {
     const finalTeacherId = teacher_id || group.teacher_id || userId;
     const finalSubjectId = subject_id || group.subject_id || null;
     const finalRoomId = room_id || group.room_id || null;
-    const holidayForDate = await isHolidayDate(date);
+    const holidayForDate = await isHolidayDate(date, branchId);
 
     if (role === 'teacher' && String(finalTeacherId || '') !== String(userId)) {
       return res.status(403).json({
@@ -1169,8 +1202,8 @@ exports.createLesson = async (req, res) => {
 
     // Shu sana + vaqt uchun dars borligini tekshirish
     const existingLesson = await pool.query(
-      'SELECT id FROM lessons WHERE group_id = $1 AND date = $2 AND start_time = $3::time',
-      [group_id, date, requestedStartTime]
+      'SELECT id FROM lessons WHERE group_id = $1 AND date = $2 AND start_time = $3::time AND branch_id = $4',
+      [group_id, date, requestedStartTime, branchId]
     );
 
     if (existingLesson.rows.length > 0) {
@@ -1183,8 +1216,8 @@ exports.createLesson = async (req, res) => {
     // Yangi dars yaratish
     const newLesson = await pool.query(
       `INSERT INTO lessons (
-         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday
-       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday, branch_id
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10, $11)
        RETURNING id, date, teacher_id, subject_id, room_id, start_time, end_time, status, is_holiday`,
       [
         group_id,
@@ -1196,11 +1229,12 @@ exports.createLesson = async (req, res) => {
         requestedEndTime,
         lessonStatus,
         userId,
-        holidayForDate
+        holidayForDate,
+        branchId
       ]
     );
     const lesson_id = newLesson.rows[0].id;
-    const syncResult = await syncLessonAttendanceForDate(lesson_id, group_id, date);
+    const syncResult = await syncLessonAttendanceForDate(lesson_id, group_id, date, branchId);
 
     res.json({
       success: true,
@@ -1235,15 +1269,16 @@ exports.createLesson = async (req, res) => {
 exports.getLessonStudents = async (req, res) => {
   const { lesson_id } = req.params;
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     // Dars ma'lumotlarini olish
     const lessonInfo = await pool.query(
       `SELECT l.group_id, TO_CHAR(l.date, 'YYYY-MM') as month, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
        FROM lessons l
-       LEFT JOIN groups g ON g.id = l.group_id
-       WHERE l.id = $1`,
-      [lesson_id]
+       LEFT JOIN groups g ON g.id = l.group_id AND g.branch_id = l.branch_id
+       WHERE l.id = $1 AND l.branch_id = $2`,
+      [lesson_id, branchId]
     );
 
     if (lessonInfo.rows.length === 0) {
@@ -1264,8 +1299,8 @@ exports.getLessonStudents = async (req, res) => {
 
     // Dars sanasini olish (birinchi bo'lib)
     const lessonDate = await pool.query(
-      `SELECT date FROM lessons WHERE id = $1`,
-      [lesson_id]
+      `SELECT date FROM lessons WHERE id = $1 AND branch_id = $2`,
+      [lesson_id, branchId]
     );
     const currentLessonDate = lessonDate.rows[0].date;
 
@@ -1276,6 +1311,8 @@ exports.getLessonStudents = async (req, res) => {
        USING lessons l
        WHERE a.lesson_id = l.id
          AND a.lesson_id = $1
+         AND a.branch_id = $2
+         AND l.branch_id = $2
          AND l.status IN ('not_started', 'open')
          AND COALESCE(a.is_marked, false) = false
          AND a.updated_at = a.created_at
@@ -1284,10 +1321,11 @@ exports.getLessonStudents = async (req, res) => {
            FROM student_groups sg
            WHERE sg.student_id = a.student_id
              AND sg.group_id = l.group_id
+             AND sg.branch_id = l.branch_id
              AND DATE(sg.joined_at) <= l.date
              AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
          )`,
-      [lesson_id]
+      [lesson_id, branchId]
     );
 
     // Guruhdagi barcha talabalarni olish - faqat shu dars sanasida guruhda bo'lganlar
@@ -1297,9 +1335,10 @@ exports.getLessonStudents = async (req, res) => {
         DATE(sg.joined_at) as joined_date
       FROM student_groups sg
       WHERE sg.group_id = $1
+        AND sg.branch_id = $3
         AND DATE(sg.joined_at) <= $2::date
         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
-      [group_id, currentLessonDate]
+      [group_id, currentLessonDate, branchId]
     );
 
     // Har bir talaba uchun attendance yozuvi borligini tekshirish
@@ -1314,8 +1353,8 @@ exports.getLessonStudents = async (req, res) => {
       // Agar left_at mavjud va dars sanasidan oldin bo'lsa, attendance yaratmaymiz
 
       const existingAttendance = await pool.query(
-        `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2`,
-        [lesson_id, student.student_id]
+        `SELECT id FROM attendance WHERE lesson_id = $1 AND student_id = $2 AND branch_id = $3`,
+        [lesson_id, student.student_id, branchId]
       );
 
       if (existingAttendance.rows.length === 0) {
@@ -1327,9 +1366,10 @@ exports.getLessonStudents = async (req, res) => {
           `SELECT monthly_status 
            FROM attendance 
            WHERE student_id = $1 AND group_id = $2 
+             AND branch_id = $3
            ORDER BY created_at DESC 
            LIMIT 1`,
-          [student.student_id, group_id]
+          [student.student_id, group_id, branchId]
         );
 
         console.log(`🔍 Oxirgi oy status:`, lastMonthStatus.rows);
@@ -1349,9 +1389,9 @@ exports.getLessonStudents = async (req, res) => {
 
         // Attendance yaratish
         await pool.query(
-          `INSERT INTO attendance (lesson_id, student_id, group_id, month, month_name, status, monthly_status, is_marked) 
-           VALUES ($1, $2, $3, $4, $4, $5, $6, false)`,
-          [lesson_id, student.student_id, group_id, month, 'kelmadi', initialStatus]
+          `INSERT INTO attendance (lesson_id, student_id, group_id, branch_id, month, month_name, status, monthly_status, is_marked) 
+           VALUES ($1, $2, $3, $4, $5, $5, $6, $7, false)`,
+          [lesson_id, student.student_id, group_id, branchId, month, 'kelmadi', initialStatus]
         );
       }
     }
@@ -1384,24 +1424,28 @@ exports.getLessonStudents = async (req, res) => {
            COALESCE(ms.required_amount, sp.required_amount, g.price, 0) - COALESCE(ms.paid_amount, sp.paid_amount, 0)
          ) as debt_amount
        FROM attendance a
-       JOIN users u ON a.student_id = u.id
+       JOIN users u ON a.student_id = u.id AND u.branch_id = a.branch_id
        JOIN student_groups sg
          ON sg.student_id = a.student_id
         AND sg.group_id = a.group_id
+        AND sg.branch_id = a.branch_id
         AND DATE(sg.joined_at) <= $2::date
         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
        LEFT JOIN monthly_snapshots ms 
          ON ms.student_id = a.student_id 
         AND ms.group_id = a.group_id 
         AND ms.month = COALESCE(a.month, a.month_name)
+        AND ms.branch_id = a.branch_id
        LEFT JOIN student_payments sp
          ON sp.student_id = a.student_id
         AND sp.group_id = a.group_id
         AND sp.month = COALESCE(a.month, a.month_name)
-       LEFT JOIN groups g ON g.id = a.group_id
+        AND sp.branch_id = a.branch_id
+       LEFT JOIN groups g ON g.id = a.group_id AND g.branch_id = a.branch_id
        WHERE a.lesson_id = $1 
+         AND a.branch_id = $3
        ORDER BY a.monthly_status, u.name`,
-      [lesson_id, currentLessonDate]
+      [lesson_id, currentLessonDate, branchId]
     );
 
     res.json({
@@ -1694,6 +1738,7 @@ exports.getMonthlyAttendance = async (req, res) => {
   const { group_id } = req.params;
   const { month } = req.query; // YYYY-MM
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     const normalizedMonth = normalizeMonthParam(month);
@@ -1718,8 +1763,8 @@ exports.getMonthlyAttendance = async (req, res) => {
        FROM groups g
        JOIN subjects s ON g.subject_id = s.id  
        LEFT JOIN users t ON g.teacher_id = t.id
-       WHERE g.id = $1`,
-      [group_id]
+       WHERE g.id = $1 AND g.branch_id = $2`,
+      [group_id, branchId]
     );
 
     if (groupInfo.rows.length === 0) {
@@ -1741,15 +1786,15 @@ exports.getMonthlyAttendance = async (req, res) => {
     const lessons = await pool.query(
       `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
-       WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
+       WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2 AND branch_id = $3
        ORDER BY date`,
-      [group_id, selectedMonth]
+      [group_id, selectedMonth, branchId]
     );
 
     // SAFETY: shu oy darslaridagi attendance yozuvlari mavjudligini ta'minlaymiz
     // (bugun/kelajak sanalari uchun bo'sh kelishni oldini oladi)
     for (const lesson of lessons.rows) {
-      await syncLessonAttendanceForDate(lesson.id, group_id, lesson.date);
+      await syncLessonAttendanceForDate(lesson.id, group_id, lesson.date, branchId);
     }
 
     // Talabaning guruhdagi davrlari (bir necha marta kirib-chiqqan bo'lishi mumkin)
@@ -2233,6 +2278,7 @@ exports.getGroupLessons = async (req, res) => {
   const { group_id } = req.params;
   const { month } = req.query;
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     if (month && !isValidMonth(month)) {
@@ -2259,8 +2305,8 @@ exports.getGroupLessons = async (req, res) => {
        FROM groups g
        JOIN subjects s ON g.subject_id = s.id  
        LEFT JOIN users t ON g.teacher_id = t.id
-       WHERE g.id = $1`,
-      [group_id]
+       WHERE g.id = $1 AND g.branch_id = $2`,
+      [group_id, branchId]
     );
 
     if (groupInfo.rows.length === 0) {
@@ -2283,7 +2329,8 @@ exports.getGroupLessons = async (req, res) => {
     const autoGen = await autoGenerateLessonsForMonth({
       groupId: parseInt(group_id, 10),
       month: selectedMonth,
-      createdBy: userId
+      createdBy: userId,
+      branchId
     });
 
     // Auto-yaratilgan, lekin noto'g'ri "marked" bo'lib qolgan yozuvlarni tozalash:
@@ -2294,12 +2341,14 @@ exports.getGroupLessons = async (req, res) => {
        FROM lessons l
        WHERE a.lesson_id = l.id
          AND l.group_id = $1
-         AND TO_CHAR(l.date, 'YYYY-MM') = $2
+         AND a.branch_id = $2
+         AND l.branch_id = $2
+         AND TO_CHAR(l.date, 'YYYY-MM') = $3
          AND l.status IN ('not_started', 'open')
          AND a.is_marked = true
          AND a.status = 'kelmadi'
          AND a.updated_at = a.created_at`,
-      [group_id, selectedMonth]
+      [group_id, branchId, selectedMonth]
     );
 
     // Eski darslar 00:00 bo'lib qolgan bo'lsa, guruh schedule vaqti bilan to'ldiramiz.
@@ -2311,6 +2360,7 @@ exports.getGroupLessons = async (req, res) => {
              end_time = COALESCE(end_time, $2::time)
          WHERE l.group_id = $3
            AND TO_CHAR(l.date, 'YYYY-MM') = $4
+           AND l.branch_id = $5
            AND l.start_time = '00:00:00'::time
            AND NOT EXISTS (
              SELECT 1
@@ -2320,7 +2370,7 @@ exports.getGroupLessons = async (req, res) => {
                AND l2.start_time = $1::time
                AND l2.id <> l.id
            )`,
-        [slot.start_time, slot.end_time, group_id, selectedMonth]
+        [slot.start_time, slot.end_time, group_id, selectedMonth, branchId]
       );
     }
 
@@ -2367,20 +2417,21 @@ exports.getGroupLessons = async (req, res) => {
            ELSE false
          END as attendance_completed
        FROM lessons l
-       LEFT JOIN attendance a ON l.id = a.lesson_id
+       LEFT JOIN attendance a ON l.id = a.lesson_id AND a.branch_id = $3
          AND EXISTS (
            SELECT 1 FROM student_groups sg
            WHERE sg.student_id = a.student_id
              AND sg.group_id = a.group_id
+             AND sg.branch_id = $3
              AND DATE(sg.joined_at) <= l.date
              AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
          )
        LEFT JOIN subjects s2 ON l.subject_id = s2.id
        LEFT JOIN rooms r2 ON l.room_id = r2.id
-       WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
+       WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2 AND l.branch_id = $3
        GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.is_holiday, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number
        ORDER BY l.date DESC, l.start_time ASC`,
-      [group_id, selectedMonth]
+      [group_id, selectedMonth, branchId]
     );
 
     res.json({
@@ -2422,6 +2473,7 @@ exports.getGroupLessons = async (req, res) => {
 exports.getMyLessons = async (req, res) => {
   const { role, id: userId } = req.user;
   const { date, month } = req.query;
+  const branchId = getScopedBranchId(req);
 
   try {
     if (role !== 'teacher') {
@@ -2451,16 +2503,17 @@ exports.getMyLessons = async (req, res) => {
     const autoGen = await ensureGeneratedLessonsForScope({
       month: selectedMonth,
       createdBy: userId,
-      teacherId: userId
+      teacherId: userId,
+      branchId
     });
 
-    const params = [userId];
+    const params = [userId, branchId];
     let filterQuery = '';
     if (selectedDate) {
-      filterQuery = ` AND l.date = $2::date`;
+      filterQuery = ` AND l.date = $3::date`;
       params.push(selectedDate);
     } else {
-      filterQuery = ` AND TO_CHAR(l.date, 'YYYY-MM') = $2`;
+      filterQuery = ` AND TO_CHAR(l.date, 'YYYY-MM') = $3`;
       params.push(selectedMonth);
     }
 
@@ -2485,19 +2538,21 @@ exports.getMyLessons = async (req, res) => {
          COUNT(CASE WHEN COALESCE(a.is_marked, false) THEN 1 END)
            FILTER (WHERE COALESCE(l.is_holiday, false) = false) as marked_students
        FROM lessons l
-       JOIN groups g ON g.id = l.group_id
+       JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
        LEFT JOIN subjects s ON s.id = l.subject_id
        LEFT JOIN subjects gs ON gs.id = g.subject_id
        LEFT JOIN rooms r ON r.id = l.room_id
-       LEFT JOIN attendance a ON a.lesson_id = l.id
+       LEFT JOIN attendance a ON a.lesson_id = l.id AND a.branch_id = $2
            AND EXISTS (
              SELECT 1 FROM student_groups sg
              WHERE sg.student_id = a.student_id
                AND sg.group_id = a.group_id
+               AND sg.branch_id = $2
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
        WHERE l.teacher_id = $1
+         AND l.branch_id = $2
          ${filterQuery}
        GROUP BY l.id, g.name, s.name, gs.name, r.room_number, l.is_holiday
        ORDER BY l.date ASC, l.start_time ASC`,
@@ -2529,6 +2584,7 @@ exports.getMyLessons = async (req, res) => {
 exports.getAdminTeachersAttendance = async (req, res) => {
   const { id: userId } = req.user;
   const { date, shift } = req.query;
+  const branchId = getScopedBranchId(req);
 
   try {
     const selectedDate = date || new Date().toISOString().slice(0, 10);
@@ -2555,7 +2611,8 @@ exports.getAdminTeachersAttendance = async (req, res) => {
 
     await ensureGeneratedLessonsForScope({
       month: selectedDate.slice(0, 7),
-      createdBy: userId
+      createdBy: userId,
+      branchId
     });
 
     const shiftSql = selectedShift === 'morning'
@@ -2577,15 +2634,17 @@ exports.getAdminTeachersAttendance = async (req, res) => {
        FROM users u
        LEFT JOIN lessons l ON l.teacher_id = u.id
          AND l.date = $1::date
+         AND l.branch_id = $2
          ${shiftSql}
-       LEFT JOIN groups g ON g.id = l.group_id
+       LEFT JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
        LEFT JOIN subjects s ON s.id = l.subject_id
        LEFT JOIN subjects gs ON gs.id = g.subject_id
        WHERE u.role = 'teacher'
+         AND u.branch_id = $2
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(l.id) > 0
        ORDER BY full_name`,
-      [selectedDate]
+      [selectedDate, branchId]
     );
 
     return res.json({
@@ -2613,6 +2672,7 @@ exports.getAdminTeacherLessons = async (req, res) => {
   const { id: userId } = req.user;
   const { teacher_id } = req.params;
   const { date, shift } = req.query;
+  const branchId = getScopedBranchId(req);
 
   try {
     const teacherIdNum = Number(teacher_id);
@@ -2648,7 +2708,8 @@ exports.getAdminTeacherLessons = async (req, res) => {
     await ensureGeneratedLessonsForScope({
       month: selectedDate.slice(0, 7),
       createdBy: userId,
-      teacherId: teacherIdNum
+      teacherId: teacherIdNum,
+      branchId
     });
 
     const shiftSql = selectedShift === 'morning'
@@ -2675,25 +2736,27 @@ exports.getAdminTeacherLessons = async (req, res) => {
          COUNT(CASE WHEN a.status = 'kelmadi' AND COALESCE(a.is_marked, false) THEN 1 END) as absent_count,
          COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END) as late_count
        FROM lessons l
-       JOIN users t ON t.id = l.teacher_id
-       JOIN groups g ON g.id = l.group_id
+       JOIN users t ON t.id = l.teacher_id AND t.branch_id = $3
+       JOIN groups g ON g.id = l.group_id AND g.branch_id = $3
        LEFT JOIN subjects s ON s.id = l.subject_id
        LEFT JOIN subjects gs ON gs.id = g.subject_id
        LEFT JOIN rooms r ON r.id = l.room_id
-       LEFT JOIN attendance a ON a.lesson_id = l.id
+       LEFT JOIN attendance a ON a.lesson_id = l.id AND a.branch_id = $3
            AND EXISTS (
              SELECT 1 FROM student_groups sg
              WHERE sg.student_id = a.student_id
                AND sg.group_id = a.group_id
+               AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
        WHERE l.teacher_id = $1
          AND l.date = $2::date
+         AND l.branch_id = $3
          ${shiftSql}
        GROUP BY l.id, g.name, t.name, t.surname, s.name, gs.name, r.room_number
        ORDER BY l.start_time ASC, l.id ASC`,
-      [teacherIdNum, selectedDate]
+      [teacherIdNum, selectedDate, branchId]
     );
 
     return res.json({
@@ -2722,6 +2785,7 @@ exports.regenerateGroupLessons = async (req, res) => {
   const { group_id } = req.params;
   const { month, from_date, append_only } = req.body || {};
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
 
   let transactionStarted = false;
   try {
@@ -2750,8 +2814,8 @@ exports.regenerateGroupLessons = async (req, res) => {
     const groupCheck = await pool.query(
       `SELECT id, teacher_id
        FROM groups
-       WHERE id = $1`,
-      [group_id]
+       WHERE id = $1 AND branch_id = $2`,
+      [group_id, branchId]
     );
 
     if (groupCheck.rows.length === 0) {
@@ -2784,15 +2848,18 @@ exports.regenerateGroupLessons = async (req, res) => {
          USING lessons l
          WHERE a.lesson_id = l.id
            AND l.group_id = $1
+           AND a.branch_id = $4
+           AND l.branch_id = $4
            AND l.date BETWEEN $2::date AND $3::date`,
-        [group_id, deleteStart, deleteEnd]
+        [group_id, deleteStart, deleteEnd, branchId]
       );
 
       deletedLessons = await pool.query(
         `DELETE FROM lessons
          WHERE group_id = $1
+           AND branch_id = $4
            AND date BETWEEN $2::date AND $3::date`,
-        [group_id, deleteStart, deleteEnd]
+        [group_id, deleteStart, deleteEnd, branchId]
       );
 
       await pool.query('COMMIT');
@@ -2803,15 +2870,17 @@ exports.regenerateGroupLessons = async (req, res) => {
       groupId: Number(group_id),
       month: selectedMonth,
       createdBy: userId,
-      fromDate: deleteStart
+      fromDate: deleteStart,
+      branchId
     });
 
     const lessonsAfter = await pool.query(
       `SELECT COUNT(*)::int as lesson_count
        FROM lessons
        WHERE group_id = $1
-         AND TO_CHAR(date, 'YYYY-MM') = $2`,
-      [group_id, selectedMonth]
+         AND TO_CHAR(date, 'YYYY-MM') = $2
+         AND branch_id = $3`,
+      [group_id, selectedMonth, branchId]
     );
 
     return res.json({
@@ -2851,6 +2920,7 @@ exports.updateLessonDate = async (req, res) => {
   const { lesson_id } = req.params;
   const { date } = req.body;
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
 
   try {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -2863,9 +2933,9 @@ exports.updateLessonDate = async (req, res) => {
     const lessonResult = await pool.query(
       `SELECT l.id, l.group_id, l.date, l.start_time, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
        FROM lessons l
-       JOIN groups g ON g.id = l.group_id
-       WHERE l.id = $1`,
-      [lesson_id]
+       JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
+       WHERE l.id = $1 AND l.branch_id = $2`,
+      [lesson_id, branchId]
     );
 
     if (lessonResult.rows.length === 0) {
@@ -2890,8 +2960,9 @@ exports.updateLessonDate = async (req, res) => {
        WHERE group_id = $1
          AND date = $2::date
          AND start_time = $4::time
-         AND id <> $3`,
-      [lesson.group_id, date, lesson_id, lesson.start_time]
+         AND id <> $3
+         AND branch_id = $5`,
+      [lesson.group_id, date, lesson_id, lesson.start_time, branchId]
     );
 
     if (duplicate.rows.length > 0) {
@@ -2901,17 +2972,17 @@ exports.updateLessonDate = async (req, res) => {
       });
     }
 
-    const holidayForDate = await isHolidayDate(date);
+    const holidayForDate = await isHolidayDate(date, branchId);
 
     await pool.query(
       `UPDATE lessons
        SET date = $1::date,
            is_holiday = $3
-       WHERE id = $2`,
-      [date, lesson_id, holidayForDate]
+       WHERE id = $2 AND branch_id = $4`,
+      [date, lesson_id, holidayForDate, branchId]
     );
 
-    await syncLessonAttendanceForDate(lesson_id, lesson.group_id, date);
+    await syncLessonAttendanceForDate(lesson_id, lesson.group_id, date, branchId);
 
     return res.json({
       success: true,
@@ -2949,6 +3020,7 @@ exports.createManualLesson = async (req, res) => {
     status
   } = req.body || {};
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
 
   try {
     if (!group_id || !date || !start_time) {
@@ -2979,8 +3051,8 @@ exports.createManualLesson = async (req, res) => {
     const groupResult = await pool.query(
       `SELECT id, teacher_id, subject_id, room_id
        FROM groups
-       WHERE id = $1`,
-      [group_id]
+       WHERE id = $1 AND branch_id = $2`,
+      [group_id, branchId]
     );
     if (groupResult.rows.length === 0) {
       return res.status(404).json({
@@ -3010,15 +3082,16 @@ exports.createManualLesson = async (req, res) => {
       : getDefaultLessonStatusForDate(date);
     const normalizedStartTime = normalizeTimeValue(start_time);
     const normalizedEndTime = end_time ? normalizeTimeValue(end_time, null) : null;
-    const holidayForDate = await isHolidayDate(date);
+    const holidayForDate = await isHolidayDate(date, branchId);
 
     const duplicate = await pool.query(
       `SELECT id
        FROM lessons
        WHERE group_id = $1
          AND date = $2::date
-         AND start_time = $3::time`,
-      [group_id, date, normalizedStartTime]
+         AND start_time = $3::time
+         AND branch_id = $4`,
+      [group_id, date, normalizedStartTime, branchId]
     );
     if (duplicate.rows.length > 0) {
       return res.status(400).json({
@@ -3029,8 +3102,8 @@ exports.createManualLesson = async (req, res) => {
 
     const created = await pool.query(
       `INSERT INTO lessons (
-         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday
-       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10)
+         group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, is_holiday, branch_id
+       ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, $8, $9, $10, $11)
        RETURNING id, group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, is_holiday`,
       [
         group_id,
@@ -3042,12 +3115,13 @@ exports.createManualLesson = async (req, res) => {
         normalizedEndTime,
         finalStatus,
         userId,
-        holidayForDate
+        holidayForDate,
+        branchId
       ]
     );
 
     const lesson = created.rows[0];
-    await syncLessonAttendanceForDate(lesson.id, group_id, date);
+    await syncLessonAttendanceForDate(lesson.id, group_id, date, branchId);
     await writeLessonAuditLog({
       lessonId: lesson.id,
       changedBy: userId,
@@ -3078,6 +3152,7 @@ exports.patchLesson = async (req, res) => {
   const { lesson_id } = req.params;
   const { role, id: userId } = req.user;
   const { teacher_id, subject_id, room_id, date, start_time, end_time, status } = req.body || {};
+  const branchId = getScopedBranchId(req);
 
   try {
     if (
@@ -3123,9 +3198,9 @@ exports.patchLesson = async (req, res) => {
     const lessonResult = await pool.query(
       `SELECT l.*, COALESCE(l.teacher_id, g.teacher_id) as effective_teacher_id
        FROM lessons l
-       LEFT JOIN groups g ON g.id = l.group_id
-       WHERE l.id = $1`,
-      [lesson_id]
+       LEFT JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
+       WHERE l.id = $1 AND l.branch_id = $2`,
+      [lesson_id, branchId]
     );
     if (lessonResult.rows.length === 0) {
       return res.status(404).json({
@@ -3154,7 +3229,7 @@ exports.patchLesson = async (req, res) => {
     const nextSubjectId = subject_id !== undefined ? subject_id : current.subject_id;
     const nextRoomId = room_id !== undefined ? room_id : current.room_id;
     const nextIsHoliday = date !== undefined
-      ? await isHolidayDate(nextDate)
+      ? await isHolidayDate(nextDate, branchId)
       : Boolean(current.is_holiday);
 
     if (role === 'teacher' && teacher_id !== undefined && String(nextTeacherId || '') !== String(userId)) {
@@ -3170,8 +3245,9 @@ exports.patchLesson = async (req, res) => {
        WHERE group_id = $1
          AND date = $2::date
          AND start_time = $3::time
-         AND id <> $4`,
-      [current.group_id, nextDate, nextStartTime, lesson_id]
+         AND id <> $4
+         AND branch_id = $5`,
+      [current.group_id, nextDate, nextStartTime, lesson_id, branchId]
     );
     if (duplicate.rows.length > 0) {
       return res.status(400).json({
@@ -3190,13 +3266,13 @@ exports.patchLesson = async (req, res) => {
            end_time = $6::time,
            status = $7,
            is_holiday = $9
-       WHERE id = $8
+       WHERE id = $8 AND branch_id = $10
        RETURNING *`,
-      [nextTeacherId, nextSubjectId, nextRoomId, nextDate, nextStartTime, nextEndTime, nextStatus, lesson_id, nextIsHoliday]
+      [nextTeacherId, nextSubjectId, nextRoomId, nextDate, nextStartTime, nextEndTime, nextStatus, lesson_id, nextIsHoliday, branchId]
     );
 
     if (nextDate !== formatDateUtc(new Date(current.date))) {
-      await syncLessonAttendanceForDate(current.id, current.group_id, nextDate);
+      await syncLessonAttendanceForDate(current.id, current.group_id, nextDate, branchId);
     }
 
     await writeLessonAuditLog({
@@ -3244,6 +3320,7 @@ exports.patchLesson = async (req, res) => {
 exports.setHolidayForDate = async (req, res) => {
   const { date, is_holiday = true } = req.body || {};
   const { id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
 
   try {
     if (!isValidDate(date)) {
@@ -3256,7 +3333,8 @@ exports.setHolidayForDate = async (req, res) => {
     const updatedLessons = await applyGlobalHoliday({
       date,
       isHoliday: Boolean(is_holiday),
-      userId
+      userId,
+      branchId
     });
 
     return res.json({
@@ -3328,14 +3406,15 @@ exports.getGlobalHolidays = async (req, res) => {
 exports.deleteLesson = async (req, res) => {
   const { lesson_id } = req.params;
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     const lessonResult = await pool.query(
       `SELECT l.id, COALESCE(l.teacher_id, g.teacher_id) as teacher_id
        FROM lessons l
-       LEFT JOIN groups g ON g.id = l.group_id
-       WHERE l.id = $1`,
-      [lesson_id]
+       LEFT JOIN groups g ON g.id = l.group_id AND g.branch_id = l.branch_id
+       WHERE l.id = $1 AND l.branch_id = $2`,
+      [lesson_id, branchId]
     );
 
     if (lessonResult.rows.length === 0) {
@@ -3355,10 +3434,10 @@ exports.deleteLesson = async (req, res) => {
     await pool.query('BEGIN');
 
     // Attendance yozuvlarini o'chirish
-    await pool.query('DELETE FROM attendance WHERE lesson_id = $1', [lesson_id]);
+    await pool.query('DELETE FROM attendance WHERE lesson_id = $1 AND branch_id = $2', [lesson_id, branchId]);
 
     // Darsni o'chirish
-    const result = await pool.query('DELETE FROM lessons WHERE id = $1 RETURNING id', [lesson_id]);
+    const result = await pool.query('DELETE FROM lessons WHERE id = $1 AND branch_id = $2 RETURNING id', [lesson_id, branchId]);
     if (result.rowCount === 0) {
       await pool.query('ROLLBACK');
       return res.status(404).json({
@@ -3391,6 +3470,7 @@ exports.exportMonthlyAttendance = async (req, res) => {
   const { group_id } = req.params;
   const { role, id: userId } = req.user;
   const { month } = req.query;
+  const branchId = getScopedBranchId(req);
   
   try {
     const normalizedMonth = normalizeMonthParam(month);
@@ -3411,10 +3491,10 @@ exports.exportMonthlyAttendance = async (req, res) => {
         s.name as subject_name,
         CONCAT(t.name, ' ', t.surname) as teacher_name
       FROM groups g
-      LEFT JOIN subjects s ON g.subject_id = s.id
-      LEFT JOIN users t ON g.teacher_id = t.id
-      WHERE g.id = $1
-    `, [group_id]);
+      LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = g.branch_id
+      LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = g.branch_id
+      WHERE g.id = $1 AND g.branch_id = $2
+    `, [group_id, branchId]);
     
     if (groupResult.rows.length === 0) {
       return res.status(404).json({
@@ -3437,9 +3517,9 @@ exports.exportMonthlyAttendance = async (req, res) => {
     const lessons = await pool.query(
       `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
-       WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2
+       WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2 AND branch_id = $3
        ORDER BY date`,
-      [group_id, normalizedMonth]
+      [group_id, normalizedMonth, branchId]
     );
     
     if (lessons.rows.length === 0) {
@@ -3461,13 +3541,13 @@ exports.exportMonthlyAttendance = async (req, res) => {
         COALESCE(l.is_holiday, false) as is_holiday,
         COALESCE(a.monthly_status, 'active') as monthly_status
       FROM attendance a
-      JOIN users u ON a.student_id = u.id  
-      JOIN lessons l ON a.lesson_id = l.id
-      WHERE a.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
+      JOIN users u ON a.student_id = u.id AND u.branch_id = a.branch_id
+      JOIN lessons l ON a.lesson_id = l.id AND l.branch_id = a.branch_id
+      WHERE a.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2 AND a.branch_id = $3
       ORDER BY u.name, u.surname, l.date
     `;
     
-    const attendanceResult = await pool.query(attendanceQuery, [group_id, normalizedMonth]);
+    const attendanceResult = await pool.query(attendanceQuery, [group_id, normalizedMonth, branchId]);
     
     
     if (attendanceResult.rows.length === 0) {

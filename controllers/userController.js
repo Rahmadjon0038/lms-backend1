@@ -9,11 +9,12 @@ const {
     removeSubjectFromTeacher,
     getTeachersBySubject
 } = require('../models/teacherSubjectModel');
+const { getScopedBranchId, getUserBranchId } = require('../utils/branch');
 
 // Yordamchi funksiya: Access Token yaratish (15 minutlik)
 const generateAccessToken = (user) => {
     return jwt.sign(
-        { id: user.id, role: user.role },
+        { id: user.id, role: user.role, branch_id: user.branch_id || 1 },
         process.env.JWT_SECRET,
         { expiresIn: '1d' }
     );
@@ -117,6 +118,8 @@ const normalizeAgeValue = (age) => {
 
 const profileSelectColumns = `
     u.id,
+    u.branch_id,
+    b.name AS branch_name,
     u.name,
     u.surname,
     u.username,
@@ -161,7 +164,7 @@ const loginSelectColumns = `
     u.password_plain
 `;
 
-const generateUniqueUsername = async (baseUsername, usedUsernames) => {
+const generateUniqueUsername = async (baseUsername, usedUsernames, branchId = 1) => {
     const base = normalizeUsername(baseUsername);
     if (!base) {
         throw new Error("username majburiy");
@@ -171,7 +174,10 @@ const generateUniqueUsername = async (baseUsername, usedUsernames) => {
 
     while (true) {
         if (!usedUsernames.has(candidate)) {
-            const exists = await pool.query('SELECT 1 FROM users WHERE username = $1', [candidate]);
+            const exists = await pool.query(
+                'SELECT 1 FROM users WHERE username = $1 AND branch_id = $2',
+                [candidate, branchId]
+            );
             if (exists.rows.length === 0) {
                 usedUsernames.add(candidate);
                 return candidate;
@@ -189,6 +195,7 @@ const generateUniqueUsername = async (baseUsername, usedUsernames) => {
 const registerStudent = async (req, res) => {
     const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
     try {
+        const branchId = getUserBranchId(req.user);
         const { value: normalizedAge, error: ageError } = normalizeAgeValue(age);
         if (ageError) {
             return res.status(400).json({ message: ageError });
@@ -198,14 +205,17 @@ const registerStudent = async (req, res) => {
             return res.status(400).json({ message: "subject_id majburiy va butun son bo'lishi kerak" });
         }
 
-        const userExists = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        const userExists = await pool.query(
+            'SELECT * FROM users WHERE username = $1 AND branch_id = $2',
+            [username, branchId]
+        );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
 
         const subjectResult = await pool.query(
-            'SELECT id, name FROM subjects WHERE id = $1',
-            [normalizedSubjectId]
+            'SELECT id, name FROM subjects WHERE id = $1 AND branch_id = $2',
+            [normalizedSubjectId, branchId]
         );
         if (subjectResult.rows.length === 0) {
             return res.status(400).json({ message: "Tanlangan fan topilmadi" });
@@ -221,10 +231,11 @@ const registerStudent = async (req, res) => {
         const newUser = await pool.query(
             `INSERT INTO users (
                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
+                branch_id,
                 unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             ) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP) 
-             RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
+             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
             [
                 name,
                 surname,
@@ -239,6 +250,7 @@ const registerStudent = async (req, res) => {
                 normalizedAge,
                 selectedSubject.name,
                 normalizedSubjectId,
+                branchId,
                 "Yangi qo'shilgan",
                 recoveryKey,
                 recoveryKeyHash
@@ -264,6 +276,7 @@ const registerStudentsBulk = async (req, res) => {
     }
 
     try {
+        const branchId = getUserBranchId(req.user);
         const subjectIds = [
             ...new Set(
                 students
@@ -273,7 +286,10 @@ const registerStudentsBulk = async (req, res) => {
         ];
 
         const subjectsResult = subjectIds.length
-            ? await pool.query('SELECT id, name FROM subjects WHERE id = ANY($1)', [subjectIds])
+            ? await pool.query(
+                'SELECT id, name FROM subjects WHERE id = ANY($1) AND branch_id = $2',
+                [subjectIds, branchId]
+              )
             : { rows: [] };
         const subjectMap = new Map(subjectsResult.rows.map((row) => [row.id, row]));
 
@@ -324,7 +340,7 @@ const registerStudentsBulk = async (req, res) => {
             }
 
             try {
-                let finalUsername = await generateUniqueUsername(username, usedUsernames);
+                let finalUsername = await generateUniqueUsername(username, usedUsernames, branchId);
                 const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(password);
 
                 let recoveryKey = generatePlainRecoveryKey();
@@ -337,10 +353,11 @@ const registerStudentsBulk = async (req, res) => {
                         const newUser = await pool.query(
                             `INSERT INTO users (
                                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
+                                branch_id,
                                 unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
                             ) 
-                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP) 
-                             RETURNING id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
+                             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
                             [
                                 name,
                                 surname,
@@ -355,6 +372,7 @@ const registerStudentsBulk = async (req, res) => {
                                 normalizedAge,
                                 subject.name,
                                 subjectId,
+                                branchId,
                                 "Yangi qo'shilgan",
                                 recoveryKey,
                                 recoveryKeyHash
@@ -454,8 +472,12 @@ const registerTeacher = async (req, res) => {
     } = req.body;
     
     try {
+        const branchId = getUserBranchId(req.user);
         // Username mavjudligini tekshirish
-        const userExists = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        const userExists = await pool.query(
+            'SELECT * FROM users WHERE username = $1 AND branch_id = $2',
+            [username, branchId]
+        );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
@@ -467,8 +489,8 @@ const registerTeacher = async (req, res) => {
 
         // Barcha subject_ids mavjudligini tekshirish
         const subjectsCheck = await pool.query(
-            'SELECT id, name FROM subjects WHERE id = ANY($1)',
-            [subject_ids]
+            'SELECT id, name FROM subjects WHERE id = ANY($1) AND branch_id = $2',
+            [subject_ids, branchId]
         );
         
         if (subjectsCheck.rows.length !== subject_ids.length) {
@@ -489,13 +511,13 @@ const registerTeacher = async (req, res) => {
         const newTeacher = await pool.query(
             `INSERT INTO users (name, surname, username, password, password_plain, phone, phone2, role, start_date, 
                                certificate, age, has_experience, experience_years, experience_place, 
-                               available_times, work_days_hours, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'teacher', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
-             RETURNING id, name, surname, username, role, start_date, certificate, age, 
+                               available_times, work_days_hours, branch_id, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'teacher', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP) 
+             RETURNING id, branch_id, name, surname, username, role, start_date, certificate, age, 
                        has_experience, experience_years, experience_place, available_times, work_days_hours, password_plain`,
             [name, surname, username, hashedPassword, password, phone, phone2, startDate || new Date(),
              certificate, age, has_experience || false, experience_years, experience_place, 
-             available_times, work_days_hours, recoveryKey, recoveryKeyHash]
+             available_times, work_days_hours, branchId, recoveryKey, recoveryKeyHash]
         );
 
         const teacherId = newTeacher.rows[0].id;
@@ -506,7 +528,7 @@ const registerTeacher = async (req, res) => {
             const subjectId = subject_ids[i];
             
             try {
-                await addSubjectToTeacher(teacherId, subjectId);
+                await addSubjectToTeacher(teacherId, subjectId, branchId);
                 const subjectInfo = subjectsCheck.rows.find(s => s.id === subjectId);
                 assignedSubjects.push({
                     id: subjectId,
@@ -541,7 +563,11 @@ const registerAdmin = async (req, res) => {
     }
 
     try {
-        const userExists = await pool.query('SELECT 1 FROM users WHERE username = $1', [username]);
+        const branchId = getUserBranchId(req.user);
+        const userExists = await pool.query(
+            'SELECT 1 FROM users WHERE username = $1 AND branch_id = $2',
+            [username, branchId]
+        );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
         }
@@ -555,11 +581,11 @@ const registerAdmin = async (req, res) => {
         const newAdmin = await pool.query(
             `INSERT INTO users (
                 name, surname, username, password, role, phone, phone2,
-                password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
+                branch_id, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             )
-             VALUES ($1, $2, $3, $4, 'admin', $5, $6, $7, $8, CURRENT_TIMESTAMP)
-             RETURNING id, name, surname, username, role, phone, phone2, status, created_at`,
-            [name, surname, username, hashedPassword, phone || null, phone2 || null, recoveryKey, recoveryKeyHash]
+             VALUES ($1, $2, $3, $4, 'admin', $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+             RETURNING id, branch_id, name, surname, username, role, phone, phone2, status, created_at`,
+            [name, surname, username, hashedPassword, phone || null, phone2 || null, branchId, recoveryKey, recoveryKeyHash]
         );
 
         return res.status(201).json({
@@ -576,9 +602,10 @@ const registerAdmin = async (req, res) => {
 // 5.A. Barcha adminlarni olish (Super admin)
 const getAdmins = async (req, res) => {
     const { status, month_name } = req.query || {};
-    const filters = [`u.role = 'admin'`];
-    const params = [];
-    let idx = 1;
+    const branchId = getScopedBranchId(req);
+    const filters = [`u.role = 'admin'`, `u.branch_id = $1`];
+    const params = [branchId];
+    let idx = 2;
 
     if (status) {
         const validStatuses = ['active', 'terminated', 'on_leave'];
@@ -641,7 +668,7 @@ const getAdmins = async (req, res) => {
                        asp.month_name as salary_month
                 FROM users u
                 LEFT JOIN admin_salary_payouts asp
-                  ON asp.admin_id = u.id AND asp.month_name = $${monthParamIndex}
+                  ON asp.admin_id = u.id AND asp.month_name = $${monthParamIndex} AND asp.branch_id = u.branch_id
                 ${whereClause}
                 ORDER BY u.created_at DESC
             `;
@@ -691,11 +718,12 @@ const updateAdminStatus = async (req, res) => {
     }
 
     try {
+        const branchId = getScopedBranchId(req);
         const admin = await pool.query(
             `SELECT id, name, surname, status
              FROM users
-             WHERE id = $1 AND role = 'admin'`,
-            [adminId]
+             WHERE id = $1 AND role = 'admin' AND branch_id = $2`,
+            [adminId, branchId]
         );
 
         if (admin.rows.length === 0) {
@@ -711,8 +739,8 @@ const updateAdminStatus = async (req, res) => {
             `UPDATE users
              SET status = $1,
                  termination_date = $2
-             WHERE id = $3`,
-            [status, terminationDateValue, adminId]
+             WHERE id = $3 AND branch_id = $4`,
+            [status, terminationDateValue, adminId, branchId]
         );
 
         return res.json({
@@ -744,18 +772,19 @@ const deleteAdmin = async (req, res) => {
     }
 
     try {
+        const branchId = getScopedBranchId(req);
         const admin = await pool.query(
             `SELECT id, name, surname, username, role, status
              FROM users
-             WHERE id = $1 AND role = 'admin'`,
-            [adminId]
+             WHERE id = $1 AND role = 'admin' AND branch_id = $2`,
+            [adminId, branchId]
         );
 
         if (admin.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Admin topilmadi' });
         }
 
-        await pool.query('DELETE FROM users WHERE id = $1', [adminId]);
+        await pool.query('DELETE FROM users WHERE id = $1 AND branch_id = $2', [adminId, branchId]);
 
         return res.json({
             success: true,
@@ -771,6 +800,7 @@ const deleteAdmin = async (req, res) => {
 const loginStudent = async (req, res) => {
     const usernameRaw = typeof req.body?.username === 'string' ? req.body.username : '';
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const requestedBranchId = Number(req.body?.branch_id);
     const username = usernameRaw.trim();
 
     if (!username || !password) {
@@ -781,17 +811,19 @@ const loginStudent = async (req, res) => {
         const result = await pool.query(
             `SELECT ${loginSelectColumns}
              FROM users u
-             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
-             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
-             LEFT JOIN groups g ON sg.group_id = g.id
-             LEFT JOIN rooms r ON g.room_id = r.id
-             LEFT JOIN subjects s ON g.subject_id = s.id
-             LEFT JOIN subjects ss ON u.subject_id = ss.id
-             LEFT JOIN users t ON g.teacher_id = t.id
+             LEFT JOIN branches b ON b.id = u.branch_id
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = u.branch_id
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active' AND sg.branch_id = u.branch_id
+             LEFT JOIN groups g ON sg.group_id = g.id AND g.branch_id = u.branch_id
+             LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = u.branch_id
+             LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = u.branch_id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id AND ss.branch_id = u.branch_id
+             LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = u.branch_id
              WHERE BTRIM(u.username) = BTRIM($1)
+               AND ($2::int IS NULL OR u.branch_id = $2)
              ORDER BY sg.id DESC NULLS LAST
              LIMIT 1`, 
-            [username]
+            [username, Number.isInteger(requestedBranchId) && requestedBranchId > 0 ? requestedBranchId : null]
         );
         const user = result.rows[0];
         const storedPassword = typeof user?.password === 'string' ? user.password : '';
@@ -818,6 +850,8 @@ const loginStudent = async (req, res) => {
                 refreshToken,
                 user: { 
                     id: user.id, 
+                    branch_id: user.branch_id || 1,
+                    branch_name: user.branch_name || null,
                     name: user.name, 
                     surname: user.surname,
                     role: user.role,
@@ -855,7 +889,7 @@ const refreshAccessToken = async (req, res) => {
         const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 
         // Bazadan foydalanuvchini topamiz
-        const result = await pool.query('SELECT id, role FROM users WHERE id = $1', [decoded.id]);
+        const result = await pool.query('SELECT id, role, branch_id FROM users WHERE id = $1', [decoded.id]);
         const user = result.rows[0];
 
         if (!user) {
@@ -875,7 +909,7 @@ const refreshAccessToken = async (req, res) => {
 const getProfile = async (req, res) => {
     try {
         const user = await pool.query(
-            `SELECT u.id, u.name, u.surname, u.username, u.role, u.status, u.phone, u.phone2, u.father_name, u.father_phone, u.address, u.age, 
+            `SELECT u.id, u.branch_id, b.name AS branch_name, u.name, u.surname, u.username, u.role, u.status, u.phone, u.phone2, u.father_name, u.father_phone, u.address, u.age, 
                     u.avatar_key, pa.image_path AS avatar_url, pa.name AS avatar_name,
                     u.subject, u.start_date, u.end_date, u.certificate, u.has_experience, u.experience_years, u.experience_place, 
                     u.available_times, u.work_days_hours, u.created_at,
@@ -889,13 +923,14 @@ const getProfile = async (req, res) => {
                     COALESCE(s.name, ss.name) as subject_name,
                     CONCAT(t.name, ' ', t.surname) as teacher_name
              FROM users u
-             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
-             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
-             LEFT JOIN groups g ON sg.group_id = g.id
-             LEFT JOIN rooms r ON g.room_id = r.id
-             LEFT JOIN subjects s ON g.subject_id = s.id
-             LEFT JOIN subjects ss ON u.subject_id = ss.id
-             LEFT JOIN users t ON g.teacher_id = t.id
+             LEFT JOIN branches b ON b.id = u.branch_id
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = u.branch_id
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active' AND sg.branch_id = u.branch_id
+             LEFT JOIN groups g ON sg.group_id = g.id AND g.branch_id = u.branch_id
+             LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = u.branch_id
+             LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = u.branch_id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id AND ss.branch_id = u.branch_id
+             LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = u.branch_id
              WHERE u.id = $1`,
             [req.user.id]
         );
@@ -1013,8 +1048,9 @@ const updateProfile = async (req, res) => {
                  FROM users
                  WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
+                   AND branch_id = $3
                  LIMIT 1`,
-                [incoming.username, req.user.id]
+                [incoming.username, req.user.id, getUserBranchId(req.user)]
             );
 
             if (usernameExists.rows.length > 0) {
@@ -1028,11 +1064,11 @@ const updateProfile = async (req, res) => {
         const updated = await pool.query(
             `UPDATE users
              SET ${setClauses.join(', ')}
-             WHERE id = $${index}
+             WHERE id = $${index} AND branch_id = $${index + 1}
              RETURNING id, name, surname, username, role, status, phone, phone2, father_name, father_phone, address, age,
                        certificate, has_experience, experience_years, experience_place, available_times, work_days_hours, avatar_key, created_at`
             ,
-            values
+            [...values, getUserBranchId(req.user)]
         );
 
         if (updated.rows.length === 0) {
@@ -1045,13 +1081,14 @@ const updateProfile = async (req, res) => {
         const profile = await pool.query(
             `SELECT ${profileSelectColumns}
              FROM users u
-             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key)
-             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active'
-             LEFT JOIN groups g ON sg.group_id = g.id
-             LEFT JOIN rooms r ON g.room_id = r.id
-             LEFT JOIN subjects s ON g.subject_id = s.id
-             LEFT JOIN subjects ss ON u.subject_id = ss.id
-             LEFT JOIN users t ON g.teacher_id = t.id
+             LEFT JOIN branches b ON b.id = u.branch_id
+             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = u.branch_id
+             LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.status = 'active' AND sg.branch_id = u.branch_id
+             LEFT JOIN groups g ON sg.group_id = g.id AND g.branch_id = u.branch_id
+             LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = u.branch_id
+             LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = u.branch_id
+             LEFT JOIN subjects ss ON u.subject_id = ss.id AND ss.branch_id = u.branch_id
+             LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = u.branch_id
              WHERE u.id = $1`,
             [req.user.id]
         );
@@ -1184,11 +1221,12 @@ const updateStudentInfo = async (req, res) => {
     }
 
     try {
+        const branchId = getScopedBranchId(req);
         const studentCheck = await pool.query(
             `SELECT id, name, surname
              FROM users
-             WHERE id = $1 AND role = 'student'`,
-            [studentId]
+             WHERE id = $1 AND role = 'student' AND branch_id = $2`,
+            [studentId, branchId]
         );
 
         if (studentCheck.rows.length === 0) {
@@ -1202,10 +1240,10 @@ const updateStudentInfo = async (req, res) => {
             const teacherAccess = await pool.query(
                 `SELECT 1
                  FROM student_groups sg
-                 JOIN groups g ON sg.group_id = g.id
-                 WHERE sg.student_id = $1 AND g.teacher_id = $2
+                 JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
+                 WHERE sg.student_id = $1 AND g.teacher_id = $2 AND sg.branch_id = $3
                  LIMIT 1`,
-                [studentId, req.user.id]
+                [studentId, req.user.id, branchId]
             );
 
             if (teacherAccess.rows.length === 0) {
@@ -1222,8 +1260,9 @@ const updateStudentInfo = async (req, res) => {
                  FROM users
                  WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
+                   AND branch_id = $3
                  LIMIT 1`,
-                [incoming.username, studentId]
+                [incoming.username, studentId, branchId]
             );
 
             if (usernameExists.rows.length > 0) {
@@ -1265,12 +1304,12 @@ const updateStudentInfo = async (req, res) => {
             });
         }
 
-        values.push(studentId);
+        values.push(studentId, branchId);
 
         const updated = await pool.query(
             `UPDATE users
              SET ${setClauses.join(', ')}
-             WHERE id = $${index} AND role = 'student'
+             WHERE id = $${index} AND role = 'student' AND branch_id = $${index + 1}
              RETURNING id, name, surname, username, phone, phone2, father_name, father_phone, address, age`,
             values
         );
@@ -1293,9 +1332,10 @@ const updateStudentInfo = async (req, res) => {
 // 5. Barcha teacherlarni olish (Subject filter bilan)
 const getAllTeachers = async (req, res) => {
     const { subject_id, status } = req.query;
+    const branchId = getScopedBranchId(req);
     let filters = [];
-    let params = [];
-    let paramIdx = 1;
+    let params = [branchId];
+    let paramIdx = 2;
 
     // Status filter (faqat 3ta holat: active, terminated, on_leave)
     if (status) {
@@ -1311,6 +1351,7 @@ const getAllTeachers = async (req, res) => {
         filters.push(`EXISTS (
             SELECT 1 FROM teacher_subjects ts 
             WHERE ts.teacher_id = u.id AND ts.subject_id = $${paramIdx++}
+              AND ts.branch_id = u.branch_id
         )`);
         params.push(subject_id);
     }
@@ -1350,13 +1391,13 @@ const getAllTeachers = async (req, res) => {
                         ) ORDER BY s.name ASC
                     )
                     FROM teacher_subjects ts
-                    JOIN subjects s ON ts.subject_id = s.id
-                    WHERE ts.teacher_id = u.id),
+                    JOIN subjects s ON ts.subject_id = s.id AND s.branch_id = ts.branch_id
+                    WHERE ts.teacher_id = u.id AND ts.branch_id = u.branch_id),
                     '[]'::json
                 ) as subjects
             FROM users u
-            LEFT JOIN groups g ON u.id = g.teacher_id
-            WHERE u.role = 'teacher' ${whereClause}
+            LEFT JOIN groups g ON u.id = g.teacher_id AND g.branch_id = u.branch_id
+            WHERE u.role = 'teacher' AND u.branch_id = $1 ${whereClause}
             GROUP BY u.id, u.name, u.surname, u.phone, u.phone2, u.status, u.start_date, u.end_date,
                      u.username, u.password_plain,
                      u.certificate, u.age, u.has_experience, u.experience_years, u.experience_place,
@@ -1420,13 +1461,14 @@ const getAllTeachers = async (req, res) => {
 const checkIsEnglishTeacher = async (req, res) => {
     try {
         const teacherId = req.user.id; // JWT tokendan teacher ID olish
+        const branchId = getScopedBranchId(req);
         
         const teacherSubjects = await pool.query(`
             SELECT s.name 
             FROM teacher_subjects ts
-            JOIN subjects s ON ts.subject_id = s.id
-            WHERE ts.teacher_id = $1
-        `, [teacherId]);
+            JOIN subjects s ON ts.subject_id = s.id AND s.branch_id = ts.branch_id
+            WHERE ts.teacher_id = $1 AND ts.branch_id = $2
+        `, [teacherId, branchId]);
 
         const subjects = teacherSubjects.rows;
         const isEnglishTeacher = subjects.some(s => 
@@ -1454,13 +1496,14 @@ const checkIsEnglishTeacher = async (req, res) => {
 const getEnglishTeachers = async (req, res) => {
     try {
         const { status } = req.query;
+        const branchId = getScopedBranchId(req);
         
         // Status filter uchun params
         let statusCondition = '';
-        let params = [];
+        let params = [branchId];
         
         if (status) {
-            statusCondition = 'AND u.status = $1';
+            statusCondition = 'AND u.status = $2';
             params.push(status);
         }
 
@@ -1481,15 +1524,17 @@ const getEnglishTeachers = async (req, res) => {
                 ) AS subjects,
                 COUNT(DISTINCT g.id) as group_count
             FROM users u
-            LEFT JOIN teacher_subjects ts ON u.id = ts.teacher_id
-            LEFT JOIN subjects s ON ts.subject_id = s.id
-            LEFT JOIN groups g ON u.id = g.teacher_id AND g.status = 'active'
+            LEFT JOIN teacher_subjects ts ON u.id = ts.teacher_id AND ts.branch_id = u.branch_id
+            LEFT JOIN subjects s ON ts.subject_id = s.id AND s.branch_id = u.branch_id
+            LEFT JOIN groups g ON u.id = g.teacher_id AND g.status = 'active' AND g.branch_id = u.branch_id
             WHERE u.role = 'teacher' 
+                AND u.branch_id = $1
                 AND u.status != 'deleted' 
                 AND EXISTS (
                     SELECT 1 FROM teacher_subjects ts2 
-                    JOIN subjects s2 ON ts2.subject_id = s2.id 
+                    JOIN subjects s2 ON ts2.subject_id = s2.id AND s2.branch_id = ts2.branch_id
                     WHERE ts2.teacher_id = u.id 
+                    AND ts2.branch_id = u.branch_id
                     AND (LOWER(s2.name) LIKE '%ingliz%' 
                          OR LOWER(s2.name) LIKE '%english%' 
                          OR LOWER(s2.name) LIKE '%ingiliz%'
@@ -1582,7 +1627,8 @@ const getEnglishTeachers = async (req, res) => {
 const setTeacherOnLeave = async (req, res) => {
     const { teacherId } = req.params;
     try {
-        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        const branchId = getScopedBranchId(req);
+        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2 AND branch_id = $3', [teacherId, 'teacher', branchId]);
         if (teacher.rows.length === 0) {
             return res.status(404).json({ message: "Teacher topilmadi!" });
         }
@@ -1599,11 +1645,11 @@ const setTeacherOnLeave = async (req, res) => {
                     COUNT(sg.student_id) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
                     COUNT(sg.student_id) FILTER (WHERE sg.status = 'finished') as finished_students_count
              FROM groups g
-             LEFT JOIN student_groups sg ON g.id = sg.group_id
-             WHERE g.teacher_id = $1 AND g.status = 'active'
+             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.branch_id = g.branch_id
+             WHERE g.teacher_id = $1 AND g.status = 'active' AND g.branch_id = $2
              GROUP BY g.id, g.name, g.unique_code
              ORDER BY g.name`,
-            [teacherId]
+            [teacherId, branchId]
         );
 
         if (activeGroups.rows.length > 0) {
@@ -1632,8 +1678,8 @@ const setTeacherOnLeave = async (req, res) => {
         }
 
         await pool.query(
-            'UPDATE users SET status = $1 WHERE id = $2',
-            ['on_leave', teacherId]
+            'UPDATE users SET status = $1 WHERE id = $2 AND branch_id = $3',
+            ['on_leave', teacherId, branchId]
         );
 
         res.json({ 
@@ -1665,7 +1711,8 @@ const terminateTeacher = async (req, res) => {
     const { terminationDate } = req.body;
     
     try {
-        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        const branchId = getScopedBranchId(req);
+        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2 AND branch_id = $3', [teacherId, 'teacher', branchId]);
         if (teacher.rows.length === 0) {
             return res.status(404).json({ message: "Teacher topilmadi!" });
         }
@@ -1682,11 +1729,11 @@ const terminateTeacher = async (req, res) => {
                     COUNT(sg.student_id) FILTER (WHERE sg.status = 'stopped') as stopped_students_count,
                     COUNT(sg.student_id) FILTER (WHERE sg.status = 'finished') as finished_students_count
              FROM groups g
-             LEFT JOIN student_groups sg ON g.id = sg.group_id
-             WHERE g.teacher_id = $1 AND g.status IN ('active', 'draft')
+             LEFT JOIN student_groups sg ON g.id = sg.group_id AND sg.branch_id = g.branch_id
+             WHERE g.teacher_id = $1 AND g.status IN ('active', 'draft') AND g.branch_id = $2
              GROUP BY g.id, g.name, g.unique_code, g.status
              ORDER BY g.name`,
-            [teacherId]
+            [teacherId, branchId]
         );
 
         if (activeGroups.rows.length > 0) {
@@ -1719,8 +1766,8 @@ const terminateTeacher = async (req, res) => {
         const termDate = terminationDate || new Date().toISOString().split('T')[0];
         
         await pool.query(
-            'UPDATE users SET status = $1, termination_date = $2 WHERE id = $3',
-            ['terminated', termDate, teacherId]
+            'UPDATE users SET status = $1, termination_date = $2 WHERE id = $3 AND branch_id = $4',
+            ['terminated', termDate, teacherId, branchId]
         );
 
         res.json({ 
@@ -1752,7 +1799,8 @@ const terminateTeacher = async (req, res) => {
 const reactivateTeacher = async (req, res) => {
     const { teacherId } = req.params;
     try {
-        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        const branchId = getScopedBranchId(req);
+        const teacher = await pool.query('SELECT * FROM users WHERE id = $1 AND role = $2 AND branch_id = $3', [teacherId, 'teacher', branchId]);
         if (teacher.rows.length === 0) {
             return res.status(404).json({ message: "Teacher topilmadi!" });
         }
@@ -1762,8 +1810,8 @@ const reactivateTeacher = async (req, res) => {
         }
 
         await pool.query(
-            'UPDATE users SET status = $1, termination_date = NULL WHERE id = $2',
-            ['active', teacherId]
+            'UPDATE users SET status = $1, termination_date = NULL WHERE id = $2 AND branch_id = $3',
+            ['active', teacherId, branchId]
         );
 
         res.json({ 
@@ -1786,14 +1834,15 @@ const reactivateTeacher = async (req, res) => {
 const deleteTeacher = async (req, res) => {
     const { teacherId } = req.params;
     const client = await pool.connect();
+    const branchId = getScopedBranchId(req);
 
     try {
         await client.query('BEGIN');
 
         // Teacher mavjudligini tekshirish
         const teacher = await client.query(
-            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
-            [teacherId, 'teacher']
+            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2 AND branch_id = $3',
+            [teacherId, 'teacher', branchId]
         );
 
         if (teacher.rows.length === 0) {
@@ -1803,8 +1852,8 @@ const deleteTeacher = async (req, res) => {
 
         // Teacher bilan bog'langan guruhlarni tekshirish
         const groups = await client.query(
-            'SELECT COUNT(*) as group_count FROM groups WHERE teacher_id = $1',
-            [teacherId]
+            'SELECT COUNT(*) as group_count FROM groups WHERE teacher_id = $1 AND branch_id = $2',
+            [teacherId, branchId]
         );
 
         if (parseInt(groups.rows[0].group_count) > 0) {
@@ -1819,18 +1868,18 @@ const deleteTeacher = async (req, res) => {
         await client.query(
             `UPDATE group_monthly_settings
              SET teacher_id_for_month = NULL
-             WHERE teacher_id_for_month = $1`,
-            [teacherId]
+             WHERE teacher_id_for_month = $1 AND branch_id = $2`,
+            [teacherId, branchId]
         );
         await client.query(
             `UPDATE group_monthly_settings
              SET created_by = NULL
-             WHERE created_by = $1`,
-            [teacherId]
+             WHERE created_by = $1 AND branch_id = $2`,
+            [teacherId, branchId]
         );
 
         // Teacher'ni butunlay o'chirish
-        await client.query('DELETE FROM users WHERE id = $1 AND role = $2', [teacherId, 'teacher']);
+        await client.query('DELETE FROM users WHERE id = $1 AND role = $2 AND branch_id = $3', [teacherId, 'teacher', branchId]);
         await client.query('COMMIT');
 
         res.json({ 
@@ -1855,12 +1904,13 @@ const patchTeacher = async (req, res) => {
     const { teacherId } = req.params;
     const updateFields = { ...req.body }; // Copy qilib olamiz
     const { subject_ids } = req.body; // Fanlar alohida
+    const branchId = getScopedBranchId(req);
 
     try {
         // Teacher mavjudligini tekshirish
         const teacherExists = await pool.query(
-            'SELECT id FROM users WHERE id = $1 AND role = $2',
-            [teacherId, 'teacher']
+            'SELECT id FROM users WHERE id = $1 AND role = $2 AND branch_id = $3',
+            [teacherId, 'teacher', branchId]
         );
 
         if (teacherExists.rows.length === 0) {
@@ -1880,8 +1930,8 @@ const patchTeacher = async (req, res) => {
         // Subject IDs tekshirish
         if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
             const subjectsCheck = await pool.query(
-                'SELECT id, name FROM subjects WHERE id = ANY($1)',
-                [subject_ids]
+                'SELECT id, name FROM subjects WHERE id = ANY($1) AND branch_id = $2',
+                [subject_ids, branchId]
             );
             
             if (subjectsCheck.rows.length !== subject_ids.length) {
@@ -1900,40 +1950,40 @@ const patchTeacher = async (req, res) => {
             
             const updateQuery = `
                 UPDATE users SET ${setClause}
-                WHERE id = $${keys.length + 1} AND role = 'teacher'
+                WHERE id = $${keys.length + 1} AND role = 'teacher' AND branch_id = $${keys.length + 2}
                 RETURNING id, name, surname, username, phone, phone2,
                          certificate, age, has_experience, experience_years, experience_place,
                          available_times, work_days_hours, status, start_date
             `;
 
-            updatedTeacher = await pool.query(updateQuery, [...values, teacherId]);
+            updatedTeacher = await pool.query(updateQuery, [...values, teacherId, branchId]);
         } else {
             // Faqat teacher ma'lumotlarini olish
             updatedTeacher = await pool.query(
                 `SELECT id, name, surname, username, phone, phone2,
                         certificate, age, has_experience, experience_years, experience_place,
                         available_times, work_days_hours, status, start_date
-                 FROM users WHERE id = $1 AND role = 'teacher'`,
-                [teacherId]
+                 FROM users WHERE id = $1 AND role = 'teacher' AND branch_id = $2`,
+                [teacherId, branchId]
             );
         }
 
         // Fanlarni yangilash (agar subject_ids berilgan bo'lsa)
         if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
             // Avvalgi fanlarni o'chirish
-            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1', [teacherId]);
+            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1 AND branch_id = $2', [teacherId, branchId]);
             
             // Yangi fanlarni qo'shish
             for (const subjectId of subject_ids) {
                 await pool.query(
-                    'INSERT INTO teacher_subjects (teacher_id, subject_id) VALUES ($1, $2)',
-                    [teacherId, subjectId]
+                    'INSERT INTO teacher_subjects (teacher_id, subject_id, branch_id) VALUES ($1, $2, $3)',
+                    [teacherId, subjectId, branchId]
                 );
             }
         }
 
         // Teacher fanlarini olish
-        const teacherSubjects = await getTeacherSubjects(teacherId);
+        const teacherSubjects = await getTeacherSubjects(teacherId, branchId);
         
         const response = {
             message: "Teacher ma'lumotlari qisman yangilandi",
@@ -1968,12 +2018,13 @@ const updateTeacherInfo = async (req, res) => {
         name, surname, phone, phone2, subject_ids, certificate, age,
         has_experience, experience_years, experience_place, available_times, work_days_hours
     } = req.body;
+    const branchId = getScopedBranchId(req);
 
     try {
         // Teacher mavjudligini tekshirish
         const teacherExists = await pool.query(
-            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2',
-            [teacherId, 'teacher']
+            'SELECT id, name, surname FROM users WHERE id = $1 AND role = $2 AND branch_id = $3',
+            [teacherId, 'teacher', branchId]
         );
 
         if (teacherExists.rows.length === 0) {
@@ -1988,8 +2039,8 @@ const updateTeacherInfo = async (req, res) => {
         // Subject IDs tekshirish (agar berilgan bo'lsa)
         if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
             const subjectsCheck = await pool.query(
-                'SELECT id, name FROM subjects WHERE id = ANY($1)',
-                [subject_ids]
+                'SELECT id, name FROM subjects WHERE id = ANY($1) AND branch_id = $2',
+                [subject_ids, branchId]
             );
             
             if (subjectsCheck.rows.length !== subject_ids.length) {
@@ -2017,7 +2068,7 @@ const updateTeacherInfo = async (req, res) => {
                 experience_place = COALESCE($9, experience_place),
                 available_times = COALESCE($10, available_times),
                 work_days_hours = COALESCE($11, work_days_hours)
-            WHERE id = $12 AND role = 'teacher'
+            WHERE id = $12 AND role = 'teacher' AND branch_id = $13
             RETURNING id, name, surname, username, phone, phone2,
                      certificate, age, has_experience, experience_years, experience_place,
                      available_times, work_days_hours, status, start_date, created_at
@@ -2026,25 +2077,25 @@ const updateTeacherInfo = async (req, res) => {
         const updatedTeacher = await pool.query(updateQuery, [
             name, surname, phone, phone2, certificate, age,
             has_experience, experience_years, experience_place, available_times, work_days_hours,
-            teacherId
+            teacherId, branchId
         ]);
 
         // Fanlarni yangilash (agar berilgan bo'lsa)
         if (subject_ids && Array.isArray(subject_ids) && subject_ids.length > 0) {
             // Avvalgi fanlarni o'chirish
-            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1', [teacherId]);
+            await pool.query('DELETE FROM teacher_subjects WHERE teacher_id = $1 AND branch_id = $2', [teacherId, branchId]);
             
             // Yangi fanlarni qo'shish
             for (const subjectId of subject_ids) {
                 await pool.query(
-                    'INSERT INTO teacher_subjects (teacher_id, subject_id) VALUES ($1, $2)',
-                    [teacherId, subjectId]
+                    'INSERT INTO teacher_subjects (teacher_id, subject_id, branch_id) VALUES ($1, $2, $3)',
+                    [teacherId, subjectId, branchId]
                 );
             }
         }
 
         // Teacher fanlarini olish
-        const teacherSubjects = await getTeacherSubjects(teacherId);
+        const teacherSubjects = await getTeacherSubjects(teacherId, branchId);
         
         res.json({
             success: true,

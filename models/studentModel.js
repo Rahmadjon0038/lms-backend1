@@ -212,7 +212,7 @@ const createStudentAdditionalTables = async () => {
             ALTER TABLE student_point_events ADD COLUMN source_type VARCHAR(30) NOT NULL DEFAULT 'manual';
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='title') THEN
-            ALTER TABLE student_point_events ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT 'Ball qo'shildi';
+            ALTER TABLE student_point_events ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT 'Ball qo''shildi';
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_point_events' AND column_name='description') THEN
             ALTER TABLE student_point_events ADD COLUMN description TEXT;

@@ -7,10 +7,12 @@ const {
   deleteRoom,
   checkRoomAvailability
 } = require('../models/roomModel');
+const { getScopedBranchId } = require('../utils/branch');
 
 // 1. Xona yaratish (Admin)
 exports.addRoom = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const { room_number, capacity, has_projector, description, building, floor } = req.body;
 
     if (!room_number || room_number.toString().trim() === '') {
@@ -22,7 +24,7 @@ exports.addRoom = async (req, res) => {
     }
 
     // Xona raqami mavjudligini tekshirish
-    const existingRoom = await getRoomByNumber(room_number.toString().trim());
+    const existingRoom = await getRoomByNumber(room_number.toString().trim(), branchId);
     if (existingRoom) {
       return res.status(400).json({ message: "Bu xona raqami allaqachon mavjud!" });
     }
@@ -33,7 +35,8 @@ exports.addRoom = async (req, res) => {
       has_projector: has_projector === true || has_projector === 'true',
       description: description ? description.trim() : null,
       building: building ? building.trim() : null,
-      floor: floor ? floor.trim() : null
+      floor: floor ? floor.trim() : null,
+      branch_id: branchId
     });
 
     res.status(201).json({
@@ -49,9 +52,10 @@ exports.addRoom = async (req, res) => {
 // 2. Barcha xonalarni olish
 exports.getRooms = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const { is_available, has_projector } = req.query;
     
-    const filters = {};
+    const filters = { branch_id: branchId };
     if (is_available !== undefined) {
       filters.is_available = is_available === 'true';
     }
@@ -74,12 +78,13 @@ exports.getRooms = async (req, res) => {
 // 3. Bitta xonani olish
 exports.getRoomDetails = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ message: "Noto'g'ri ID!" });
     }
 
-    const room = await getRoomById(id);
+    const room = await getRoomById(id, branchId);
     if (!room) {
       return res.status(404).json({ message: "Xona topilmadi" });
     }
@@ -96,25 +101,26 @@ exports.getRoomDetails = async (req, res) => {
 // 4. Xonani yangilash (Admin)
 exports.updateRoom = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ message: "Noto'g'ri ID!" });
     }
 
-    const existingRoom = await getRoomById(id);
+    const existingRoom = await getRoomById(id, branchId);
     if (!existingRoom) {
       return res.status(404).json({ message: "Xona topilmadi" });
     }
 
     // Agar room_number o'zgartirilayotgan bo'lsa, dublikatni tekshirish
     if (req.body.room_number && req.body.room_number !== existingRoom.room_number) {
-      const duplicate = await getRoomByNumber(req.body.room_number);
+      const duplicate = await getRoomByNumber(req.body.room_number, branchId);
       if (duplicate) {
         return res.status(400).json({ message: "Bu xona raqami allaqachon mavjud!" });
       }
     }
 
-    const updatedRoom = await updateRoom(id, req.body);
+    const updatedRoom = await updateRoom(id, req.body, branchId);
 
     res.json({
       success: true,
@@ -129,12 +135,13 @@ exports.updateRoom = async (req, res) => {
 // 5. Xonani o'chirish (Admin)
 exports.deleteRoom = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ message: "Noto'g'ri ID!" });
     }
 
-    const deletedRoom = await deleteRoom(id);
+    const deletedRoom = await deleteRoom(id, branchId);
     if (!deletedRoom) {
       return res.status(404).json({ message: "Xona topilmadi" });
     }
@@ -152,6 +159,7 @@ exports.deleteRoom = async (req, res) => {
 // 6. Xona schedule bo'yicha band yoki yo'qligini tekshirish
 exports.checkAvailability = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ message: "Noto'g'ri ID!" });
@@ -167,7 +175,7 @@ exports.checkAvailability = async (req, res) => {
       return res.status(400).json({ message: "Vaqt kiritilishi shart! (masalan: '14:00-16:00')" });
     }
 
-    const room = await getRoomById(id);
+    const room = await getRoomById(id, branchId);
     if (!room) {
       return res.status(404).json({ message: "Xona topilmadi" });
     }
@@ -196,12 +204,13 @@ exports.checkAvailability = async (req, res) => {
 // 7. Xonaning to'liq jadvalini olish (barcha guruhlar va ularning jadvallari)
 exports.getRoomSchedule = async (req, res) => {
   try {
+    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ message: "Noto'g'ri ID!" });
     }
 
-    const room = await getRoomById(id);
+    const room = await getRoomById(id, branchId);
     if (!room) {
       return res.status(404).json({ message: "Xona topilmadi" });
     }
@@ -222,16 +231,17 @@ exports.getRoomSchedule = async (req, res) => {
         COALESCE(
           (SELECT COUNT(*)::integer
            FROM student_groups sg
-           WHERE sg.group_id = g.id AND sg.status = 'active'),
+           WHERE sg.group_id = g.id AND sg.status = 'active' AND sg.branch_id = g.branch_id),
           0
         ) as student_count
       FROM groups g
-      LEFT JOIN subjects s ON g.subject_id = s.id
-      LEFT JOIN users u ON g.teacher_id = u.id
+      LEFT JOIN subjects s ON g.subject_id = s.id AND s.branch_id = g.branch_id
+      LEFT JOIN users u ON g.teacher_id = u.id AND u.branch_id = g.branch_id
       WHERE g.room_id = $1
+      AND g.branch_id = $2
       AND (g.status = 'active' OR g.status = 'draft')
       ORDER BY g.created_at DESC
-    `, [id]);
+    `, [id, branchId]);
 
     res.json({
       success: true,
