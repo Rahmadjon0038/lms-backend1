@@ -691,14 +691,19 @@ const getSuperAdminStats = async (req, res) => {
         [currentMonth, branchId]
       ),
       client.query(
-        `WITH students_by_subject AS (
+         `WITH students_by_subject AS (
            SELECT
              g.subject_id,
              COUNT(*)::int AS total_students_count
-           FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
-           WHERE ms.month = $1
-             AND ms.branch_id = $2
+           FROM student_groups sg
+           JOIN users student_user
+             ON student_user.id = sg.student_id
+            AND student_user.role = 'student'
+            AND student_user.branch_id = sg.branch_id
+           JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
+           WHERE sg.status = 'active'
+             AND sg.branch_id = $2
+             AND g.subject_id IS NOT NULL
            GROUP BY g.subject_id
          ),
          revenue_by_subject AS (
@@ -721,11 +726,15 @@ const getSuperAdminStats = async (req, res) => {
              g.teacher_id,
              CONCAT_WS(' ', u.surname, u.name) AS teacher_name,
              COUNT(*)::int AS total_students_count
-           FROM monthly_snapshots ms
-           JOIN groups g ON g.id = ms.group_id AND g.branch_id = $2
+           FROM student_groups sg
+           JOIN users student_user
+             ON student_user.id = sg.student_id
+            AND student_user.role = 'student'
+            AND student_user.branch_id = sg.branch_id
+           JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
            LEFT JOIN users u ON u.id = g.teacher_id AND u.branch_id = $2
-           WHERE ms.month = $1
-             AND ms.branch_id = $2
+           WHERE sg.status = 'active'
+             AND sg.branch_id = $2
              AND g.teacher_id IS NOT NULL
            GROUP BY g.subject_id, g.teacher_id, u.surname, u.name
          ),
