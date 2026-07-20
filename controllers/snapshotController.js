@@ -50,6 +50,48 @@ const getUserDisplayName = async (userId) => {
   return fullName || user.username || 'Admin';
 };
 
+const normalizeDiscountScope = (scope) => (scope === 'teacher' ? 'teacher' : 'center');
+
+const calcDiscountAmount = (groupPrice, discountRow) => {
+  if (!discountRow) return 0;
+  const value = Number(discountRow.discount_value) || 0;
+  if (!value) return 0;
+  if (discountRow.discount_type === 'percent') {
+    return Math.round(((Number(groupPrice) || 0) * value / 100) * 100) / 100;
+  }
+  return value;
+};
+
+const getDiscountTotalsForSnapshot = async (studentId, groupId, month, branchId, groupPrice) => {
+  const result = await db.query(
+    `
+      SELECT
+        COALESCE(sd.discount_scope, 'center') AS discount_scope,
+        sd.discount_type,
+        sd.discount_value
+      FROM student_discounts sd
+      WHERE sd.student_id = $1
+        AND sd.group_id = $2
+        AND sd.branch_id = $4
+        AND sd.is_active = true
+        AND (sd.start_month IS NULL OR sd.start_month <= $3)
+        AND (sd.end_month IS NULL OR sd.end_month >= $3)
+    `,
+    [studentId, groupId, month, branchId]
+  );
+
+  return result.rows.reduce(
+    (acc, row) => {
+      const scope = normalizeDiscountScope(row.discount_scope);
+      const amount = calcDiscountAmount(groupPrice, row);
+      if (scope === 'teacher') acc.teacher += amount;
+      else acc.center += amount;
+      return acc;
+    },
+    { center: 0, teacher: 0 }
+  );
+};
+
 /**
  * ===================================================================
  * MONTHLY SNAPSHOT CONTROLLER
@@ -1006,9 +1048,18 @@ exports.makeSnapshotPayment = async (req, res) => {
  */
 exports.giveSnapshotDiscount = async (req, res) => {
   try {
-    const { student_id, group_id, month, discount_type, discount_value, description } = req.body;
+    const {
+      student_id,
+      group_id,
+      month,
+      discount_scope = 'center',
+      discount_type,
+      discount_value,
+      description,
+    } = req.body;
     const adminId = req.user.id;
     const branchId = getScopedBranchId(req);
+    const scope = normalizeDiscountScope(discount_scope);
 
     // Validatsiya
     if (!student_id || !group_id || !month || !discount_type || !discount_value) {
@@ -1022,6 +1073,13 @@ exports.giveSnapshotDiscount = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'discount_type faqat "percent" yoki "amount" bo\'lishi mumkin'
+      });
+    }
+
+    if (!['center', 'teacher'].includes(scope)) {
+      return res.status(400).json({
+        success: false,
+        message: 'discount_scope faqat "center" yoki "teacher" bo\'lishi mumkin'
       });
     }
 
@@ -1040,59 +1098,104 @@ exports.giveSnapshotDiscount = async (req, res) => {
 
     const snapshot = snapshotCheck.rows[0];
     const adminName = await getUserDisplayName(adminId);
+    const basePrice = snapshot.group_price != null ? parseFloat(snapshot.group_price) : parseFloat(snapshot.required_amount || 0);
+    const discountValueNum = parseFloat(discount_value);
 
     // Chegirma miqdorini hisoblash
-    const basePrice = snapshot.group_price != null ? parseFloat(snapshot.group_price) : parseFloat(snapshot.required_amount);
-    let discountAmount;
-    if (discount_type === 'percent') {
-      discountAmount = (basePrice * parseFloat(discount_value)) / 100;
-    } else {
-      discountAmount = parseFloat(discount_value);
-    }
+    const discountAmount =
+      discount_type === 'percent'
+        ? Math.round(((basePrice * discountValueNum) / 100) * 100) / 100
+        : Math.round(discountValueNum * 100) / 100;
 
     // Mavjud chegirmani tekshirish
     const existingDiscountCheck = await db.query(`
       SELECT * FROM student_discounts 
-      WHERE student_id = $1 AND group_id = $2 AND start_month = $3 AND branch_id = $4
-    `, [student_id, group_id, month, branchId]);
+      WHERE student_id = $1
+        AND group_id = $2
+        AND start_month = $3
+        AND branch_id = $4
+        AND COALESCE(discount_scope, 'center') = $5
+    `, [student_id, group_id, month, branchId, scope]);
 
     if (existingDiscountCheck.rows.length > 0) {
       // Mavjud chegirmani yangilash
       await db.query(`
         UPDATE student_discounts 
-        SET discount_type = $1, discount_value = $2, description = $3, 
-            is_active = true, created_by = $4, updated_at = CURRENT_TIMESTAMP
-        WHERE student_id = $5 AND group_id = $6 AND start_month = $7 AND branch_id = $8
-      `, [discount_type, discount_value, description, adminId, student_id, group_id, month, branchId]);
+        SET discount_scope = $1,
+            discount_type = $2,
+            discount_value = $3,
+            description = $4,
+            is_active = true,
+            created_by = $5,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE student_id = $6
+          AND group_id = $7
+          AND start_month = $8
+          AND branch_id = $9
+          AND COALESCE(discount_scope, 'center') = $1
+      `, [scope, discount_type, discount_value, description, adminId, student_id, group_id, month, branchId]);
       
       console.log(`🔄 Mavjud chegirma yangilandi`);
     } else {
       // Yangi chegirma yaratish
       await db.query(`
         INSERT INTO student_discounts 
-        (student_id, group_id, branch_id, discount_type, discount_value, start_month, end_month, description, is_active, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $6, $7, true, $8)
-      `, [student_id, group_id, branchId, discount_type, discount_value, month, description, adminId]);
+        (student_id, group_id, branch_id, discount_scope, discount_type, discount_value, start_month, end_month, description, is_active, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, true, $9)
+      `, [student_id, group_id, branchId, scope, discount_type, discount_value, month, description, adminId]);
       
       console.log(`✅ Yangi chegirma yaratildi`);
     }
 
-    // Snapshot yangilash - chegirma effective required_amount ni kamaytiradi
+    const activeDiscounts = await db.query(
+      `
+        SELECT
+          COALESCE(discount_scope, 'center') AS discount_scope,
+          discount_type,
+          discount_value
+        FROM student_discounts
+        WHERE student_id = $1
+          AND group_id = $2
+          AND branch_id = $3
+          AND is_active = true
+          AND (start_month IS NULL OR start_month <= $4)
+          AND (end_month IS NULL OR end_month >= $4)
+      `,
+      [student_id, group_id, branchId, month]
+    );
+
+    let centerDiscountAmount = 0;
+    let teacherDiscountAmount = 0;
+    activeDiscounts.rows.forEach((row) => {
+      const amount = calcDiscountAmount(basePrice, row);
+      if (normalizeDiscountScope(row.discount_scope) === 'teacher') {
+        teacherDiscountAmount += amount;
+      } else {
+        centerDiscountAmount += amount;
+      }
+    });
+    centerDiscountAmount = Math.round(centerDiscountAmount * 100) / 100;
+    teacherDiscountAmount = Math.round(teacherDiscountAmount * 100) / 100;
+    const totalDiscountAmount = Math.round((centerDiscountAmount + teacherDiscountAmount) * 100) / 100;
+
+    // Snapshot yangilash - jami chegirma effective required_amount ni kamaytiradi
     const originalRequired = basePrice;
-    const effectiveRequired = originalRequired - discountAmount; // 400,000 - 80,000 = 320,000
+    const effectiveRequired = Math.max(originalRequired - totalDiscountAmount, 0);
     const paidAmount = parseFloat(snapshot.paid_amount);
-    const newDebtAmount = effectiveRequired - paidAmount; // 320,000 - paid_amount
+    const newDebtAmount = Math.max(effectiveRequired - paidAmount, 0);
     
     let newPaymentStatus = 'unpaid';
     if (paidAmount >= effectiveRequired) {
-      newPaymentStatus = 'paid'; // Agar to'langan summa chegirma bilan kamaygan summaga yetsa
+      newPaymentStatus = 'paid';
     } else if (paidAmount > 0) {
       newPaymentStatus = 'partial';
     }
 
     console.log(`📊 Chegirma hisob-kitobi:`);
     console.log(`   Asl summa: ${originalRequired}`);
-    console.log(`   Chegirma: ${discountAmount}`);
+    console.log(`   Markaz chegirmasi: ${centerDiscountAmount}`);
+    console.log(`   Teacher chegirmasi: ${teacherDiscountAmount}`);
+    console.log(`   Jami chegirma: ${totalDiscountAmount}`);
     console.log(`   Yangi kerakli summa: ${effectiveRequired}`);
     console.log(`   To'langan: ${paidAmount}`);
     console.log(`   Yangi qarz: ${newDebtAmount}`);
@@ -1107,7 +1210,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
         updated_at = CURRENT_TIMESTAMP
       WHERE student_id = $4 AND group_id = $5 AND month = $6 AND branch_id = $7
       RETURNING *
-    `, [discountAmount, newDebtAmount, newPaymentStatus, student_id, group_id, month, branchId]);
+    `, [totalDiscountAmount, newDebtAmount, newPaymentStatus, student_id, group_id, month, branchId]);
 
     console.log(`📸 Snapshot yangilandi: ${updateResult.rowCount} ta yozuv`);
 
@@ -1121,8 +1224,9 @@ exports.giveSnapshotDiscount = async (req, res) => {
     const discountTitle = 'Chegirma berildi';
     const discountReason = String(description ?? '').trim();
     const monthLabel = formatMonthLabel(month);
+    const scopeLabel = scope === 'teacher' ? 'Teacher chegirmasi' : 'Markaz chegirmasi';
     const discountBodyParts = [
-      `${monthLabel} uchun chegirma: ${discountAmount.toLocaleString('en-US')} so'm.`,
+      `${monthLabel} uchun ${scopeLabel.toLowerCase()}: ${discountAmount.toLocaleString('en-US')} so'm.`,
     ];
     if (discountReason) {
       discountBodyParts.push(`Sabab: ${discountReason}.`);
@@ -1135,9 +1239,13 @@ exports.giveSnapshotDiscount = async (req, res) => {
       month_label: monthLabel,
       student_id: String(student_id),
       group_id: String(group_id),
+      discount_scope: scope,
       discount_type,
       discount_value: String(discount_value),
       discount_amount: String(discountAmount),
+      center_discount_amount: String(centerDiscountAmount),
+      teacher_discount_amount: String(teacherDiscountAmount),
+      total_discount_amount: String(totalDiscountAmount),
       required_amount: String(originalRequired),
       effective_required: String(effectiveRequired),
       paid_amount: String(paidAmount),
@@ -1173,10 +1281,14 @@ exports.giveSnapshotDiscount = async (req, res) => {
       data: {
         original_required: originalRequired,
         discount_amount: discountAmount,
+        center_discount_amount: centerDiscountAmount,
+        teacher_discount_amount: teacherDiscountAmount,
+        total_discount_amount: totalDiscountAmount,
         effective_required: effectiveRequired,
         paid_amount: paidAmount,
         new_debt_amount: newDebtAmount,
         payment_status: newPaymentStatus,
+        discount_scope: scope,
         updated_snapshot: updateResult.rows[0]
       }
     });
@@ -2025,30 +2137,16 @@ exports.createSnapshotForNewStudents = async (req, res) => {
       const statusResult = await db.query(statusQuery, [student.student_id, student.group_id, month, branchId]);
       const monthlyStatus = statusResult.rows[0]?.monthly_status || 'active';
 
-      // Chegirma ma'lumotlarini topamiz
-      const discountQuery = `
-        SELECT 
-          discount_type,
-          discount_value
-        FROM student_discounts
-        WHERE student_id = $1 
-          AND group_id = $2
-          AND branch_id = $4
-          AND start_month <= $3
-          AND end_month >= $3
-          AND is_active = true
-      `;
-      const discountResult = await db.query(discountQuery, [student.student_id, student.group_id, month, branchId]);
-      const discount = discountResult.rows[0];
-
-      let discountAmount = 0;
-      if (discount) {
-        if (discount.discount_type === 'percent') {
-          discountAmount = Math.round((student.group_price * discount.discount_value / 100) * 100) / 100;
-        } else if (discount.discount_type === 'amount') {
-          discountAmount = discount.discount_value;
-        }
-      }
+      const discountTotals = await getDiscountTotalsForSnapshot(
+        student.student_id,
+        student.group_id,
+        month,
+        branchId,
+        student.group_price
+      );
+      const centerDiscountAmount = Math.round((Number(discountTotals.center) || 0) * 100) / 100;
+      const teacherDiscountAmount = Math.round((Number(discountTotals.teacher) || 0) * 100) / 100;
+      const discountAmount = Math.round((centerDiscountAmount + teacherDiscountAmount) * 100) / 100;
 
       const requiredAmount = monthlyStatus === 'stopped' ? 0 : student.group_price;
       const effectiveRequired = requiredAmount - discountAmount;

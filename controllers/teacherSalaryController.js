@@ -10,9 +10,7 @@ const PAYOUT_TYPE_REGULAR = 'regular';
 const PAYOUT_TYPE_POST_CLOSE = 'post_close';
 // Teacher tushumi faqat real tushgan to'lovdan: paid_amount asosida.
 // To'lov bo'lmasa, oylik hisobga olinmaydi.
-const GROUP_PRICE_EXPR = `COALESCE(ms.group_price, ms.required_amount, 0)`;
-// If discount exists, teacher salary should be based on full course price, not paid amount.
-const SALARY_BASE_EXPR = `CASE WHEN COALESCE(ms.discount_amount, 0) > 0 THEN ${GROUP_PRICE_EXPR} ELSE COALESCE(ms.paid_amount, 0) END`;
+const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -42,82 +40,151 @@ const getTeacherWithPercent = async (client, teacherId, branchId) => {
   return res.rows[0] || null;
 };
 
-const getTeacherMonthLiveCollected = async (client, teacherId, monthName, branchId) => {
+const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, branchId) => {
   const res = await client.query(
-    `SELECT
-       COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
-     FROM monthly_snapshots ms
-     JOIN groups g ON g.id = ms.group_id
-     WHERE g.teacher_id = $1
-       AND ms.month = $2
-       AND ms.branch_id = $3
-       AND g.branch_id = $3
-       AND COALESCE(ms.monthly_status, 'active') = 'active'`,
-    [teacherId, monthName, branchId]
-  );
-
-  return toNum(res.rows[0]?.total_collected);
-};
-
-const getTeacherStudentsForMonth = async (client, teacherId, monthName, branchId) => {
-  const res = await client.query(
-    `WITH teacher_student_status AS (
+    `WITH active_discounts AS (
        SELECT
+         sd.student_id,
+         sd.group_id,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN COALESCE(sd.discount_scope, 'center') = 'center' THEN
+                 CASE
+                   WHEN sd.discount_type = 'percent' THEN ROUND((ms.group_price * sd.discount_value / 100), 2)
+                   ELSE sd.discount_value
+                 END
+               ELSE 0
+             END
+           ),
+           0
+         )::numeric AS center_discount_amount,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN COALESCE(sd.discount_scope, 'center') = 'teacher' THEN
+                 CASE
+                   WHEN sd.discount_type = 'percent' THEN ROUND((ms.group_price * sd.discount_value / 100), 2)
+                   ELSE sd.discount_value
+                 END
+               ELSE 0
+             END
+           ),
+           0
+         )::numeric AS teacher_discount_amount
+       FROM student_discounts sd
+       JOIN monthly_snapshots ms
+         ON ms.student_id = sd.student_id
+        AND ms.group_id = sd.group_id
+        AND ms.month = $2
+        AND ms.branch_id = $3
+       WHERE sd.branch_id = $3
+         AND sd.is_active = true
+         AND (sd.start_month IS NULL OR sd.start_month <= $2)
+         AND (sd.end_month IS NULL OR sd.end_month >= $2)
+       GROUP BY sd.student_id, sd.group_id
+     ),
+     teacher_student_status AS (
+       SELECT
+         g.teacher_id,
          ms.student_id,
+         ms.group_id,
          MAX(ms.student_name) AS student_name,
          MAX(ms.student_surname) AS student_surname,
+         MAX(ms.group_name) AS group_name,
          MAX(COALESCE(ms.student_phone, su.phone)) AS student_phone,
          MAX(su.phone2) AS student_phone2,
          MAX(COALESCE(ms.student_father_name, su.father_name)) AS student_father_name,
          MAX(COALESCE(ms.student_father_phone, su.father_phone)) AS student_father_phone,
          MAX(su.address) AS student_address,
          MAX(su.age) AS student_age,
+         COALESCE(MAX(ms.group_price), 0)::numeric AS base_amount,
+         COALESCE(MAX(ad.center_discount_amount), 0)::numeric AS center_discount_amount,
+         COALESCE(MAX(ad.teacher_discount_amount), 0)::numeric AS teacher_discount_amount,
          COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
          COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
-         COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount
+         COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
+         CASE
+           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
+           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
+             COALESCE(MAX(ms.group_price), 0)
+               - COALESCE(MAX(ad.center_discount_amount), 0)
+               - COALESCE(MAX(ad.teacher_discount_amount), 0),
+             0
+           ) THEN 'paid'
+           ELSE 'partial'
+         END AS payment_state
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
        LEFT JOIN users su ON su.id = ms.student_id
+       LEFT JOIN active_discounts ad
+         ON ad.student_id = ms.student_id
+        AND ad.group_id = ms.group_id
        WHERE g.teacher_id = $1
          AND ms.month = $2
          AND ms.branch_id = $3
          AND g.branch_id = $3
          AND COALESCE(ms.monthly_status, 'active') = 'active'
-       GROUP BY ms.student_id
+       GROUP BY g.teacher_id, ms.student_id, ms.group_id, ad.center_discount_amount, ad.teacher_discount_amount
+     ),
+     teacher_students_agg AS (
+       SELECT
+         tss.teacher_id,
+         COUNT(*)::int AS total_students,
+         COUNT(*) FILTER (WHERE tss.payment_state = 'paid')::int AS paid_students_count,
+         COUNT(*) FILTER (WHERE tss.payment_state = 'partial')::int AS partial_students_count,
+         COUNT(*) FILTER (WHERE tss.payment_state = 'unpaid')::int AS unpaid_students_count,
+         COALESCE(SUM(tss.base_amount), 0)::numeric AS total_collected,
+         COALESCE(SUM(tss.total_paid_amount), 0)::numeric AS actual_collected,
+         COALESCE(SUM(tss.center_discount_amount), 0)::numeric AS center_discount_total,
+         COALESCE(SUM(tss.teacher_discount_amount), 0)::numeric AS teacher_discount_total,
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'student_id', tss.student_id,
+               'group_id', tss.group_id,
+               'group_name', tss.group_name,
+               'name', tss.student_name,
+               'surname', tss.student_surname,
+               'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
+               'phone', tss.student_phone,
+               'phone2', tss.student_phone2,
+               'father_name', tss.student_father_name,
+               'father_phone', tss.student_father_phone,
+               'address', tss.student_address,
+               'age', tss.student_age,
+               'payment_state', tss.payment_state,
+               'base_amount', tss.base_amount,
+               'center_discount_amount', tss.center_discount_amount,
+               'teacher_discount_amount', tss.teacher_discount_amount,
+               'discount_amount', tss.total_discount_amount,
+               'required_amount', tss.total_required_amount,
+               'paid_amount', tss.total_paid_amount
+             )
+             ORDER BY tss.student_name, tss.student_surname, tss.group_name
+           ),
+           '[]'::json
+         ) AS students
+       FROM teacher_student_status tss
+       GROUP BY tss.teacher_id
      )
-     SELECT COALESCE(
-       JSON_AGG(
-         JSON_BUILD_OBJECT(
-           'student_id', tss.student_id,
-           'name', tss.student_name,
-           'surname', tss.student_surname,
-           'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
-           'phone', tss.student_phone,
-           'phone2', tss.student_phone2,
-           'father_name', tss.student_father_name,
-           'father_phone', tss.student_father_phone,
-           'address', tss.student_address,
-           'age', tss.student_age,
-           'payment_state',
-             CASE
-               WHEN COALESCE(tss.total_paid_amount, 0) <= 0 THEN 'unpaid'
-               WHEN COALESCE(tss.total_paid_amount, 0) >= GREATEST(COALESCE(tss.total_required_amount, 0) - COALESCE(tss.total_discount_amount, 0), 0) THEN 'paid'
-               ELSE 'partial'
-             END,
-           'required_amount', tss.total_required_amount,
-           'discount_amount', tss.total_discount_amount,
-           'paid_amount', tss.total_paid_amount
-         )
-         ORDER BY tss.student_name, tss.student_surname
-       ),
-       '[]'::json
-     ) AS students
-     FROM teacher_student_status tss`,
+     SELECT * FROM teacher_students_agg`,
     [teacherId, monthName, branchId]
   );
 
-  const students = res.rows[0]?.students;
-  return Array.isArray(students) ? students : [];
+  const row = res.rows[0] || {};
+  const students = Array.isArray(row.students) ? row.students : [];
+  return {
+    total_students: toNum(row.total_students),
+    paid_students_count: toNum(row.paid_students_count),
+    partial_students_count: toNum(row.partial_students_count),
+    unpaid_students_count: toNum(row.unpaid_students_count),
+    total_collected: toNum(row.total_collected),
+    actual_collected: toNum(row.actual_collected),
+    center_discount_total: toNum(row.center_discount_total),
+    teacher_discount_total: toNum(row.teacher_discount_total),
+    students,
+  };
 };
 
 const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => {
@@ -126,22 +193,8 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     throw new Error("O'qituvchi topilmadi");
   }
 
-  const [snapshotRes, advancesRes, payoutsRes, students, closedRes] = await Promise.all([
-    client.query(
-      `SELECT
-         COUNT(*)::int AS total_students,
-         COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) > 0)::int AS paid_students,
-         COUNT(*) FILTER (WHERE COALESCE(ms.paid_amount, 0) <= 0 AND ${GROUP_PRICE_EXPR} > 0)::int AS unpaid_students,
-         COALESCE(SUM(${SALARY_BASE_EXPR}), 0)::numeric AS total_collected
-       FROM monthly_snapshots ms
-       JOIN groups g ON g.id = ms.group_id
-       WHERE g.teacher_id = $1
-         AND ms.month = $2
-         AND ms.branch_id = $3
-         AND g.branch_id = $3
-         AND COALESCE(ms.monthly_status, 'active') = 'active'`,
-      [teacherId, monthName, branchId]
-    ),
+  const [studentSummary, advancesRes, payoutsRes, closedRes] = await Promise.all([
+    getTeacherMonthlyStudentSummary(client, teacherId, monthName, branchId),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_advances
        FROM teacher_advances
@@ -157,7 +210,6 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
          AND COALESCE(payout_type, '${PAYOUT_TYPE_REGULAR}') = '${PAYOUT_TYPE_REGULAR}'`,
       [teacherId, monthName, branchId]
     ),
-    getTeacherStudentsForMonth(client, teacherId, monthName, branchId),
     client.query(
       `SELECT is_closed, closed_at, close_revenue, close_expected_salary, close_balance
        FROM teacher_monthly_salaries
@@ -166,14 +218,14 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     ),
   ]);
 
-  const stat = snapshotRes.rows[0] || {};
-  const totalCollected = toNum(stat.total_collected);
+  const totalCollected = toNum(studentSummary.total_collected);
+  const teacherDiscountTotal = toNum(studentSummary.teacher_discount_total);
   const totalAdvances = toNum(advancesRes.rows[0]?.total_advances);
   const totalGiven = toNum(payoutsRes.rows[0]?.total_given);
   const salaryPercentage = toNum(teacher.salary_percentage);
   const expectedGross = round2((totalCollected * salaryPercentage) / 100);
-  const expectedNet = round2(expectedGross - totalAdvances);
-  const finalSalary = round2(expectedGross - totalAdvances - totalGiven);
+  const expectedNet = round2(expectedGross - teacherDiscountTotal - totalAdvances);
+  const finalSalary = round2(expectedGross - teacherDiscountTotal - totalAdvances - totalGiven);
 
   const upsert = await client.query(
     `INSERT INTO teacher_monthly_salaries (
@@ -225,9 +277,9 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
       expectedGross,
       totalAdvances,
       finalSalary,
-      toNum(stat.total_students),
-      toNum(stat.paid_students),
-      toNum(stat.unpaid_students),
+      toNum(studentSummary.total_students),
+      toNum(studentSummary.paid_students_count),
+      toNum(studentSummary.unpaid_students_count),
       totalGiven,
       branchId,
     ]
@@ -250,14 +302,18 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     month_name: monthName,
     salary_percentage: salaryPercentage,
     total_collected: totalCollected,
+    actual_collected: toNum(studentSummary.actual_collected),
+    center_discount_total: toNum(studentSummary.center_discount_total),
+    teacher_discount_total: teacherDiscountTotal,
     expected_salary: expectedNet,
     expected_salary_gross: expectedGross,
     total_advances: totalAdvances,
     total_given: totalGiven,
     final_salary: finalSalary,
-    total_students: toNum(stat.total_students),
-    paid_students: toNum(stat.paid_students),
-    unpaid_students: toNum(stat.unpaid_students),
+    total_students: toNum(studentSummary.total_students),
+    paid_students: toNum(studentSummary.paid_students_count),
+    partial_students: toNum(studentSummary.partial_students_count),
+    unpaid_students: toNum(studentSummary.unpaid_students_count),
     can_give: finalSalary > 0,
     is_closed: Boolean(persisted.is_closed),
     closed_at: persisted.closed_at || null,
@@ -303,8 +359,8 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
   const row = monthly.rows[0];
   if (!row.is_closed) return null;
 
-  const [liveCollected, payoutsRegularRes, payoutsPostCloseRes, students] = await Promise.all([
-    getTeacherMonthLiveCollected(client, teacherId, monthName, branchId),
+  const [studentSummary, payoutsRegularRes, payoutsPostCloseRes] = await Promise.all([
+    getTeacherMonthlyStudentSummary(client, teacherId, monthName, branchId),
     client.query(
       `SELECT COALESCE(SUM(amount), 0)::numeric AS total_given
        FROM teacher_salary_payouts
@@ -323,12 +379,13 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
          AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'`,
       [teacherId, monthName, branchId]
     ),
-    getTeacherStudentsForMonth(client, teacherId, monthName, branchId),
   ]);
 
   const salaryPercentage = toNum(teacher.salary_percentage);
   const closeExpected = toNum(row.close_expected_salary);
   const closeRevenue = toNum(row.close_revenue);
+  const liveCollected = toNum(studentSummary.total_collected);
+  const teacherDiscountTotal = toNum(studentSummary.teacher_discount_total);
   const postCloseCollectedRevenue = round2(Math.max(liveCollected - closeRevenue, 0));
   const postCloseExpectedGross = round2((postCloseCollectedRevenue * salaryPercentage) / 100);
   const postCloseGiven = toNum(payoutsPostCloseRes.rows[0]?.post_close_given);
@@ -350,11 +407,14 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
     month_name: monthName,
     salary_percentage: salaryPercentage,
     total_collected: closeRevenue,
-    expected_salary: round2(closeExpected - toNum(row.total_advances)),
+    actual_collected: toNum(studentSummary.actual_collected),
+    center_discount_total: toNum(studentSummary.center_discount_total),
+    teacher_discount_total: teacherDiscountTotal,
+    expected_salary: round2(closeExpected - teacherDiscountTotal - toNum(row.total_advances)),
     expected_salary_gross: closeExpected,
     total_advances: toNum(row.total_advances),
     total_given: totalGiven,
-    final_salary: toNum(row.close_balance),
+    final_salary: toNum(row.close_balance != null ? row.close_balance : round2(closeExpected - teacherDiscountTotal - toNum(row.total_advances) - totalGiven)),
     total_students: toNum(row.total_students),
     paid_students: toNum(row.paid_students),
     unpaid_students: toNum(row.unpaid_students),
@@ -369,7 +429,7 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
     post_close_given: postCloseGiven,
     post_close_available: postCloseAvailable,
     post_close_can_give: postCloseAvailable > 0,
-    students,
+    students: studentSummary.students,
   };
 };
 
