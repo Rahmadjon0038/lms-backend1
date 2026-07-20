@@ -183,7 +183,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
     actual_collected: toNum(row.actual_collected),
     center_discount_total: toNum(row.center_discount_total),
     teacher_discount_total: toNum(row.teacher_discount_total),
-    students,
+    students: studentSummary.students,
   };
 };
 
@@ -326,7 +326,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     post_close_given: 0,
     post_close_available: 0,
     post_close_can_give: false,
-    students,
+    students: studentSummary.students,
   };
 };
 
