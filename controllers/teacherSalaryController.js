@@ -219,11 +219,12 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
   ]);
 
   const totalCollected = toNum(studentSummary.total_collected);
+  const actualCollected = toNum(studentSummary.actual_collected);
   const teacherDiscountTotal = toNum(studentSummary.teacher_discount_total);
   const totalAdvances = toNum(advancesRes.rows[0]?.total_advances);
   const totalGiven = toNum(payoutsRes.rows[0]?.total_given);
   const salaryPercentage = toNum(teacher.salary_percentage);
-  const expectedGross = round2((totalCollected * salaryPercentage) / 100);
+  const expectedGross = round2((actualCollected * salaryPercentage) / 100);
   const expectedNet = round2(expectedGross - teacherDiscountTotal - totalAdvances);
   const finalSalary = round2(expectedGross - teacherDiscountTotal - totalAdvances - totalGiven);
 
@@ -302,7 +303,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     month_name: monthName,
     salary_percentage: salaryPercentage,
     total_collected: totalCollected,
-    actual_collected: toNum(studentSummary.actual_collected),
+    actual_collected: actualCollected,
     center_discount_total: toNum(studentSummary.center_discount_total),
     teacher_discount_total: teacherDiscountTotal,
     expected_salary: expectedNet,
@@ -904,7 +905,7 @@ exports.closeTeacherMonth = async (req, res) => {
         teacherId,
         monthName,
         req.user.id,
-        summary.total_collected,
+        summary.actual_collected,
         closeExpected,
         closeBalance,
         branchId,
