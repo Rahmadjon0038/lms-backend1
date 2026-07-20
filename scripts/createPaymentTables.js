@@ -96,6 +96,7 @@ const createPaymentTables = async () => {
         id SERIAL PRIMARY KEY,
         student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        discount_scope VARCHAR(20) NOT NULL DEFAULT 'center', -- 'center' yoki 'teacher'
         discount_type VARCHAR(20) NOT NULL, -- 'percent' yoki 'amount'
         discount_value DECIMAL(10,2) NOT NULL, -- Foiz yoki summa
         months INTEGER, -- Necha oyga (NULL = cheksiz)
@@ -107,11 +108,66 @@ const createPaymentTables = async () => {
         created_by INTEGER REFERENCES users(id),
         
         CHECK (discount_type IN ('percent', 'amount')),
-        CHECK (discount_value > 0),
-        UNIQUE (student_id, group_id, start_month, end_month)
+        CHECK (discount_scope IN ('center', 'teacher')),
+        CHECK (discount_value > 0)
       )
     `);
     console.log('✅ student_discounts jadvali yaratildi');
+
+    await pool.query(`
+      ALTER TABLE student_discounts
+        ADD COLUMN IF NOT EXISTS discount_scope VARCHAR(20) DEFAULT 'center'
+    `);
+
+    await pool.query(`
+      UPDATE student_discounts
+      SET discount_scope = 'center'
+      WHERE discount_scope IS NULL
+    `);
+
+    await pool.query(`
+      DO $$
+      DECLARE
+        legacy_constraint RECORD;
+        has_correct_unique BOOLEAN;
+      BEGIN
+        FOR legacy_constraint IN
+          SELECT c.conname
+          FROM pg_constraint c
+          WHERE c.conrelid = 'student_discounts'::regclass
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY a.attname)
+              FROM unnest(c.conkey) AS k
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+            ) IN (
+              ARRAY['end_month', 'group_id', 'start_month', 'student_id']::name[],
+              ARRAY['start_month', 'student_id']::name[],
+              ARRAY['discount_scope', 'end_month', 'group_id', 'start_month', 'student_id']::name[]
+            )
+        LOOP
+          EXECUTE format('ALTER TABLE student_discounts DROP CONSTRAINT %I', legacy_constraint.conname);
+        END LOOP;
+
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          WHERE c.conrelid = 'student_discounts'::regclass
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY a.attname)
+              FROM unnest(c.conkey) AS k
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+            ) = ARRAY['discount_scope', 'end_month', 'group_id', 'start_month', 'student_id']::name[]
+        ) INTO has_correct_unique;
+
+        IF NOT has_correct_unique THEN
+          ALTER TABLE student_discounts
+            ADD CONSTRAINT student_discounts_student_group_month_scope_unique
+            UNIQUE (student_id, group_id, start_month, end_month, discount_scope);
+        END IF;
+      END $$;
+    `);
 // YANGI: group_id qo'shilgan indekslar
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_student_payments_student_group_month 
@@ -126,6 +182,11 @@ const createPaymentTables = async () => {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_student_discounts_group 
       ON student_discounts(student_id, group_id, is_active)
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_discounts_scope
+      ON student_discounts(student_id, group_id, discount_scope, is_active)
     `);
 
     await pool.query(`
