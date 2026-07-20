@@ -183,7 +183,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
     actual_collected: toNum(row.actual_collected),
     center_discount_total: toNum(row.center_discount_total),
     teacher_discount_total: toNum(row.teacher_discount_total),
-    students: studentSummary.students,
+    students,
   };
 };
 
