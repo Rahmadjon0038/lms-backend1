@@ -1,6 +1,5 @@
 const pool = require('../config/db');
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const { MONTHLY_POINT_CAP } = require('../config/points');
 const { getScopedBranchId } = require('../utils/branch');
 
@@ -335,9 +334,9 @@ exports.getStudentGroups = async (req, res) => {
 
 // 2. Studentni butunlay o'chirish - ADMIN yoki TEACHER
 // Student o'z akkauntini butunlay o'chiradi (mobil ilova sozlamalaridagi
-// "Delete account"). Parol bilan tasdiqlanadi; users qatori o'chganda
-// bog'liq yozuvlar (guruh a'zoliklari, to'lovlar, davomat, ballar) CASCADE
-// orqali birga o'chadi.
+// "Delete account"). Parol yuborilsa tekshiriladi, ammo majburiy emas;
+// users qatori o'chganda bog'liq yozuvlar (guruh a'zoliklari, to'lovlar,
+// davomat, ballar) CASCADE orqali birga o'chadi.
 exports.deleteMyAccount = async (req, res) => {
     try {
         const { id: userId, role } = req.user;
@@ -349,13 +348,6 @@ exports.deleteMyAccount = async (req, res) => {
                 message: 'Bu amal faqat studentlar uchun'
             });
         }
-        if (!password) {
-            return res.status(400).json({
-                success: false,
-                message: 'Tasdiqlash uchun parol majburiy'
-            });
-        }
-
         const userResult = await pool.query(
             `SELECT id, password FROM users WHERE id = $1 AND role = 'student'`,
             [userId]
@@ -367,15 +359,18 @@ exports.deleteMyAccount = async (req, res) => {
             });
         }
 
-        const passwordMatches = await bcrypt.compare(
-            password,
-            userResult.rows[0].password || ''
-        );
-        if (!passwordMatches) {
-            return res.status(401).json({
-                success: false,
-                message: 'Parol noto\'g\'ri'
-            });
+        if (password) {
+            const bcrypt = require('bcryptjs');
+            const passwordMatches = await bcrypt.compare(
+                password,
+                userResult.rows[0].password || ''
+            );
+            if (!passwordMatches) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Parol noto\'g\'ri'
+                });
+            }
         }
 
         await pool.query(`DELETE FROM users WHERE id = $1 AND role = 'student'`, [userId]);
