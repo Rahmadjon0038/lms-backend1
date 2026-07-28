@@ -11,6 +11,16 @@ const PAYOUT_TYPE_POST_CLOSE = 'post_close';
 // Teacher tushumi faqat real tushgan to'lovdan: paid_amount asosida.
 // To'lov bo'lmasa, oylik hisobga olinmaydi.
 const SALARY_BASE_EXPR = `COALESCE(ms.paid_amount, 0)`;
+const EFFECTIVE_REQUIRED_SQL = `
+  GREATEST(
+    COALESCE(MAX(ms.group_price), 0)
+      - GREATEST(
+          COALESCE(MAX(ms.discount_amount), 0),
+          COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+        ),
+    0
+  )
+`;
 
 const canAccessTeacherData = (reqUser, teacherId) => {
   if (!reqUser) return false;
@@ -105,27 +115,15 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
          COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
          COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
          COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
-         GREATEST(
-           COALESCE(MAX(ms.discount_amount), 0),
-           COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+         (
+           COALESCE(MAX(ms.group_price), 0)
+             - ${EFFECTIVE_REQUIRED_SQL}
          )::numeric AS effective_discount_amount,
+         ${EFFECTIVE_REQUIRED_SQL}::numeric AS effective_required_amount,
          CASE
-           WHEN GREATEST(
-             COALESCE(MAX(ms.group_price), 0)
-               - GREATEST(
-                   COALESCE(MAX(ms.discount_amount), 0),
-                   COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
-                 ),
-             0
-           ) <= 0 THEN 'paid'
-           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
-             COALESCE(MAX(ms.group_price), 0)
-               - GREATEST(
-                   COALESCE(MAX(ms.discount_amount), 0),
-                   COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
-                 ),
-             0
-           ) THEN 'paid'
+           WHEN ${EFFECTIVE_REQUIRED_SQL} <= 0 THEN 'paid'
+           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
+           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= ${EFFECTIVE_REQUIRED_SQL} THEN 'paid'
            ELSE 'partial'
          END AS payment_state
        FROM monthly_snapshots ms
@@ -169,10 +167,12 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
                'age', tss.student_age,
                'payment_state', tss.payment_state,
                'base_amount', tss.base_amount,
+               'effective_required_amount', tss.effective_required_amount,
                'center_discount_amount', tss.center_discount_amount,
                'teacher_discount_amount', tss.teacher_discount_amount,
                'discount_amount', tss.total_discount_amount,
                'required_amount', tss.total_required_amount,
+               'original_required_amount', tss.total_required_amount,
                'paid_amount', tss.total_paid_amount
              )
              ORDER BY tss.student_name, tss.student_surname, tss.group_name
@@ -1065,36 +1065,26 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            MAX(COALESCE(ms.student_father_phone, su.father_phone)) AS student_father_phone,
            MAX(su.address) AS student_address,
            MAX(su.age) AS student_age,
-           COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
-           COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
-           COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
-           GREATEST(
-             COALESCE(MAX(ms.discount_amount), 0),
-             COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
-           )::numeric AS effective_discount_amount,
-           CASE
-             WHEN GREATEST(
-               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)
-                 - GREATEST(
-                     COALESCE(MAX(ms.discount_amount), 0),
-                     COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
-                   ),
-               0
-             ) <= 0 THEN 'paid'
-             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
-               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)
-                 - GREATEST(
-                     COALESCE(MAX(ms.discount_amount), 0),
-                     COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
-                   ),
-               0
-             )
-               THEN 'paid'
+         COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
+         COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
+         COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
+         (
+           COALESCE(MAX(ms.group_price), 0)
+             - ${EFFECTIVE_REQUIRED_SQL}
+         )::numeric AS effective_discount_amount,
+         ${EFFECTIVE_REQUIRED_SQL}::numeric AS effective_required_amount,
+         CASE
+             WHEN ${EFFECTIVE_REQUIRED_SQL} <= 0 THEN 'paid'
+             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
+             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= ${EFFECTIVE_REQUIRED_SQL} THEN 'paid'
              ELSE 'partial'
            END AS payment_state
          FROM monthly_snapshots ms
          JOIN groups g ON g.id = ms.group_id
          LEFT JOIN users su ON su.id = ms.student_id
+         LEFT JOIN active_discounts ad
+           ON ad.student_id = ms.student_id
+          AND ad.group_id = ms.group_id
          WHERE ms.month = $1
            AND ms.branch_id = $2
            AND g.branch_id = $2
@@ -1120,9 +1110,11 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
                  'father_phone', tss.student_father_phone,
                  'address', tss.student_address,
                  'age', tss.student_age,
-                 'payment_state', tss.payment_state,
-                 'required_amount', tss.total_required_amount,
-                 'paid_amount', tss.total_paid_amount
+                'payment_state', tss.payment_state,
+                'effective_required_amount', tss.effective_required_amount,
+                'required_amount', tss.total_required_amount,
+                'original_required_amount', tss.total_required_amount,
+                'paid_amount', tss.total_paid_amount
                )
                ORDER BY tss.student_name, tss.student_surname
              ),

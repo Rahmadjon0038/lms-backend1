@@ -1869,10 +1869,10 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
           WHERE sg.status = 'active'
             AND sg.branch_id = $1)::int as active_students,
         (SELECT COUNT(*)
-           FROM student_groups sg
-           JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
-          WHERE sg.status = 'stopped'
-            AND sg.branch_id = $1)::int as stopped_students
+           FROM monthly_snapshots ms
+          WHERE ms.month = $2
+            AND ms.branch_id = $1
+            AND ms.monthly_status = 'stopped')::int as stopped_students
     `;
 
     const summaryQuery = `
@@ -1889,7 +1889,7 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     `;
 
     const [studentCountsResult, summaryResult] = await Promise.all([
-      db.query(studentCountsQuery, [branchId]),
+      db.query(studentCountsQuery, [branchId, month]),
       db.query(summaryQuery, [month, branchId]),
     ]);
 
