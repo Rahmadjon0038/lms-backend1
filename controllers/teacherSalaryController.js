@@ -99,17 +99,31 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
          MAX(su.address) AS student_address,
          MAX(su.age) AS student_age,
          COALESCE(MAX(ms.group_price), 0)::numeric AS base_amount,
+         COALESCE(MAX(ms.discount_amount), 0)::numeric AS snapshot_discount_amount,
          COALESCE(MAX(ad.center_discount_amount), 0)::numeric AS center_discount_amount,
          COALESCE(MAX(ad.teacher_discount_amount), 0)::numeric AS teacher_discount_amount,
          COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
          COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
          COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
+         GREATEST(
+           COALESCE(MAX(ms.discount_amount), 0),
+           COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+         )::numeric AS effective_discount_amount,
          CASE
-           WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
+           WHEN GREATEST(
+             COALESCE(MAX(ms.group_price), 0)
+               - GREATEST(
+                   COALESCE(MAX(ms.discount_amount), 0),
+                   COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+                 ),
+             0
+           ) <= 0 THEN 'paid'
            WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
              COALESCE(MAX(ms.group_price), 0)
-               - COALESCE(MAX(ad.center_discount_amount), 0)
-               - COALESCE(MAX(ad.teacher_discount_amount), 0),
+               - GREATEST(
+                   COALESCE(MAX(ms.discount_amount), 0),
+                   COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+                 ),
              0
            ) THEN 'paid'
            ELSE 'partial'
@@ -125,7 +139,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
          AND ms.branch_id = $3
          AND g.branch_id = $3
          AND COALESCE(ms.monthly_status, 'active') = 'active'
-       GROUP BY g.teacher_id, ms.student_id, ms.group_id, ad.center_discount_amount, ad.teacher_discount_amount
+        GROUP BY g.teacher_id, ms.student_id, ms.group_id, ad.center_discount_amount, ad.teacher_discount_amount
      ),
      teacher_students_agg AS (
        SELECT
@@ -1054,10 +1068,25 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)::numeric AS total_required_amount,
            COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0)::numeric AS total_discount_amount,
            COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0)::numeric AS total_paid_amount,
+           GREATEST(
+             COALESCE(MAX(ms.discount_amount), 0),
+             COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+           )::numeric AS effective_discount_amount,
            CASE
-             WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) <= 0 THEN 'unpaid'
+             WHEN GREATEST(
+               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)
+                 - GREATEST(
+                     COALESCE(MAX(ms.discount_amount), 0),
+                     COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+                   ),
+               0
+             ) <= 0 THEN 'paid'
              WHEN COALESCE(SUM(COALESCE(ms.paid_amount, 0)), 0) >= GREATEST(
-               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0) - COALESCE(SUM(COALESCE(ms.discount_amount, 0)), 0),
+               COALESCE(SUM(COALESCE(ms.required_amount, 0)), 0)
+                 - GREATEST(
+                     COALESCE(MAX(ms.discount_amount), 0),
+                     COALESCE(MAX(ad.center_discount_amount), 0) + COALESCE(MAX(ad.teacher_discount_amount), 0)
+                   ),
                0
              )
                THEN 'paid'
@@ -1070,7 +1099,7 @@ exports.getSimpleTeacherSalaryList = async (req, res) => {
            AND ms.branch_id = $2
            AND g.branch_id = $2
            AND COALESCE(ms.monthly_status, 'active') = 'active'
-         GROUP BY g.teacher_id, ms.student_id
+         GROUP BY g.teacher_id, ms.student_id, ad.center_discount_amount, ad.teacher_discount_amount
        ),
        teacher_students_agg AS (
          SELECT
