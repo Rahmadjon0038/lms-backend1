@@ -58,13 +58,12 @@ const getLessonContext = async (lessonId, branchId) => {
         COALESCE(u.name, gu.name, '') AS teacher_name,
         COALESCE(u.surname, gu.surname, '') AS teacher_surname
       FROM lessons l
-      JOIN groups g ON g.id = l.group_id AND g.branch_id = l.branch_id
+      JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
       LEFT JOIN subjects ls ON ls.id = l.subject_id
       LEFT JOIN subjects gs ON gs.id = g.subject_id
       LEFT JOIN users u ON u.id = l.teacher_id
       LEFT JOIN users gu ON gu.id = g.teacher_id
       WHERE l.id = $1
-        AND l.branch_id = $2
       LIMIT 1
     `,
     [lessonId, branchId]
@@ -161,6 +160,7 @@ exports.saveLessonStatistics = async (req, res) => {
     }
 
     const reportMonth = String(lesson.lesson_date).slice(0, 7);
+    const reportBranchId = lesson.group_branch_id || lesson.branch_id || req.user.branch_id || 1;
     const reportData = {
       lesson_id: lessonId,
       lesson_label:
@@ -242,7 +242,7 @@ exports.saveLessonStatistics = async (req, res) => {
         lesson.group_id,
         effectiveTeacherId || null,
         lesson.lesson_subject_id || lesson.group_subject_id || null,
-        lesson.branch_id || req.user.branch_id || 1,
+        reportBranchId,
         reportMonth,
         lesson.lesson_date,
         lesson.lesson_start_time,
@@ -299,7 +299,7 @@ exports.getLessonStatistics = async (req, res) => {
         LEFT JOIN users u ON u.id = r.teacher_id
         LEFT JOIN subjects s ON s.id = r.subject_id
         WHERE r.lesson_id = $1
-          AND r.branch_id = $2
+          AND g.branch_id = $2
         LIMIT 1
       `,
       [lessonId, req.user.branch_id || 1]
@@ -333,7 +333,14 @@ exports.deleteLessonStatistics = async (req, res) => {
     }
 
     const existing = await pool.query(
-      `SELECT id, lesson_date FROM teacher_lesson_statistics_reports WHERE lesson_id = $1 AND branch_id = $2 LIMIT 1`,
+      `
+        SELECT r.id, r.lesson_date
+        FROM teacher_lesson_statistics_reports r
+        JOIN groups g ON g.id = r.group_id
+        WHERE r.lesson_id = $1
+          AND g.branch_id = $2
+        LIMIT 1
+      `,
       [lessonId, req.user.branch_id || 1]
     );
 
@@ -364,7 +371,16 @@ exports.deleteLessonStatistics = async (req, res) => {
     }
 
     await pool.query(
-      `DELETE FROM teacher_lesson_statistics_reports WHERE lesson_id = $1 AND branch_id = $2`,
+      `
+        DELETE FROM teacher_lesson_statistics_reports
+        WHERE lesson_id = $1
+          AND EXISTS (
+            SELECT 1
+            FROM groups g
+            WHERE g.id = teacher_lesson_statistics_reports.group_id
+              AND g.branch_id = $2
+          )
+      `,
       [lessonId, req.user.branch_id || 1]
     );
 
@@ -409,7 +425,7 @@ exports.getGroupStatisticsReports = async (req, res) => {
         LEFT JOIN subjects s ON s.id = r.subject_id
         WHERE r.group_id = $1
           AND r.report_month = $2
-          AND r.branch_id = $3
+          AND g.branch_id = $3
         ORDER BY r.lesson_date ASC, r.lesson_start_time ASC
       `,
       [groupId, monthFilter, req.user.branch_id || 1]
@@ -441,7 +457,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
 
     const params = [req.user.branch_id || 1, monthFilter];
     let where = `
-      WHERE r.branch_id = $1
+      WHERE g.branch_id = $1
         AND r.report_month = $2
         AND (
           LOWER(COALESCE(s.name, gs.name, '')) LIKE '%english%'
@@ -480,7 +496,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
           COALESCE(u.name, '') AS teacher_name,
           COALESCE(s.name, gs.name, '') AS subject_name
         FROM teacher_lesson_statistics_reports r
-        JOIN groups g ON g.id = r.group_id AND g.branch_id = r.branch_id
+        JOIN groups g ON g.id = r.group_id
         LEFT JOIN users u ON u.id = r.teacher_id
         LEFT JOIN subjects s ON s.id = r.subject_id
         LEFT JOIN subjects gs ON gs.id = g.subject_id
@@ -498,11 +514,11 @@ exports.getManagerDailyStatistics = async (req, res) => {
         lesson_date: row.lesson_date,
         lesson_time: `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
         group_id: row.group_id,
-        group_name: row.group_name,
-        teacher_id: row.teacher_id,
-        teacher_name: [row.teacher_surname, row.teacher_name]
-          .filter((part) => String(part || '').trim().length > 0)
-          .join(' ')
+          group_name: row.group_name,
+          teacher_id: row.teacher_id,
+          teacher_name: [row.teacher_surname, row.teacher_name]
+            .filter((part) => String(part || '').trim().length > 0)
+            .join(' ')
           .trim(),
         subject_name: row.subject_name,
         report_month: row.report_month,
@@ -550,7 +566,6 @@ exports.getEnglishManagerTeachers = async (req, res) => {
           AND g.branch_id = u.branch_id
         LEFT JOIN teacher_lesson_statistics_reports r
           ON r.teacher_id = u.id
-          AND r.branch_id = u.branch_id
           AND r.report_month = $2
           AND (
             LOWER(COALESCE(s.name, '')) LIKE '%english%'
