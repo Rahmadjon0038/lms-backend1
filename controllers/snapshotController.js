@@ -1695,8 +1695,10 @@ exports.getStudentAttendance = async (req, res) => {
         JOIN groups g ON sg.group_id = g.id AND g.branch_id = sg.branch_id
         JOIN subjects s ON g.subject_id = s.id AND s.branch_id = sg.branch_id
         LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
-        WHERE sg.student_id = $1 AND sg.group_id = $2 AND sg.status = 'active'
+        WHERE sg.student_id = $1 AND sg.group_id = $2
           AND sg.branch_id = $3
+        ORDER BY sg.joined_at DESC
+        LIMIT 1
       `;
       
       const studentGroupResult = await db.query(studentGroupQuery, [targetStudentId, group_id, branchId]);
@@ -1733,21 +1735,47 @@ exports.getStudentAttendance = async (req, res) => {
       snapshot = snapshotResult.rows[0];
     }
 
+    const membershipPeriodsResult = await db.query(
+      `
+        SELECT
+          TO_CHAR(DATE(sg.joined_at), 'YYYY-MM-DD') as joined_at,
+          TO_CHAR(DATE(sg.left_at), 'YYYY-MM-DD') as left_at
+        FROM student_groups sg
+        WHERE sg.student_id = $1
+          AND sg.group_id = $2
+          AND sg.branch_id = $3
+        ORDER BY sg.joined_at ASC
+      `,
+      [targetStudentId, group_id, branchId]
+    );
+
+    const membershipPeriods = membershipPeriodsResult.rows.map((row) => ({
+      joined_at: row.joined_at,
+      left_at: row.left_at
+    }));
+
+    const isLessonWithinMembership = (lessonDate) => {
+      if (!lessonDate) return false;
+      if (!membershipPeriods.length) return true;
+
+      return membershipPeriods.some((period) => {
+        const joinedOk = !period.joined_at || lessonDate >= period.joined_at;
+        const leftOk = !period.left_at || lessonDate <= period.left_at;
+        return joinedOk && leftOk;
+      });
+    };
+
     // Kunlik davomat ma'lumotlarini olish (oydagi barcha darslar)
-    // Talaba qo'shilishidan oldingi darslar uchun status = null qaytamiz
+    // Talaba qo'shilishidan oldingi yoki guruhdan chiqqandan keyingi darslar uchun status = null qaytamiz
     const dailyAttendanceQuery = `
       SELECT 
         l.date as lesson_date,
-        CASE
-          WHEN sg.joined_at IS NOT NULL AND l.date < DATE(sg.joined_at) THEN NULL
-          ELSE COALESCE(a.status, 'kelmagan')
-        END as status,
+        COALESCE(a.status, 'kelmagan') as status,
         COALESCE(l.is_holiday, false) as is_holiday,
         TO_CHAR(l.date AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY') as formatted_date,
         TO_CHAR(a.created_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as marked_at
       FROM lessons l
       LEFT JOIN attendance a ON l.id = a.lesson_id AND a.student_id = $1 AND a.branch_id = $4
-      LEFT JOIN student_groups sg ON sg.student_id = $1 AND sg.group_id = $2 AND sg.branch_id = $4
       WHERE l.group_id = $2 
         AND l.branch_id = $4
         AND TO_CHAR(l.date, 'YYYY-MM') = $3
@@ -1756,9 +1784,20 @@ exports.getStudentAttendance = async (req, res) => {
 
     const dailyResult = await db.query(dailyAttendanceQuery, [targetStudentId, group_id, month, branchId]);
 
+    const normalizedDailyAttendance = dailyResult.rows.map((row) => {
+      const lessonDate = String(row.lesson_date || row.formatted_date || '').slice(0, 10);
+      if (!isLessonWithinMembership(lessonDate)) {
+        return {
+          ...row,
+          status: null
+        };
+      }
+      return row;
+    });
+
     // Real lessons count (agar snapshot bo'lmasa)
-    if (snapshot.id === null && dailyResult.rows.length > 0) {
-      const eligibleRows = dailyResult.rows.filter((row) => row.status !== null && !row.is_holiday);
+    if (snapshot.id === null && normalizedDailyAttendance.length > 0) {
+      const eligibleRows = normalizedDailyAttendance.filter((row) => row.status !== null && !row.is_holiday);
       snapshot.total_lessons = eligibleRows.length;
       snapshot.attended_lessons = eligibleRows.filter(row => row.status === 'keldi' || row.status === 'present').length;
       snapshot.attendance_percentage = snapshot.total_lessons > 0 
@@ -1776,7 +1815,7 @@ exports.getStudentAttendance = async (req, res) => {
     };
 
     // Kunlik davomatni status bo'yicha guruhlash
-    const nonHolidayRows = dailyResult.rows.filter(row => !row.is_holiday);
+    const nonHolidayRows = normalizedDailyAttendance.filter(row => !row.is_holiday);
     const attendanceByStatus = {
       keldi: nonHolidayRows.filter(row => row.status === 'keldi' || row.status === 'present').length,
       kelmadi: nonHolidayRows.filter(row => row.status === 'kelmadi' || row.status === 'absent').length,
@@ -1815,7 +1854,7 @@ exports.getStudentAttendance = async (req, res) => {
         monthly_status: snapshot.monthly_status,
         attendance_statistics: attendanceStats,
         attendance_breakdown: attendanceByStatus,
-        daily_attendance: dailyResult.rows,
+        daily_attendance: normalizedDailyAttendance,
         snapshot_info: {
           created_at: snapshot.snapshot_date,
           updated_at: snapshot.last_updated,

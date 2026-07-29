@@ -74,6 +74,19 @@ const formatTashkentDateTimeLabel = (value = new Date()) => {
   return `${year}-${month}-${day} ${hour}:${minute}`;
 };
 
+const formatTashkentDateYmd = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const tashkentDate = new Date(date.getTime() + 5 * 60 * 60 * 1000);
+  const year = tashkentDate.getUTCFullYear().toString().padStart(4, '0');
+  const month = String(tashkentDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(tashkentDate.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const normalizeMonthParam = (value) => {
   if (!value) return null;
   const raw = String(value).trim();
@@ -166,7 +179,7 @@ const applyGlobalHoliday = async ({ date, isHoliday, userId, branchId = 1 }) => 
 };
 
 const getDefaultLessonStatusForDate = (dateStr) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = formatTashkentDateYmd(new Date()) || new Date().toISOString().slice(0, 10);
   return String(dateStr) > today ? 'not_started' : 'open';
 };
 
@@ -197,22 +210,6 @@ const resolveDefaultMonthlyStatus = async (studentId, groupId, branchId = 1) => 
 
 const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate, branchId = 1) => {
   const month = String(lessonDate).slice(0, 7);
-
-  await pool.query(
-    `DELETE FROM attendance a
-     WHERE a.lesson_id = $1
-       AND a.branch_id = $4
-       AND NOT EXISTS (
-         SELECT 1
-         FROM student_groups sg
-         WHERE sg.student_id = a.student_id
-           AND sg.group_id = $2
-           AND sg.branch_id = $4
-           AND DATE(sg.joined_at) <= $3::date
-           AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $3::date)
-       )`,
-    [lessonId, groupId, lessonDate, branchId]
-  );
 
   const eligibleStudents = await pool.query(
     `SELECT DISTINCT sg.student_id
@@ -287,24 +284,19 @@ const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate
   }
 
   const { start: monthStart, end: monthEnd } = getMonthStartEnd(month);
-  const startBoundary = group.class_start_date || group.start_date;
+  const startBoundary = formatTashkentDateYmd(group.class_start_date || group.start_date);
   const scheduleEffectiveFrom = group.schedule_effective_from
-    ? new Date(Date.UTC(
-      new Date(group.schedule_effective_from).getUTCFullYear(),
-      new Date(group.schedule_effective_from).getUTCMonth(),
-      new Date(group.schedule_effective_from).getUTCDate()
-    ))
+    ? formatTashkentDateYmd(group.schedule_effective_from)
     : null;
   const effectiveStart = startBoundary
-    ? new Date(Date.UTC(
-      new Date(startBoundary).getUTCFullYear(),
-      new Date(startBoundary).getUTCMonth(),
-      new Date(startBoundary).getUTCDate()
-    ))
+    ? new Date(`${startBoundary}T00:00:00.000Z`)
     : monthStart;
   let firstDate = effectiveStart > monthStart ? effectiveStart : monthStart;
-  if (scheduleEffectiveFrom && scheduleEffectiveFrom > firstDate) {
-    firstDate = scheduleEffectiveFrom;
+  if (scheduleEffectiveFrom) {
+    const scheduleEffectiveFromDate = new Date(`${scheduleEffectiveFrom}T00:00:00.000Z`);
+    if (scheduleEffectiveFromDate > firstDate) {
+      firstDate = scheduleEffectiveFromDate;
+    }
   }
   if (fromDate && isValidDate(fromDate)) {
     const fromDateObj = new Date(`${fromDate}T00:00:00.000Z`);
@@ -804,18 +796,13 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
     });
 
     const lessonStatsResult = await pool.query(
-      `WITH lesson_attendance AS (
+      `WITH lesson_stats AS (
          SELECT
            l.id as lesson_id,
            l.group_id,
            COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
            COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
-           CASE
-             WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
-             WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
-                  = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
-             ELSE false
-           END as attendance_completed
+           CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
            AND a.branch_id = $3
@@ -827,20 +814,24 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
            )
+         LEFT JOIN teacher_lesson_statistics_reports r
+           ON r.lesson_id = l.id
+          AND r.branch_id = $3
          WHERE l.teacher_id = $1
            AND l.date = $2::date
            AND l.branch_id = $3
            AND COALESCE(l.is_holiday, false) = false
-         GROUP BY l.id, l.group_id
+         GROUP BY l.id, l.group_id, r.lesson_id
        )
        SELECT
          group_id,
          COUNT(*) as lessons_today_count,
          COALESCE(SUM(active_students_count), 0) as active_students_count,
          COALESCE(SUM(marked_students_count), 0) as marked_students_count,
-         BOOL_OR(attendance_completed) as any_attendance_completed,
-         BOOL_AND(attendance_completed) as all_attendance_completed
-       FROM lesson_attendance
+         COUNT(*) FILTER (WHERE report_sent) as reported_lessons_count,
+         BOOL_OR(report_sent) as any_report_sent,
+         BOOL_AND(report_sent) as all_reports_sent
+       FROM lesson_stats
        GROUP BY group_id`,
       [teacherIdNum, attendanceDate, branchId]
     );
@@ -851,8 +842,9 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         lessons_today_count: Number(row.lessons_today_count) || 0,
         active_students_count: Number(row.active_students_count) || 0,
         marked_students_count: Number(row.marked_students_count) || 0,
-        any_attendance_completed: Boolean(row.any_attendance_completed),
-        all_attendance_completed: Boolean(row.all_attendance_completed)
+        reported_lessons_count: Number(row.reported_lessons_count) || 0,
+        any_report_sent: Boolean(row.any_report_sent),
+        all_reports_sent: Boolean(row.all_reports_sent)
       });
     }
 
@@ -861,8 +853,9 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         lessons_today_count: 0,
         active_students_count: 0,
         marked_students_count: 0,
-        any_attendance_completed: false,
-        all_attendance_completed: false
+        reported_lessons_count: 0,
+        any_report_sent: false,
+        all_reports_sent: false
       };
 
       return {
@@ -871,8 +864,9 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         today_lessons_count: stats.lessons_today_count,
         today_active_students_count: stats.active_students_count,
         today_marked_students_count: stats.marked_students_count,
-        today_attendance_completed: stats.any_attendance_completed,
-        today_attendance_fully_completed: stats.all_attendance_completed
+        today_reported_lessons_count: stats.reported_lessons_count,
+        today_report_sent: stats.any_report_sent,
+        today_report_fully_sent: stats.all_reports_sent
       };
     });
 
@@ -1756,6 +1750,9 @@ exports.getMonthlyAttendance = async (req, res) => {
          g.name as group_name,
          g.price as group_price,
          g.teacher_id,
+         g.class_start_date,
+         g.start_date,
+         g.created_at,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
          t.name as teacher_first_name,
@@ -1775,6 +1772,7 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     const group = groupInfo.rows[0];
+    const groupStartDate = formatTashkentDateYmd(group.class_start_date || group.start_date || group.created_at);
     if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
       return res.status(403).json({
         success: false,
@@ -1787,8 +1785,9 @@ exports.getMonthlyAttendance = async (req, res) => {
       `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
        WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2 AND branch_id = $3
+         ${groupStartDate ? 'AND date >= $4::date' : ''}
        ORDER BY date`,
-      [group_id, selectedMonth, branchId]
+      groupStartDate ? [group_id, selectedMonth, branchId, groupStartDate] : [group_id, selectedMonth, branchId]
     );
 
     // SAFETY: shu oy darslaridagi attendance yozuvlari mavjudligini ta'minlaymiz
@@ -1840,6 +1839,17 @@ exports.getMonthlyAttendance = async (req, res) => {
       return periods[periods.length - 1].joined_at || null;
     };
 
+    const isLessonWithinMembership = (lessonDate, periods) => {
+      if (!lessonDate) return false;
+      if (!periods || periods.length === 0) return true;
+
+      return periods.some((period) => {
+        const joinedOk = !period.joined_at || lessonDate >= period.joined_at;
+        const leftOk = !period.left_at || lessonDate <= period.left_at;
+        return joinedOk && leftOk;
+      });
+    };
+
     // Shu oydagi barcha attendance yozuvlari - student chiqib ketgan bo'lsa ham ko'rinsin
     const attendance = await pool.query(
       `SELECT 
@@ -1889,20 +1899,50 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // Har bir student uchun statistika hisoblash va qo'shish
     const studentsWithStats = attendance.rows.map(student => {
-      const totalAttended = parseInt(student.total_present) + parseInt(student.total_late);
-      const totalLessons = parseInt(student.total_lessons);
-      const attendancePercentage = totalLessons > 0 ? Math.round((totalAttended / totalLessons) * 100) : 0;
       const periods = membershipPeriodsMap.get(student.student_id) || [];
       const joinedAtForMonth = pickJoinedAtForMonth(periods, selectedMonth);
+      const filteredRecords = Array.isArray(student.attendance_records)
+        ? student.attendance_records.map((record) => {
+            const lessonDate = String(record?.date || '').slice(0, 10);
+            if (!isLessonWithinMembership(lessonDate, periods)) {
+              return {
+                ...record,
+                status: null,
+                is_marked: false
+              };
+            }
+            return record;
+          })
+        : [];
+
+      const filteredNonHoliday = filteredRecords.filter((record) => !record.is_holiday);
+      const totalAttended = filteredNonHoliday.filter(
+        (record) => record.is_marked && (record.status === 'keldi' || record.status === 'present' || record.status === 'kechikdi' || record.status === 'late')
+      ).length;
+      const totalMissed = filteredNonHoliday.filter(
+        (record) => record.is_marked && (record.status === 'kelmadi' || record.status === 'absent')
+      ).length;
+      const totalLate = filteredNonHoliday.filter(
+        (record) => record.is_marked && (record.status === 'kechikdi' || record.status === 'late')
+      ).length;
+      const totalLessons = filteredNonHoliday.filter((record) => record.is_marked).length;
+      const attendancePercentage = totalLessons > 0 ? Math.round((totalAttended / totalLessons) * 100) : 0;
       
       return {
         ...student,
         joined_at: joinedAtForMonth,
         membership_periods: membershipPeriodsMap.get(student.student_id) || [],
+        attendance_records: filteredRecords,
+        total_present: filteredNonHoliday.filter((record) =>
+          record.is_marked && (record.status === 'keldi' || record.status === 'present')
+        ).length,
+        total_absent: totalMissed,
+        total_late: totalLate,
+        total_lessons: totalLessons,
         statistics: {
           total_attended: totalAttended,      // Nechta darsga qatnashdi (keldi + kechikdi)
-          total_missed: parseInt(student.total_absent),        // Nechta darsni qoldirdi
-          total_late: parseInt(student.total_late),            // Nechta marta kechikdi
+          total_missed: totalMissed,        // Nechta darsni qoldirdi
+          total_late: totalLate,            // Nechta marta kechikdi
           total_lessons: totalLessons,        // Jami darslar soni (faqat student guruhda bo'lgan)
           attendance_percentage: attendancePercentage  // Davomat foizi
         }
@@ -2297,6 +2337,9 @@ exports.getGroupLessons = async (req, res) => {
          g.name as group_name,
          g.price as group_price,
          g.schedule,
+         g.class_start_date,
+         g.start_date,
+         g.created_at,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
          t.name as teacher_first_name,
@@ -2317,6 +2360,7 @@ exports.getGroupLessons = async (req, res) => {
     }
 
     const group = groupInfo.rows[0];
+    const groupStartDate = formatTashkentDateYmd(group.class_start_date || group.start_date || group.created_at);
     if (role === 'teacher' && String(group.teacher_id || '') !== String(userId)) {
       return res.status(403).json({
         success: false,
@@ -2330,6 +2374,7 @@ exports.getGroupLessons = async (req, res) => {
       groupId: parseInt(group_id, 10),
       month: selectedMonth,
       createdBy: userId,
+      fromDate: groupStartDate,
       branchId
     });
 
@@ -2400,6 +2445,7 @@ exports.getGroupLessons = async (req, res) => {
            FILTER (WHERE COALESCE(l.is_holiday, false) = false) as absent_count,
          COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END)
            FILTER (WHERE COALESCE(l.is_holiday, false) = false) as late_count,
+         CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent,
          CASE
            WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
            WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN 'not_marked'
@@ -2426,12 +2472,16 @@ exports.getGroupLessons = async (req, res) => {
              AND DATE(sg.joined_at) <= l.date
              AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
          )
+       LEFT JOIN teacher_lesson_statistics_reports r
+         ON r.lesson_id = l.id
+        AND r.branch_id = $3
        LEFT JOIN subjects s2 ON l.subject_id = s2.id
        LEFT JOIN rooms r2 ON l.room_id = r2.id
        WHERE l.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2 AND l.branch_id = $3
-       GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.is_holiday, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number
+         ${groupStartDate ? `AND l.date >= $4::date` : ''}
+       GROUP BY l.id, l.date, l.start_time, l.end_time, l.status, l.is_holiday, l.teacher_id, l.subject_id, l.room_id, s2.name, r2.room_number, r.lesson_id
        ORDER BY l.date DESC, l.start_time ASC`,
-      [group_id, selectedMonth, branchId]
+      groupStartDate ? [group_id, selectedMonth, branchId, groupStartDate] : [group_id, selectedMonth, branchId]
     );
 
     res.json({

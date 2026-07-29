@@ -684,7 +684,7 @@ exports.updateGroupStatus = async (req, res) => {
 
     try {
         const groupCheck = await pool.query(
-            `SELECT id, teacher_id, status
+            `SELECT id, name, teacher_id, subject_id, room_id, schedule, status
              FROM groups
              WHERE id = $1 AND branch_id = $2`,
             [id, branchId]
@@ -729,6 +729,12 @@ exports.updateGroupStatus = async (req, res) => {
         
         // Status active bo'lsa - darslar boshlangan deb belgilaymiz
         if (status === 'active') {
+            if (!group.teacher_id) {
+                return res.status(400).json({
+                    message: "Darsni boshlash uchun guruhga o'qituvchi biriktirilgan bo'lishi kerak"
+                });
+            }
+
             updateFields.status = status;
             updateFields.class_start_date = new Date();
             updateFields.class_status = 'started';
@@ -808,6 +814,48 @@ exports.updateGroupStatus = async (req, res) => {
                  ) AND branch_id = $3 AND course_status = 'not_started'`,
                 [new Date(), id, branchId]
             );
+
+            const today = todayAsDateString();
+            const normalizedScheduleTime = String(group.schedule?.time || '')
+                .replace(/[–—]/g, '-')
+                .replace(/\./g, ':')
+                .trim();
+            const parsedTime = parseTimeRange(normalizedScheduleTime);
+            const lessonStartTime = parsedTime?.start
+                ? (parsedTime.start.length === 5 ? `${parsedTime.start}:00` : parsedTime.start)
+                : '00:00:00';
+            const lessonEndTime = parsedTime?.end
+                ? (parsedTime.end.length === 5 ? `${parsedTime.end}:00` : parsedTime.end)
+                : null;
+
+            const existingTodayLesson = await pool.query(
+                `SELECT id
+                 FROM lessons
+                 WHERE group_id = $1
+                   AND date = $2::date
+                   AND branch_id = $3
+                 LIMIT 1`,
+                [id, today, branchId]
+            );
+
+            if (existingTodayLesson.rows.length === 0) {
+                await pool.query(
+                    `INSERT INTO lessons (
+                        group_id, teacher_id, subject_id, room_id, date, start_time, end_time, status, created_by, branch_id
+                    ) VALUES ($1, $2, $3, $4, $5::date, $6::time, $7::time, 'open', $8, $9)`,
+                    [
+                        id,
+                        group.teacher_id || null,
+                        group.subject_id || null,
+                        group.room_id || null,
+                        today,
+                        lessonStartTime,
+                        lessonEndTime,
+                        req.user?.id || null,
+                        branchId
+                    ]
+                );
+            }
         }
 
         let message = '';
@@ -2230,6 +2278,12 @@ exports.startGroupClass = async (req, res) => {
         const group = groupCheck.rows[0];
         if (req.user?.role === 'teacher' && group.teacher_id !== req.user.id) {
             return res.status(403).json({ message: "Teacher faqat o'z guruhida darsni boshlay oladi" });
+        }
+
+        if (!group.teacher_id) {
+            return res.status(400).json({
+                message: "Darsni boshlash uchun guruhga o'qituvchi biriktirilgan bo'lishi kerak"
+            });
         }
 
         // Faqat draft holatidagi guruhni boshlash mumkin
