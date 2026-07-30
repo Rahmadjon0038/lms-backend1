@@ -12,7 +12,9 @@ const PORT = process.env.PORT || 5000;
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 
 // Middleware: JSON formatdagi ma'lumotlarni qabul qilish
-app.use(express.json());
+// Kunlik attendance / bulk payloadlar katta bo'lishi mumkin.
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
