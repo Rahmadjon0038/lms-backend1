@@ -2050,7 +2050,11 @@ exports.getAttendanceByDate = async (req, res) => {
 // ============================================================================
 exports.updateAttendanceByDate = async (req, res) => {
   const { role, id: userId } = req.user;
-  const { date, lessons, groups, lesson_id, attendance_records } = req.body || {};
+  const incomingBody = req.body || {};
+  const payload = incomingBody?.data && typeof incomingBody.data === 'object'
+    ? incomingBody.data
+    : incomingBody;
+  const { date, lessons, groups, lesson_id, attendance_records } = payload;
   const branchId = getScopedBranchId(req);
 
   try {
@@ -2149,9 +2153,21 @@ exports.updateAttendanceByDate = async (req, res) => {
         });
       }
 
+      const normalizedRecords = records
+        .filter((record) => record && record.attendance_id)
+        .filter((record) => record.status !== null && record.status !== undefined && String(record.status).trim() !== '');
+
+      if (normalizedRecords.length === 0) {
+        updatedLessons.push({
+          lesson_id: currentLessonId,
+          updated_count: 0
+        });
+        continue;
+      }
+
       const result = await processAttendanceRecordsForLesson({
         lesson,
-        attendanceRecords: records,
+        attendanceRecords: normalizedRecords,
         userId
       });
 
