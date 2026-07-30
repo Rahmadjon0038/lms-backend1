@@ -10,6 +10,8 @@ const {
   createLesson,
   getLessonStudents,
   markAttendance,
+  getAttendanceByDate,
+  updateAttendanceByDate,
   getMonthlyAttendance,
   updateStudentMonthlyStatus,
   getGroupLessons,
@@ -170,6 +172,74 @@ router.get('/lessons/:lesson_id/students', protect, roleCheck(['admin', 'super_a
  *         description: Davomat belgilandi
  */
 router.put('/lessons/:lesson_id/mark', protect, roleCheck(['admin', 'super_admin', 'teacher']), markAttendance);
+
+/**
+ * @swagger
+ * /api/attendance/date:
+ *   get:
+ *     summary: Tanlangan sanadagi barcha guruhlar davomatini olish
+ *     description: Kun bo'yicha lessons, student attendance va report holatlarini qaytaradi
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: date
+ *         in: query
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "2026-07-30"
+ *       - name: teacher_id
+ *         in: query
+ *         schema:
+ *           type: integer
+ *       - name: group_id
+ *         in: query
+ *         schema:
+ *           type: integer
+ *       - name: subject_id
+ *         in: query
+ *         schema:
+ *           type: integer
+ *       - name: shift
+ *         in: query
+ *         schema:
+ *           type: string
+ *           enum: [morning, evening, kunduzgi, kechki]
+ *     responses:
+ *       200:
+ *         description: Kunlik davomat
+ *   put:
+ *     summary: Tanlangan sanadagi davomatni bulk yangilash
+ *     description: GET qaytargan lesson/attendance ma'lumotlarini qayta yuborib yangilash uchun
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - date
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-07-30"
+ *               lessons:
+ *                 type: array
+ *                 description: [{ lesson_id, attendance_records: [...] }]
+ *               groups:
+ *                 type: array
+ *                 description: [{ group_id, lessons: [...] }]
+ *     responses:
+ *       200:
+ *         description: Davomat yangilandi
+ */
+router.get('/date', protect, roleCheck(['admin', 'super_admin', 'teacher', 'english-manager']), getAttendanceByDate);
+router.put('/date', protect, roleCheck(['admin', 'super_admin', 'teacher', 'english-manager']), updateAttendanceByDate);
 
 /**
  * @swagger

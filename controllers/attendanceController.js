@@ -249,6 +249,203 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate, branch
   return { eligibleCount: eligibleStudents.rows.length, createdCount };
 };
 
+const processAttendanceRecordsForLesson = async ({
+  lesson,
+  attendanceRecords,
+  userId,
+}) => {
+  const allowedStatuses = ['keldi', 'kelmadi', 'kechikdi'];
+  let updatedCount = 0;
+
+  for (const record of attendanceRecords) {
+    if (!record.attendance_id) {
+      const error = new Error('attendance_id majburiy');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (!allowedStatuses.includes(record.status)) {
+      const error = new Error(`Status faqat: ${allowedStatuses.join(', ')}`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const result = await pool.query(
+      `UPDATE attendance 
+       SET status = $1, is_marked = true, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2 AND lesson_id = $3 AND monthly_status = 'active'
+       RETURNING student_id`,
+      [record.status, record.attendance_id, lesson.id]
+    );
+
+    if (result.rowCount === 0) {
+      const checkAttendance = await pool.query(
+        `SELECT id, student_id, monthly_status, status FROM attendance WHERE id = $1 AND lesson_id = $2`,
+        [record.attendance_id, lesson.id]
+      );
+
+      if (checkAttendance.rows.length > 0) {
+        const att = checkAttendance.rows[0];
+        if (att.monthly_status !== 'active') {
+          console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, monthly_status=${att.monthly_status}`);
+          continue;
+        }
+      } else {
+        const error = new Error('Attendance topilmadi');
+        error.statusCode = 404;
+        error.attendance_id = record.attendance_id;
+        throw error;
+      }
+    } else {
+      updatedCount += result.rowCount;
+
+      const updatedStudentId = result.rows[0]?.student_id;
+      if (!updatedStudentId) {
+        continue;
+      }
+
+      const statusLabels = {
+        keldi: 'Keldi',
+        kelmadi: 'Kelmadi',
+        kechikdi: 'Kechikdi'
+      };
+      const humanStatus = statusLabels[record.status] || record.status;
+      const markedAtLabel = formatTashkentDateTimeLabel();
+      const pushBody = `${humanStatus}\n${markedAtLabel}`;
+
+      try {
+        await notifyUser({
+          userId: updatedStudentId,
+          type: 'attendance',
+          title: 'Davomat belgilandi',
+          body: humanStatus,
+          pushTitle: 'Davomat belgilandi',
+          pushBody,
+          data: {
+            route: '/notification-detail',
+            type: 'attendance',
+            lesson_id: String(lesson.id),
+            lesson_date: String(lesson.lesson_date),
+            lesson_month: String(lesson.lesson_month || String(lesson.lesson_date).slice(0, 7)),
+            group_id: String(lesson.group_id),
+            group_name: lesson.group_name || '',
+            teacher_name: lesson.teacher_name || '',
+            subject_name: lesson.subject_name || '',
+            attendance_status: record.status,
+            attendance_marked_at: markedAtLabel,
+          },
+          createdBy: userId,
+        });
+      } catch (notificationError) {
+        console.warn(`⚠️ Attendance notification yuborilmadi: ${notificationError.message}`);
+      }
+
+      try {
+        const attendancePoints = {
+          keldi: 3,
+          kelmadi: 0,
+        };
+        const basePoints = attendancePoints[record.status] ?? 0;
+
+        await pool.query(
+          `DELETE FROM student_point_events
+           WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
+          [updatedStudentId, lesson.id]
+        );
+
+        const eventMonthKey =
+          lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
+        let awardedPoints = basePoints;
+        if (basePoints > 0) {
+          const capResult = await pool.query(
+            `SELECT COALESCE(SUM(points), 0)::int AS month_total
+             FROM student_point_events
+             WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
+            [updatedStudentId, lesson.group_id, eventMonthKey]
+          );
+          const remaining = Math.max(
+            0,
+            MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
+          );
+          awardedPoints = Math.min(basePoints, remaining);
+        }
+
+        if (awardedPoints > 0) {
+          await pool.query(
+            `
+            INSERT INTO student_point_events (
+              student_id,
+              group_id,
+              lesson_id,
+              month_name,
+              points,
+              source_type,
+              title,
+              description,
+              metadata,
+              created_by
+            ) VALUES (
+              $1, $2, $3, $4, $5, 'attendance', $6, $7,
+              $8::jsonb || jsonb_build_object(
+                'created_by_name',
+                COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
+              ),
+              $9
+            )
+            `,
+            [
+              updatedStudentId,
+              lesson.group_id,
+              lesson.id,
+              eventMonthKey,
+              awardedPoints,
+              'Darsga qatnashdi',
+              `${humanStatus} - +${awardedPoints} ball`,
+              JSON.stringify({
+                status: record.status,
+                lesson_date: lesson.lesson_date,
+                group_name: lesson.group_name || '',
+                teacher_name: lesson.teacher_name || '',
+                subject_name: lesson.subject_name || '',
+                awarded_points: awardedPoints,
+                base_points: basePoints,
+                capped: awardedPoints < basePoints,
+              }),
+              userId,
+            ]
+          );
+        }
+      } catch (pointsError) {
+        console.warn(`⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`);
+      }
+    }
+  }
+
+  return { updatedCount };
+};
+
+const getLessonAttendanceAccess = async (lessonId, branchId) => {
+  return pool.query(
+    `SELECT
+       l.id,
+       TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date,
+       TO_CHAR(l.date, 'YYYY-MM') as lesson_month,
+       l.group_id,
+       COALESCE(l.teacher_id, g.teacher_id) as teacher_id,
+       l.status,
+       COALESCE(l.is_holiday, false) as is_holiday,
+       g.name as group_name,
+       CONCAT(COALESCE(t.name, ''), ' ', COALESCE(t.surname, '')) as teacher_name,
+       COALESCE(s.name, '') as subject_name
+     FROM lessons l
+     LEFT JOIN groups g ON g.id = l.group_id
+     LEFT JOIN users t ON t.id = COALESCE(l.teacher_id, g.teacher_id)
+     LEFT JOIN subjects s ON s.id = g.subject_id
+     WHERE l.id = $1 AND l.branch_id = $2`,
+    [lessonId, branchId]
+  );
+};
+
 const autoGenerateLessonsForMonth = async ({ groupId, month, createdBy, fromDate = null, branchId = 1 }) => {
   let groupResult;
   try {
@@ -1464,6 +1661,7 @@ exports.markAttendance = async (req, res) => {
   const { lesson_id } = req.params;
   const { attendance_records } = req.body; // [{attendance_id, status}]
   const { role, id: userId } = req.user;
+  const branchId = getScopedBranchId(req);
   
   try {
     if (!Array.isArray(attendance_records) || attendance_records.length === 0) {
@@ -1473,25 +1671,7 @@ exports.markAttendance = async (req, res) => {
       });
     }
 
-    const lessonAccess = await pool.query(
-       `SELECT
-         l.id,
-         TO_CHAR(l.date, 'YYYY-MM-DD') as lesson_date,
-         TO_CHAR(l.date, 'YYYY-MM') as lesson_month,
-         l.group_id,
-         COALESCE(l.teacher_id, g.teacher_id) as teacher_id,
-         l.status,
-         COALESCE(l.is_holiday, false) as is_holiday,
-         g.name as group_name,
-         CONCAT(COALESCE(t.name, ''), ' ', COALESCE(t.surname, '')) as teacher_name,
-         COALESCE(s.name, '') as subject_name
-       FROM lessons l
-       LEFT JOIN groups g ON g.id = l.group_id
-       LEFT JOIN users t ON t.id = COALESCE(l.teacher_id, g.teacher_id)
-       LEFT JOIN subjects s ON s.id = g.subject_id
-       WHERE l.id = $1`,
-      [lesson_id]
-    );
+    const lessonAccess = await getLessonAttendanceAccess(lesson_id, branchId);
 
     if (lessonAccess.rows.length === 0) {
       return res.status(404).json({
@@ -1522,192 +1702,11 @@ exports.markAttendance = async (req, res) => {
       });
     }
 
-    const allowedStatuses = ['keldi', 'kelmadi', 'kechikdi'];
-    let updatedCount = 0;
-    
-    for (const record of attendance_records) {
-      if (!record.attendance_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'attendance_id majburiy'
-        });
-      }
-      
-      if (!allowedStatuses.includes(record.status)) {
-        return res.status(400).json({
-          success: false,
-          message: `Status faqat: ${allowedStatuses.join(', ')}`
-        });
-      }
-
-      // XAVFSIZLIK: lesson_id ham tekshiriladi + faqat active talabalar
-      const result = await pool.query(
-        `UPDATE attendance 
-         SET status = $1, is_marked = true, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $2 AND lesson_id = $3 AND monthly_status = 'active'
-         RETURNING student_id`,
-        [record.status, record.attendance_id, lesson_id]
-      );
-
-      if (result.rowCount === 0) {
-        // Tekshirish: to'xtatilgan yoki topilmagan?
-        const checkAttendance = await pool.query(
-          `SELECT id, student_id, monthly_status, status FROM attendance WHERE id = $1 AND lesson_id = $2`,
-          [record.attendance_id, lesson_id]
-        );
-        
-        if (checkAttendance.rows.length > 0) {
-          const att = checkAttendance.rows[0];
-          
-          if (att.monthly_status !== 'active') {
-            // To'xtatilgan talaba - xato bermasdan o'tkazib yuborish
-            console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, monthly_status=${att.monthly_status}`);
-            continue; // Keyingisiga o'tish
-          }
-        } else {
-          console.log(`⚠️ Attendance topilmadi: attendance_id=${record.attendance_id}`);
-          return res.status(404).json({
-            success: false,
-            message: 'Attendance topilmadi',
-            attendance_id: record.attendance_id
-          });
-        }
-      } else {
-        updatedCount += result.rowCount;
-
-        const updatedStudentId = result.rows[0]?.student_id;
-        if (updatedStudentId) {
-          const statusLabels = {
-            keldi: 'Keldi',
-            kelmadi: 'Kelmadi',
-            kechikdi: 'Kechikdi'
-          };
-          const humanStatus = statusLabels[record.status] || record.status;
-          const markedAtLabel = formatTashkentDateTimeLabel();
-          const pushBody = `${humanStatus}\n${markedAtLabel}`;
-          try {
-            await notifyUser({
-              userId: updatedStudentId,
-              type: 'attendance',
-              title: 'Davomat belgilandi',
-              body: humanStatus,
-              pushTitle: 'Davomat belgilandi',
-              pushBody,
-              data: {
-                route: '/notification-detail',
-                type: 'attendance',
-                lesson_id: String(lesson.id),
-                lesson_date: String(lesson.lesson_date),
-                lesson_month: String(lesson.lesson_month || String(lesson.lesson_date).slice(0, 7)),
-                group_id: String(lesson.group_id),
-                group_name: lesson.group_name || '',
-                teacher_name: lesson.teacher_name || '',
-                subject_name: lesson.subject_name || '',
-                attendance_status: record.status,
-                attendance_marked_at: markedAtLabel,
-              },
-              createdBy: userId,
-            });
-          } catch (notificationError) {
-            console.warn(
-              `⚠️ Attendance notification yuborilmadi: ${notificationError.message}`
-            );
-          }
-
-          try {
-            // Davomat balli qoidasi: keldi = 3, kelmadi = 0.
-            // Amalda faqat keldi/kelmadi ishlatiladi; dars haftada 3 marta
-            // bo'lgani uchun oyiga ~13 dars × 3 = ~39 ball — oylik 100 ballik
-            // limitning ~40% i davomatdan, qolgani teacher ballaridan yig'iladi.
-            // Har (student, lesson) uchun bitta yozuv bo'ladi: qayta
-            // belgilashda eski yozuv o'chirilib yangisi yoziladi — balllar
-            // dublikat bo'lmaydi, "kelmadi"ga o'zgartirilsa ball olib
-            // tashlanadi. Kim belgilashidan qat'i nazar (teacher/admin,
-            // sayt yoki mobil) shu endpoint orqali bir xil ishlaydi.
-            const attendancePoints = {
-              keldi: 3,
-              kelmadi: 0,
-            };
-            const basePoints = attendancePoints[record.status] ?? 0;
-
-            await pool.query(
-              `DELETE FROM student_point_events
-               WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
-              [updatedStudentId, lesson.id]
-            );
-
-            // Oylik limit: shu oyda (shu guruh bo'yicha) MONTHLY_POINT_CAP dan
-            // oshmasligi kerak — limitga yetganda qolgan budjet doirasida beriladi
-            const eventMonthKey =
-              lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
-            let awardedPoints = basePoints;
-            if (basePoints > 0) {
-              const capResult = await pool.query(
-                `SELECT COALESCE(SUM(points), 0)::int AS month_total
-                 FROM student_point_events
-                 WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
-                [updatedStudentId, lesson.group_id, eventMonthKey]
-              );
-              const remaining = Math.max(
-                0,
-                MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
-              );
-              awardedPoints = Math.min(basePoints, remaining);
-            }
-
-            if (awardedPoints > 0) {
-              await pool.query(
-                `
-                INSERT INTO student_point_events (
-                  student_id,
-                  group_id,
-                  lesson_id,
-                  month_name,
-                  points,
-                  source_type,
-                  title,
-                  description,
-                  metadata,
-                  created_by
-                ) VALUES (
-                  $1, $2, $3, $4, $5, 'attendance', $6, $7,
-                  $8::jsonb || jsonb_build_object(
-                    'created_by_name',
-                    COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
-                  ),
-                  $9
-                )
-                `,
-                [
-                  updatedStudentId,
-                  lesson.group_id,
-                  lesson.id,
-                  eventMonthKey,
-                  awardedPoints,
-                  'Darsga qatnashdi',
-                  `${humanStatus} - +${awardedPoints} ball`,
-                  JSON.stringify({
-                    status: record.status,
-                    lesson_date: lesson.lesson_date,
-                    group_name: lesson.group_name || '',
-                    teacher_name: lesson.teacher_name || '',
-                    subject_name: lesson.subject_name || '',
-                    awarded_points: awardedPoints,
-                    base_points: basePoints,
-                    capped: awardedPoints < basePoints,
-                  }),
-                  userId,
-                ]
-              );
-            }
-          } catch (pointsError) {
-            console.warn(
-              `⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`
-            );
-          }
-        }
-      }
-    }
+    const { updatedCount } = await processAttendanceRecordsForLesson({
+      lesson,
+      attendanceRecords: attendance_records,
+      userId
+    });
 
     res.json({
       success: true,
@@ -1716,8 +1715,473 @@ exports.markAttendance = async (req, res) => {
     });
 
   } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        attendance_id: error.attendance_id || null
+      });
+    }
+
     console.error('Davomat belgilashda xatolik:', error);
     res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 4.1 KUNLIK DAVOMAT (BARCHA GURUHLAR)
+// ============================================================================
+exports.getAttendanceByDate = async (req, res) => {
+  const { role, id: userId } = req.user;
+  const { date, teacher_id, group_id, subject_id, shift } = req.query;
+  const branchId = getScopedBranchId(req);
+
+  try {
+    const selectedDate = date || new Date().toISOString().slice(0, 10);
+    if (!isValidDate(selectedDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    let normalizedShift = null;
+    if (shift) {
+      const shiftRaw = String(shift).trim().toLowerCase();
+      if (shiftRaw === 'morning' || shiftRaw === 'kunduzgi') {
+        normalizedShift = 'morning';
+      } else if (shiftRaw === 'evening' || shiftRaw === 'kechki') {
+        normalizedShift = 'evening';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "shift faqat kunduzgi/kechki (yoki morning/evening) bo'lishi mumkin"
+        });
+      }
+    }
+
+    const groupIdNum = group_id ? Number(group_id) : null;
+    if (group_id && (!Number.isInteger(groupIdNum) || groupIdNum <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'group_id noto\'g\'ri'
+      });
+    }
+
+    const teacherIdNum = teacher_id ? Number(teacher_id) : null;
+    if (teacher_id && (!Number.isInteger(teacherIdNum) || teacherIdNum <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'teacher_id noto\'g\'ri'
+      });
+    }
+
+    const subjectIdNum = subject_id ? Number(subject_id) : null;
+    if (subject_id && (!Number.isInteger(subjectIdNum) || subjectIdNum <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'subject_id noto\'g\'ri'
+      });
+    }
+
+    await ensureGeneratedLessonsForScope({
+      month: selectedDate.slice(0, 7),
+      createdBy: userId,
+      teacherId: role === 'teacher' ? userId : (teacherIdNum || null),
+      branchId
+    });
+
+    const params = [selectedDate, branchId];
+    let paramIndex = 3;
+    let query = `
+      SELECT
+        l.id as lesson_id,
+        l.group_id,
+        g.name as group_name,
+        l.teacher_id,
+        CONCAT(COALESCE(t.name, ''), ' ', COALESCE(t.surname, '')) as teacher_name,
+        l.subject_id,
+        COALESCE(s.name, gs.name) as subject_name,
+        l.room_id,
+        r.room_number,
+        TO_CHAR(l.date, 'YYYY-MM-DD') as date,
+        TO_CHAR(l.start_time, 'HH24:MI') as start_time,
+        CASE WHEN l.end_time IS NOT NULL THEN TO_CHAR(l.end_time, 'HH24:MI') ELSE NULL END as end_time,
+        l.status as lesson_status,
+        COALESCE(l.is_holiday, false) as is_holiday,
+        CASE WHEN tr.lesson_id IS NOT NULL THEN true ELSE false END as report_sent,
+        COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
+        COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
+        CASE
+          WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN 'not_marked'
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+               = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN 'marked'
+          ELSE 'partial'
+        END as attendance_state,
+        CASE
+          WHEN COALESCE(l.is_holiday, false) = true THEN false
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = 0 THEN false
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+               = COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) THEN true
+          ELSE false
+        END as attendance_completed
+      FROM lessons l
+      LEFT JOIN groups g ON g.id = l.group_id AND g.branch_id = $2
+      LEFT JOIN users t ON t.id = COALESCE(l.teacher_id, g.teacher_id) AND t.branch_id = $2
+      LEFT JOIN subjects s ON s.id = l.subject_id
+      LEFT JOIN subjects gs ON gs.id = g.subject_id
+      LEFT JOIN rooms r ON r.id = l.room_id AND r.branch_id = $2
+      LEFT JOIN teacher_lesson_statistics_reports tr
+        ON tr.lesson_id = l.id
+       AND tr.branch_id = $2
+      LEFT JOIN attendance a ON a.lesson_id = l.id
+        AND a.branch_id = $2
+        AND EXISTS (
+          SELECT 1 FROM student_groups sg
+          WHERE sg.student_id = a.student_id
+            AND sg.group_id = a.group_id
+            AND sg.branch_id = $2
+            AND DATE(sg.joined_at) <= l.date
+            AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+        )
+      WHERE l.date = $1::date
+        AND l.branch_id = $2
+        AND COALESCE(l.is_holiday, false) = false`;
+
+    if (role === 'teacher') {
+      query += ` AND l.teacher_id = $${paramIndex}`;
+      params.push(userId);
+      paramIndex++;
+    }
+
+    if (teacherIdNum) {
+      query += ` AND l.teacher_id = $${paramIndex}`;
+      params.push(teacherIdNum);
+      paramIndex++;
+    }
+
+    if (groupIdNum) {
+      query += ` AND l.group_id = $${paramIndex}`;
+      params.push(groupIdNum);
+      paramIndex++;
+    }
+
+    if (subjectIdNum) {
+      query += ` AND COALESCE(l.subject_id, g.subject_id) = $${paramIndex}`;
+      params.push(subjectIdNum);
+      paramIndex++;
+    }
+
+    if (normalizedShift === 'morning') {
+      query += ` AND l.start_time < '13:00:00'::time`;
+    } else if (normalizedShift === 'evening') {
+      query += ` AND l.start_time >= '13:00:00'::time`;
+    }
+
+    query += `
+      GROUP BY
+        l.id, l.group_id, g.name, l.teacher_id, t.name, t.surname,
+        l.subject_id, s.name, gs.name, l.room_id, r.room_number,
+        tr.lesson_id
+      ORDER BY g.name, l.start_time ASC, l.id ASC`;
+
+    const lessonsResult = await pool.query(query, params);
+    const lessonRows = lessonsResult.rows.map((row) => ({
+      ...row,
+      lesson_id: Number(row.lesson_id),
+      group_id: Number(row.group_id),
+      teacher_id: row.teacher_id ? Number(row.teacher_id) : null,
+      subject_id: row.subject_id ? Number(row.subject_id) : null,
+      attendance_records: []
+    }));
+
+    for (const lesson of lessonRows) {
+      await syncLessonAttendanceForDate(lesson.lesson_id, lesson.group_id, lesson.date, branchId);
+    }
+
+    const lessonIds = lessonRows.map((lesson) => lesson.lesson_id);
+    const attendanceResult = lessonIds.length > 0
+      ? await pool.query(
+        `SELECT
+           a.id as attendance_id,
+           a.lesson_id,
+           a.group_id,
+           a.student_id,
+           u.name,
+           u.surname,
+           u.phone,
+           TO_CHAR(DATE(sg.joined_at), 'YYYY-MM-DD') as joined_at,
+           TO_CHAR(DATE(sg.left_at), 'YYYY-MM-DD') as left_at,
+           CASE WHEN COALESCE(a.is_marked, false) THEN a.status ELSE NULL END as status,
+           COALESCE(a.is_marked, false) as is_marked,
+           a.monthly_status,
+           CASE
+             WHEN a.monthly_status = 'active' THEN true
+             ELSE false
+           END as can_mark,
+           COALESCE(ms.paid_amount, sp.paid_amount, 0) as paid_amount,
+           COALESCE(ms.discount_amount, sp.discount_amount, 0) as discount_amount,
+           COALESCE(
+             ms.debt_amount,
+             COALESCE(ms.required_amount, sp.required_amount, g.price, 0) - COALESCE(ms.paid_amount, sp.paid_amount, 0)
+           ) as debt_amount
+         FROM attendance a
+         JOIN lessons l ON l.id = a.lesson_id AND l.branch_id = a.branch_id
+         JOIN users u ON u.id = a.student_id AND u.branch_id = a.branch_id
+         JOIN student_groups sg
+           ON sg.student_id = a.student_id
+          AND sg.group_id = a.group_id
+          AND sg.branch_id = a.branch_id
+          AND DATE(sg.joined_at) <= l.date
+          AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+         LEFT JOIN monthly_snapshots ms
+           ON ms.student_id = a.student_id
+          AND ms.group_id = a.group_id
+          AND ms.month = COALESCE(a.month, a.month_name)
+          AND ms.branch_id = a.branch_id
+         LEFT JOIN student_payments sp
+           ON sp.student_id = a.student_id
+          AND sp.group_id = a.group_id
+          AND sp.month = COALESCE(a.month, a.month_name)
+          AND sp.branch_id = a.branch_id
+         LEFT JOIN groups g ON g.id = a.group_id AND g.branch_id = a.branch_id
+         WHERE a.branch_id = $1
+           AND l.date = $2::date
+           AND a.lesson_id = ANY($3::int[])
+         ORDER BY a.lesson_id, u.name, u.surname, a.student_id`,
+        [branchId, selectedDate, lessonIds]
+      )
+      : { rows: [] };
+
+    const lessonMap = new Map();
+    const groupMap = new Map();
+
+    for (const lesson of lessonRows) {
+      lessonMap.set(String(lesson.lesson_id), lesson);
+      const groupKey = String(lesson.group_id);
+      if (!groupMap.has(groupKey)) {
+        groupMap.set(groupKey, {
+          group_id: lesson.group_id,
+          group_name: lesson.group_name,
+          teacher_id: lesson.teacher_id,
+          teacher_name: lesson.teacher_name,
+          subject_id: lesson.subject_id,
+          subject_name: lesson.subject_name,
+          room_id: lesson.room_id,
+          room_number: lesson.room_number,
+          lessons: []
+        });
+      }
+      groupMap.get(groupKey).lessons.push(lesson);
+    }
+
+    for (const row of attendanceResult.rows) {
+      const lesson = lessonMap.get(String(row.lesson_id));
+      if (!lesson) continue;
+      lesson.attendance_records.push({
+        attendance_id: Number(row.attendance_id),
+        lesson_id: Number(row.lesson_id),
+        group_id: Number(row.group_id),
+        student_id: Number(row.student_id),
+        name: row.name,
+        surname: row.surname,
+        phone: row.phone,
+        joined_at: row.joined_at,
+        left_at: row.left_at,
+        status: row.status,
+        is_marked: Boolean(row.is_marked),
+        monthly_status: row.monthly_status,
+        can_mark: Boolean(row.can_mark),
+        paid_amount: Number(row.paid_amount) || 0,
+        discount_amount: Number(row.discount_amount) || 0,
+        debt_amount: Number(row.debt_amount) || 0,
+      });
+    }
+
+    const lessonsWithAttendance = lessonRows.map((lesson) => ({
+      ...lesson,
+      attendance_records: lesson.attendance_records
+    }));
+
+    const groups = Array.from(groupMap.values()).map((group) => ({
+      ...group,
+      lessons: group.lessons.map((lesson) => ({
+        ...lesson,
+        attendance_records: lesson.attendance_records
+      }))
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        date: selectedDate,
+        filters: {
+          teacher_id: teacherIdNum || null,
+          group_id: groupIdNum || null,
+          subject_id: subjectIdNum || null,
+          shift: normalizedShift || null
+        },
+        lessons: lessonsWithAttendance,
+        groups,
+        summary: {
+          groups_count: groups.length,
+          lessons_count: lessonsWithAttendance.length,
+          attendance_records_count: attendanceResult.rows.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Kunlik attendance ma\'lumotini olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================================
+// 4.2 KUNLIK DAVOMATNI BULK YANGILASH
+// ============================================================================
+exports.updateAttendanceByDate = async (req, res) => {
+  const { role, id: userId } = req.user;
+  const { date, lessons, groups, lesson_id, attendance_records } = req.body || {};
+  const branchId = getScopedBranchId(req);
+
+  try {
+    const selectedDate = date || new Date().toISOString().slice(0, 10);
+    if (!isValidDate(selectedDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'date YYYY-MM-DD formatida bo\'lishi kerak'
+      });
+    }
+
+    const payloadLessonMap = new Map();
+    if (Array.isArray(lessons)) {
+      for (const lesson of lessons) {
+        if (lesson?.lesson_id) {
+          payloadLessonMap.set(String(lesson.lesson_id), lesson);
+        }
+      }
+    }
+    if (Array.isArray(groups)) {
+      for (const group of groups) {
+        if (Array.isArray(group?.lessons)) {
+          for (const lesson of group.lessons) {
+            if (lesson?.lesson_id) {
+              payloadLessonMap.set(String(lesson.lesson_id), lesson);
+            }
+          }
+        }
+      }
+    }
+    if (lesson_id && Array.isArray(attendance_records)) {
+      payloadLessonMap.set(String(lesson_id), { lesson_id, attendance_records });
+    }
+
+    const payloadLessons = Array.from(payloadLessonMap.values());
+    if (payloadLessons.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'lessons yoki groups yoki lesson_id + attendance_records majburiy'
+      });
+    }
+
+    const updatedLessons = [];
+    let totalUpdatedCount = 0;
+
+    for (const item of payloadLessons) {
+      const currentLessonId = Number(item.lesson_id);
+      if (!Number.isInteger(currentLessonId) || currentLessonId <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'lesson_id noto\'g\'ri'
+        });
+      }
+
+      const records = Array.isArray(item.attendance_records) ? item.attendance_records : [];
+      if (records.length === 0) {
+        continue;
+      }
+
+      const lessonAccess = await getLessonAttendanceAccess(currentLessonId, branchId);
+      if (lessonAccess.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Dars topilmadi',
+          lesson_id: currentLessonId
+        });
+      }
+
+      const lesson = lessonAccess.rows[0];
+      if (String(lesson.lesson_date) !== selectedDate) {
+        return res.status(400).json({
+          success: false,
+          message: `lesson_id=${currentLessonId} tanlangan sanaga mos emas`,
+          lesson_date: lesson.lesson_date
+        });
+      }
+
+      if (role === 'teacher' && String(lesson.teacher_id || '') !== String(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Siz faqat o\'zingizga biriktirilgan lesson davomatini belgilay olasiz'
+        });
+      }
+
+      if (lesson.is_holiday) {
+        return res.status(409).json({
+          success: false,
+          message: 'Dam olish kuni uchun davomat belgilab bo\'lmaydi'
+        });
+      }
+
+      if (role === 'teacher' && lesson.status === 'closed') {
+        return res.status(409).json({
+          success: false,
+          message: 'Yopilgan (closed) lesson uchun teacher davomatni o\'zgartira olmaydi'
+        });
+      }
+
+      const result = await processAttendanceRecordsForLesson({
+        lesson,
+        attendanceRecords: records,
+        userId
+      });
+
+      totalUpdatedCount += result.updatedCount;
+      updatedLessons.push({
+        lesson_id: currentLessonId,
+        updated_count: result.updatedCount
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Kunlik davomat yangilandi',
+      updated_count: totalUpdatedCount,
+      data: {
+        date: selectedDate,
+        lessons: updatedLessons
+      }
+    });
+  } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        attendance_id: error.attendance_id || null
+      });
+    }
+
+    console.error('Kunlik attendance yangilashda xatolik:', error);
+    return res.status(500).json({
       success: false,
       message: 'Server xatoligi',
       error: error.message
@@ -3767,6 +4231,8 @@ module.exports = {
   createLesson: exports.createLesson,
   getLessonStudents: exports.getLessonStudents,
   markAttendance: exports.markAttendance,
+  getAttendanceByDate: exports.getAttendanceByDate,
+  updateAttendanceByDate: exports.updateAttendanceByDate,
   getMonthlyAttendance: exports.getMonthlyAttendance,
   updateStudentMonthlyStatus: exports.updateStudentMonthlyStatus,
   getGroupLessons: exports.getGroupLessons,
