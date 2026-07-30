@@ -5,6 +5,12 @@ const MAX_VOCABULARY = 10;
 const MAX_ATTENDANCE = 5;
 const MAX_PARTICIPATION = 10;
 const MAX_TOTAL = MAX_HOMEWORK + MAX_VOCABULARY + MAX_ATTENDANCE + MAX_PARTICIPATION;
+const TEACHER_STATS_DEBUG = String(process.env.TEACHER_STATS_DEBUG || '').toLowerCase() === 'true';
+
+const debugTeacherStats = (label, payload = {}) => {
+  if (!TEACHER_STATS_DEBUG) return;
+  console.log(`[teacher-stats] ${label}`, payload);
+};
 
 const asInt = (value, fallback = 0) => {
   const parsed = Number.parseInt(value, 10);
@@ -123,6 +129,13 @@ exports.saveLessonStatistics = async (req, res) => {
       return res.status(400).json({ success: false, message: 'lessonId noto\'g\'ri' });
     }
 
+    debugTeacherStats('save:start', {
+      lessonId,
+      userId: req.user?.id,
+      role: req.user?.role,
+      branchId: req.user?.branch_id,
+    });
+
     const { rows = [], group_name, lesson_label } = req.body || {};
     const normalizedRows = buildRowsWithTotals(normalizeRows(rows));
     if (normalizedRows.length === 0) {
@@ -134,6 +147,10 @@ exports.saveLessonStatistics = async (req, res) => {
 
     const lesson = await getLessonContext(lessonId, req.user.branch_id || 1);
     if (!lesson) {
+      debugTeacherStats('save:lesson-not-found', {
+        lessonId,
+        branchId: req.user?.branch_id,
+      });
       return res.status(404).json({ success: false, message: 'Dars topilmadi' });
     }
 
@@ -259,6 +276,15 @@ exports.saveLessonStatistics = async (req, res) => {
         req.user.id,
       ]
     );
+
+    debugTeacherStats('save:success', {
+      lessonId,
+      reportId: inserted.rows[0]?.id,
+      branchId: inserted.rows[0]?.branch_id,
+      groupId: inserted.rows[0]?.group_id,
+      teacherId: inserted.rows[0]?.teacher_id,
+      reportMonth,
+    });
 
     return res.json({
       success: true,
@@ -465,6 +491,14 @@ exports.getManagerDailyStatistics = async (req, res) => {
         )
     `;
 
+    debugTeacherStats('manager:reports:start', {
+      branchId: req.user?.branch_id,
+      month: monthFilter,
+      teacherId,
+      groupId,
+      role: req.user?.role,
+    });
+
     if (teacherId) {
       params.push(teacherId);
       where += ` AND r.teacher_id = $${params.length}`;
@@ -506,6 +540,12 @@ exports.getManagerDailyStatistics = async (req, res) => {
       params
     );
 
+    debugTeacherStats('manager:reports:success', {
+      branchId: req.user?.branch_id,
+      month: monthFilter,
+      count: result.rows.length,
+    });
+
     return res.json({
       success: true,
       data: result.rows.map((row) => ({
@@ -514,11 +554,11 @@ exports.getManagerDailyStatistics = async (req, res) => {
         lesson_date: row.lesson_date,
         lesson_time: `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
         group_id: row.group_id,
-          group_name: row.group_name,
-          teacher_id: row.teacher_id,
-          teacher_name: [row.teacher_surname, row.teacher_name]
-            .filter((part) => String(part || '').trim().length > 0)
-            .join(' ')
+        group_name: row.group_name,
+        teacher_id: row.teacher_id,
+        teacher_name: [row.teacher_surname, row.teacher_name]
+          .filter((part) => String(part || '').trim().length > 0)
+          .join(' ')
           .trim(),
         subject_name: row.subject_name,
         report_month: row.report_month,
@@ -547,6 +587,12 @@ exports.getEnglishManagerTeachers = async (req, res) => {
     const monthFilter = /^\d{4}-\d{2}$/.test(month)
       ? month
       : new Date().toISOString().slice(0, 7);
+
+    debugTeacherStats('manager:teachers:start', {
+      branchId: req.user?.branch_id,
+      month: monthFilter,
+      role: req.user?.role,
+    });
 
     const result = await pool.query(
       `
@@ -582,6 +628,12 @@ exports.getEnglishManagerTeachers = async (req, res) => {
       `,
       [req.user.branch_id || 1, monthFilter]
     );
+
+    debugTeacherStats('manager:teachers:success', {
+      branchId: req.user?.branch_id,
+      month: monthFilter,
+      count: result.rows.length,
+    });
 
     return res.json({
       success: true,
