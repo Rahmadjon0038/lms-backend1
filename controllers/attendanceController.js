@@ -264,7 +264,10 @@ const processAttendanceRecordsForLesson = async ({
       throw error;
     }
 
-    if (!allowedStatuses.includes(record.status)) {
+    const normalizedStatus = record.status === '' ? null : record.status;
+    const isCleared = normalizedStatus === null || normalizedStatus === undefined;
+
+    if (!isCleared && !allowedStatuses.includes(normalizedStatus)) {
       const error = new Error(`Status faqat: ${allowedStatuses.join(', ')}`);
       error.statusCode = 400;
       throw error;
@@ -272,10 +275,12 @@ const processAttendanceRecordsForLesson = async ({
 
     const result = await pool.query(
       `UPDATE attendance 
-       SET status = $1, is_marked = true, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2 AND lesson_id = $3 AND monthly_status = 'active'
+       SET status = $1,
+           is_marked = $2,
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3 AND lesson_id = $4 AND monthly_status = 'active'
        RETURNING student_id`,
-      [record.status, record.attendance_id, lesson.id]
+      [isCleared ? null : normalizedStatus, !isCleared, record.attendance_id, lesson.id]
     );
 
     if (result.rowCount === 0) {
@@ -301,6 +306,10 @@ const processAttendanceRecordsForLesson = async ({
 
       const updatedStudentId = result.rows[0]?.student_id;
       if (!updatedStudentId) {
+        continue;
+      }
+
+      if (isCleared) {
         continue;
       }
 
@@ -2155,7 +2164,10 @@ exports.updateAttendanceByDate = async (req, res) => {
 
       const normalizedRecords = records
         .filter((record) => record && record.attendance_id)
-        .filter((record) => record.status !== null && record.status !== undefined && String(record.status).trim() !== '');
+        .map((record) => ({
+          ...record,
+          status: record.status === '' ? null : record.status
+        }));
 
       if (normalizedRecords.length === 0) {
         updatedLessons.push({
