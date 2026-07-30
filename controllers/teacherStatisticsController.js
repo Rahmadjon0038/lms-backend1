@@ -30,6 +30,16 @@ const normalizeFeedback = (percent) => {
   return 'BAD';
 };
 
+const formatMonthKey = (value) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const raw = String(value).trim();
+    return /^\d{4}-\d{2}$/.test(raw) ? raw : raw.slice(0, 7);
+  }
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
+};
+
 const canTeacherMutateToday = (lessonDate, now = new Date()) => {
   if (!lessonDate) return false;
   const lesson = new Date(lessonDate);
@@ -176,7 +186,7 @@ exports.saveLessonStatistics = async (req, res) => {
       });
     }
 
-    const reportMonth = String(lesson.lesson_date).slice(0, 7);
+    const reportMonth = formatMonthKey(lesson.lesson_date);
     const reportBranchId = lesson.group_branch_id || lesson.branch_id || req.user.branch_id || 1;
     const reportData = {
       lesson_id: lessonId,
@@ -450,7 +460,7 @@ exports.getGroupStatisticsReports = async (req, res) => {
         LEFT JOIN users u ON u.id = r.teacher_id
         LEFT JOIN subjects s ON s.id = r.subject_id
         WHERE r.group_id = $1
-          AND r.report_month = $2
+          AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
           AND g.branch_id = $3
         ORDER BY r.lesson_date ASC, r.lesson_start_time ASC
       `,
@@ -484,7 +494,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
     const params = [req.user.branch_id || 1, monthFilter];
     let where = `
       WHERE g.branch_id = $1
-        AND r.report_month = $2
+        AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
         AND (
           LOWER(COALESCE(s.name, gs.name, '')) LIKE '%english%'
           OR LOWER(COALESCE(s.name, gs.name, '')) LIKE '%ingliz%'
@@ -612,7 +622,7 @@ exports.getEnglishManagerTeachers = async (req, res) => {
           AND g.branch_id = u.branch_id
         LEFT JOIN teacher_lesson_statistics_reports r
           ON r.teacher_id = u.id
-          AND r.report_month = $2
+          AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
           AND (
             LOWER(COALESCE(s.name, '')) LIKE '%english%'
             OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
