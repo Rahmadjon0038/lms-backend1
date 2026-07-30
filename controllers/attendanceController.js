@@ -266,8 +266,11 @@ const processAttendanceRecordsForLesson = async ({
 
     const normalizedStatus = record.status === '' ? null : record.status;
     const isCleared = normalizedStatus === null || normalizedStatus === undefined;
+    if (isCleared) {
+      continue;
+    }
 
-    if (!isCleared && !allowedStatuses.includes(normalizedStatus)) {
+    if (!allowedStatuses.includes(normalizedStatus)) {
       const error = new Error(`Status faqat: ${allowedStatuses.join(', ')}`);
       error.statusCode = 400;
       throw error;
@@ -276,11 +279,11 @@ const processAttendanceRecordsForLesson = async ({
     const result = await pool.query(
       `UPDATE attendance 
        SET status = $1,
-           is_marked = $2,
+           is_marked = true,
            updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3 AND lesson_id = $4 AND monthly_status = 'active'
+       WHERE id = $2 AND lesson_id = $3 AND monthly_status = 'active'
        RETURNING student_id`,
-      [isCleared ? null : normalizedStatus, !isCleared, record.attendance_id, lesson.id]
+      [normalizedStatus, record.attendance_id, lesson.id]
     );
 
     if (result.rowCount === 0) {
@@ -306,10 +309,6 @@ const processAttendanceRecordsForLesson = async ({
 
       const updatedStudentId = result.rows[0]?.student_id;
       if (!updatedStudentId) {
-        continue;
-      }
-
-      if (isCleared) {
         continue;
       }
 
