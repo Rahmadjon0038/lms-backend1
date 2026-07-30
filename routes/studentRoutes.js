@@ -200,7 +200,12 @@ const { roleCheck } = require("../middlewares/roleMiddleware");
  *       500:
  *         description: Server xatosi
  */
-router.get("/all", protect, roleCheck(['admin']), studentController.getAllStudents);
+router.get(
+  "/all",
+  protect,
+  roleCheck(['admin', 'super_admin', 'english-manager']),
+  studentController.getAllStudents
+);
 router.get("/duplicates", protect, roleCheck(['admin']), studentController.getDuplicateStudents);
 router.delete("/unassigned", protect, roleCheck(['admin']), studentController.deleteUnassignedStudents);
 
