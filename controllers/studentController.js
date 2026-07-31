@@ -873,7 +873,9 @@ exports.getMyGroupInfo = async (req, res) => {
         // Student bu guruhga a'zo ekanligini tekshirish
         const membershipCheck = await pool.query(`
             SELECT sg.id FROM student_groups sg 
-            WHERE sg.student_id = $1 AND sg.group_id = $2 AND sg.status = 'active'
+            WHERE sg.student_id = $1
+              AND sg.group_id = $2
+              AND sg.status IN ('active', 'stopped', 'finished')
         `, [student_id, group_id]);
         
         if (membershipCheck.rows.length === 0) {
@@ -1875,6 +1877,47 @@ exports.getMyGroupInfo = async (req, res) => {
             WHERE g.id = $2
         `, [studentId, groupId]);
 
+        const lessonReports = await pool.query(`
+            SELECT
+                r.id,
+                r.lesson_id,
+                r.group_id,
+                r.teacher_id,
+                r.subject_id,
+                r.report_month,
+                r.lesson_date,
+                r.lesson_start_time,
+                r.lesson_end_time,
+                r.homework,
+                r.vocabulary,
+                r.attendance,
+                r.participation,
+                r.total,
+                r.percent,
+                r.feedback,
+                r.report_data,
+                r.created_at,
+                r.updated_at,
+                TO_CHAR(r.created_at, 'DD.MM.YYYY HH24:MI') AS created_at_label,
+                TO_CHAR(r.updated_at, 'DD.MM.YYYY HH24:MI') AS updated_at_label,
+                COALESCE(t.name, '') AS teacher_name,
+                COALESCE(t.surname, '') AS teacher_surname,
+                COALESCE(s.name, gs.name, '') AS subject_name,
+                g.name AS group_name
+            FROM teacher_lesson_statistics_reports r
+            JOIN groups g ON g.id = r.group_id
+            JOIN student_groups sg
+              ON sg.student_id = $1
+             AND sg.group_id = g.id
+            LEFT JOIN users t ON t.id = r.teacher_id
+            LEFT JOIN subjects s ON s.id = r.subject_id
+            LEFT JOIN subjects gs ON gs.id = g.subject_id
+            WHERE r.group_id = $2
+              AND r.lesson_date::date >= sg.joined_at::date
+              AND r.lesson_date::date <= COALESCE(sg.left_at::date, CURRENT_DATE)
+            ORDER BY r.lesson_date DESC, r.lesson_start_time DESC, r.id DESC
+        `, [studentId, groupId]);
+
         const group = groupInfo.rows[0];
         const payment = myPayment.rows[0];
 
@@ -1909,6 +1952,36 @@ exports.getMyGroupInfo = async (req, res) => {
                 monthly_points: parseInt(group.my_month_points || 0),
                 rank_in_group: groupmates.rows.find(m => m.id === studentId)?.rank_in_group || 0
             },
+            lesson_reports: lessonReports.rows.map((report) => ({
+                id: report.id,
+                lesson_id: report.lesson_id,
+                group_id: report.group_id,
+                teacher_id: report.teacher_id,
+                subject_id: report.subject_id,
+                report_month: report.report_month,
+                lesson_date: report.lesson_date,
+                lesson_start_time: report.lesson_start_time,
+                lesson_end_time: report.lesson_end_time,
+                homework: report.homework,
+                vocabulary: report.vocabulary,
+                attendance: report.attendance,
+                participation: report.participation,
+                total: report.total,
+                percent: report.percent,
+                feedback: report.feedback,
+                report_data: report.report_data,
+                created_at: report.created_at,
+                updated_at: report.updated_at,
+                created_at_label: report.created_at_label,
+                updated_at_label: report.updated_at_label,
+                teacher_name: [report.teacher_surname, report.teacher_name]
+                    .filter((part) => String(part || '').trim().length > 0)
+                    .join(' ')
+                    .trim(),
+                subject_name: report.subject_name,
+                group_name: report.group_name,
+                rows: Array.isArray(report.report_data?.rows) ? report.report_data.rows : [],
+            })),
             groupmates: groupmates.rows.map(mate => ({
                 id: mate.id,
                 full_name: `${mate.name} ${mate.surname}`,
