@@ -40,18 +40,13 @@ const formatMonthKey = (value) => {
   return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const canTeacherMutateToday = (lessonDate, now = new Date()) => {
+const canTeacherMutateLesson = (lessonDate, now = new Date()) => {
   if (!lessonDate) return false;
   const lesson = new Date(lessonDate);
   if (Number.isNaN(lesson.getTime())) return false;
-  const sameDay =
-    lesson.getFullYear() === now.getFullYear() &&
-    lesson.getMonth() === now.getMonth() &&
-    lesson.getDate() === now.getDate();
-  if (!sameDay) return false;
-  const deadline = new Date(lesson);
+  const deadline = new Date(now);
   deadline.setHours(23, 59, 59, 999);
-  return now.getTime() <= deadline.getTime();
+  return lesson.getTime() <= deadline.getTime();
 };
 
 const getLessonContext = async (lessonId, branchId) => {
@@ -178,7 +173,7 @@ exports.saveLessonStatistics = async (req, res) => {
 
     if (
       req.user.role === 'teacher' &&
-      !canTeacherMutateToday(lesson.lesson_date)
+      !canTeacherMutateLesson(lesson.lesson_date)
     ) {
       return res.status(403).json({
         success: false,
@@ -398,7 +393,7 @@ exports.deleteLessonStatistics = async (req, res) => {
 
     if (
       req.user.role === 'teacher' &&
-      !canTeacherMutateToday(existing.rows[0].lesson_date)
+      !canTeacherMutateLesson(existing.rows[0].lesson_date)
     ) {
       return res.status(403).json({
         success: false,
@@ -536,6 +531,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
           r.created_at,
           r.updated_at,
           g.name AS group_name,
+          g.schedule AS group_schedule,
           COALESCE(u.surname, '') AS teacher_surname,
           COALESCE(u.name, '') AS teacher_name,
           COALESCE(s.name, gs.name, '') AS subject_name
@@ -565,6 +561,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
         lesson_time: `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
         group_id: row.group_id,
         group_name: row.group_name,
+        group_schedule: row.group_schedule,
         teacher_id: row.teacher_id,
         teacher_name: [row.teacher_surname, row.teacher_name]
           .filter((part) => String(part || '').trim().length > 0)

@@ -2270,6 +2270,10 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 
     // Oyning barcha darslarini olish
+    const [monthYear, monthNum] = selectedMonth.split('-').map(Number);
+    const monthStart = `${selectedMonth}-01`;
+    const monthEnd = `${selectedMonth}-${String(new Date(monthYear, monthNum, 0).getDate()).padStart(2, '0')}`;
+
     const lessons = await pool.query(
       `SELECT id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
        FROM lessons 
@@ -2380,10 +2384,20 @@ exports.getMonthlyAttendance = async (req, res) => {
         AND sp.group_id = a.group_id
         AND sp.month = COALESCE(a.month, a.month_name)
        LEFT JOIN groups g ON g.id = a.group_id
-       WHERE a.group_id = $1 AND TO_CHAR(l.date, 'YYYY-MM') = $2
+       WHERE a.group_id = $1
+         AND TO_CHAR(l.date, 'YYYY-MM') = $2
+         AND EXISTS (
+           SELECT 1
+           FROM student_groups sg
+           WHERE sg.student_id = a.student_id
+             AND sg.group_id = a.group_id
+             AND sg.branch_id = $3
+             AND DATE(sg.joined_at) <= $5::date
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $4::date)
+         )
        GROUP BY a.student_id, u.name, u.surname, u.phone, a.monthly_status
        ORDER BY a.monthly_status, u.name`,
-      [group_id, selectedMonth]
+      [group_id, selectedMonth, branchId, monthStart, monthEnd]
     );
 
     // Har bir student uchun statistika hisoblash va qo'shish
