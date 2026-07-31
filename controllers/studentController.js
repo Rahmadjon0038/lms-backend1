@@ -2,6 +2,10 @@ const pool = require('../config/db');
 const crypto = require('crypto');
 const { MONTHLY_POINT_CAP } = require('../config/points');
 const { getScopedBranchId } = require('../utils/branch');
+const {
+    loadMonthlyGroupMemberStats,
+    loadStudentPointHistoryEntries,
+} = require('../utils/englishPoints');
 
 const generatePlainRecoveryKey = () => {
     return `RK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
@@ -118,6 +122,21 @@ const normalizeMonthKey = (value) => {
 };
 
 const buildMonthFilter = (month) => normalizeMonthKey(month) || getCurrentMonthKey();
+
+const formatDateDdMmYyyy = (value) => {
+    if (!value) return null;
+    const text = String(value).trim();
+    if (!text) return null;
+    if (/^\d{2}\.\d{2}\.\d{4}$/.test(text)) return text;
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return new Intl.DateTimeFormat('uz-UZ', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(parsed);
+};
 
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
@@ -975,123 +994,107 @@ exports.getMyGroupInfo = async (req, res) => {
 const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
     const isAllTime = String(month || '').trim().toLowerCase() === 'all';
     const monthKey = isAllTime ? null : buildMonthFilter(month);
+    const entries = await loadStudentPointHistoryEntries({
+        studentId,
+        month: monthKey || 'all',
+        groupId,
+    });
 
-    const baseParams = [studentId];
-    const whereParts = ['spe.student_id = $1'];
-    if (monthKey) {
-        baseParams.push(monthKey);
-        whereParts.push(`spe.month_name = $${baseParams.length}`);
+    const summary = {
+        total_points: 0,
+        total_events: entries.length,
+        attendance_events: 0,
+        manual_events: 0,
+        first_event_date: null,
+        last_event_date: null,
+        monthly_cap: MONTHLY_POINT_CAP,
+    };
+
+    const breakdownMap = new Map();
+    const monthlyMap = new Map();
+    const teacherMap = new Map();
+    const dailyMap = new Map();
+
+    for (const entry of entries) {
+        summary.total_points += entry.points;
+        if (entry.source_type === 'attendance') summary.attendance_events += 1;
+        if (entry.source_type === 'bonus' || entry.source_type === 'report') {
+            summary.manual_events += 1;
+        }
+
+        if (!summary.first_event_date || entry.day_key < summary.first_event_date) {
+            summary.first_event_date = entry.day_key;
+        }
+        if (!summary.last_event_date || entry.day_key > summary.last_event_date) {
+            summary.last_event_date = entry.day_key;
+        }
+
+        const breakdownKey = `${entry.group_id}`;
+        if (!breakdownMap.has(breakdownKey)) {
+            breakdownMap.set(breakdownKey, {
+                group_id: entry.group_id,
+                group_name: entry.group_name || 'Guruh',
+                total_points: 0,
+                total_events: 0,
+            });
+        }
+        const breakdownItem = breakdownMap.get(breakdownKey);
+        breakdownItem.total_points += entry.points;
+        breakdownItem.total_events += 1;
+
+        if (!monthlyMap.has(entry.month_name)) {
+            monthlyMap.set(entry.month_name, {
+                month_name: entry.month_name,
+                total_points: 0,
+                total_events: 0,
+            });
+        }
+        const monthlyItem = monthlyMap.get(entry.month_name);
+        monthlyItem.total_points += entry.points;
+        monthlyItem.total_events += 1;
+
+        const teacherKey = `${entry.month_name}:${entry.created_by ?? 'null'}:${entry.created_by_name}`;
+        if (!teacherMap.has(teacherKey)) {
+            teacherMap.set(teacherKey, {
+                month_name: entry.month_name,
+                teacher_id: entry.created_by,
+                teacher_name: entry.created_by_name || 'Noma\'lum',
+                total_points: 0,
+                total_events: 0,
+            });
+        }
+        const teacherItem = teacherMap.get(teacherKey);
+        teacherItem.total_points += entry.points;
+        teacherItem.total_events += 1;
+
+        const dailyKey = entry.day_key;
+        if (!dailyMap.has(dailyKey)) {
+            dailyMap.set(dailyKey, {
+                day_key: dailyKey,
+                total_points: 0,
+                total_events: 0,
+                first_time: entry.created_time,
+                last_time: entry.created_time,
+            });
+        }
+        const dailyItem = dailyMap.get(dailyKey);
+        dailyItem.total_points += entry.points;
+        dailyItem.total_events += 1;
+        if (entry.created_time < dailyItem.first_time) dailyItem.first_time = entry.created_time;
+        if (entry.created_time > dailyItem.last_time) dailyItem.last_time = entry.created_time;
     }
-    if (groupId) {
-        baseParams.push(groupId);
-        whereParts.push(`spe.group_id = $${baseParams.length}`);
-    }
-    const whereSql = whereParts.join(' AND ');
 
-    const summaryResult = await pool.query(
-        `
-        SELECT
-            COALESCE(SUM(points), 0)::int AS total_points,
-            COUNT(*)::int AS total_events,
-            COUNT(CASE WHEN source_type = 'attendance' THEN 1 END)::int AS attendance_events,
-            COUNT(CASE WHEN source_type IN ('bonus', 'report') THEN 1 END)::int AS manual_events,
-            MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')) AS first_event_date,
-            MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')) AS last_event_date
-        FROM student_point_events spe
-        WHERE ${whereSql}
-        `,
-        baseParams
+    const breakdown = [...breakdownMap.values()].sort(
+        (a, b) => b.total_points - a.total_points || a.group_name.localeCompare(b.group_name)
     );
-
-    const breakdownResult = await pool.query(
-        `
-        SELECT
-            spe.group_id,
-            COALESCE(g.name, spe.metadata->>'group_name', 'Guruh') AS group_name,
-            COALESCE(SUM(spe.points), 0)::int AS total_points,
-            COUNT(*)::int AS total_events
-        FROM student_point_events spe
-        LEFT JOIN groups g ON g.id = spe.group_id
-        WHERE ${whereSql}
-        GROUP BY spe.group_id, g.name, spe.metadata->>'group_name'
-        ORDER BY total_points DESC, group_name ASC
-        `,
-        baseParams
+    const monthlyBreakdown = [...monthlyMap.values()].sort(
+        (a, b) => b.month_name.localeCompare(a.month_name)
     );
-
-    const monthlyBreakdownResult = await pool.query(
-        `
-        SELECT
-            spe.month_name,
-            COALESCE(SUM(spe.points), 0)::int AS total_points,
-            COUNT(*)::int AS total_events
-        FROM student_point_events spe
-        WHERE ${whereSql}
-        GROUP BY spe.month_name
-        ORDER BY spe.month_name DESC
-        `,
-        baseParams
+    const teacherBreakdown = [...teacherMap.values()].sort(
+        (a, b) => b.month_name.localeCompare(a.month_name) || b.total_points - a.total_points
     );
-
-    const teacherBreakdownResult = await pool.query(
-        `
-        SELECT
-            spe.month_name,
-            spe.created_by,
-            COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', 'Noma''lum') AS teacher_name,
-            COALESCE(SUM(spe.points), 0)::int AS total_points,
-            COUNT(*)::int AS total_events
-        FROM student_point_events spe
-        LEFT JOIN users cb ON cb.id = spe.created_by
-        WHERE ${whereSql}
-        GROUP BY spe.month_name, spe.created_by, cb.name, cb.surname, spe.metadata->>'created_by_name'
-        ORDER BY spe.month_name DESC, total_points DESC
-        `,
-        baseParams
-    );
-
-    const dailyBreakdownResult = await pool.query(
-        `
-        SELECT
-            TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-            COALESCE(SUM(spe.points), 0)::int AS total_points,
-            COUNT(*)::int AS total_events,
-            MIN(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS first_time,
-            MAX(TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')) AS last_time
-        FROM student_point_events spe
-        WHERE ${whereSql}
-        GROUP BY DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
-        ORDER BY day_key DESC
-        `,
-        baseParams
-    );
-
-    const eventsResult = await pool.query(
-        `
-        SELECT
-            spe.id,
-            spe.student_id,
-            spe.group_id,
-            COALESCE(g.name, spe.metadata->>'group_name', '') AS group_name,
-            spe.lesson_id,
-            spe.month_name,
-            spe.points,
-            spe.source_type,
-            spe.title,
-            spe.description,
-            spe.metadata,
-            spe.created_by,
-            COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', '') AS created_by_name,
-            TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
-            TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-            TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
-        FROM student_point_events spe
-        LEFT JOIN groups g ON g.id = spe.group_id
-        LEFT JOIN users cb ON cb.id = spe.created_by
-        WHERE ${whereSql}
-        ORDER BY spe.created_at DESC, spe.id DESC
-        `,
-        baseParams
+    const dailyBreakdown = [...dailyMap.values()].sort(
+        (a, b) => b.day_key.localeCompare(a.day_key)
     );
 
     return {
@@ -1099,57 +1102,12 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
         filter: {
             group_id: groupId || null,
         },
-        summary: {
-            total_points: summaryResult.rows[0]?.total_points || 0,
-            total_events: summaryResult.rows[0]?.total_events || 0,
-            attendance_events: summaryResult.rows[0]?.attendance_events || 0,
-            manual_events: summaryResult.rows[0]?.manual_events || 0,
-            first_event_date: summaryResult.rows[0]?.first_event_date || null,
-            last_event_date: summaryResult.rows[0]?.last_event_date || null,
-            monthly_cap: MONTHLY_POINT_CAP,
-        },
-        breakdown: breakdownResult.rows.map((row) => ({
-            group_id: row.group_id,
-            group_name: row.group_name,
-            total_points: row.total_points,
-            total_events: row.total_events,
-        })),
-        monthly_breakdown: monthlyBreakdownResult.rows.map((row) => ({
-            month_name: row.month_name,
-            total_points: row.total_points,
-            total_events: row.total_events,
-        })),
-        teacher_breakdown: teacherBreakdownResult.rows.map((row) => ({
-            month_name: row.month_name,
-            teacher_id: row.created_by,
-            teacher_name: row.teacher_name,
-            total_points: row.total_points,
-            total_events: row.total_events,
-        })),
-        daily_breakdown: dailyBreakdownResult.rows.map((row) => ({
-            day_key: row.day_key,
-            total_points: row.total_points,
-            total_events: row.total_events,
-            first_time: row.first_time,
-            last_time: row.last_time,
-        })),
-        events: eventsResult.rows.map((row) => ({
-            id: row.id,
-            group_id: row.group_id,
-            group_name: row.group_name,
-            lesson_id: row.lesson_id,
-            month_name: row.month_name,
-            points: row.points,
-            source_type: row.source_type,
-            title: row.title,
-            description: row.description,
-            metadata: row.metadata,
-            created_by: row.created_by,
-            created_by_name: row.created_by_name,
-            created_at: row.created_at,
-            day_key: row.day_key,
-            created_time: row.created_time,
-        })),
+        summary,
+        breakdown,
+        monthly_breakdown: monthlyBreakdown,
+        teacher_breakdown: teacherBreakdown,
+        daily_breakdown: dailyBreakdown,
+        events: entries,
     };
 };
 
@@ -1661,6 +1619,7 @@ exports.getMyGroups = async (req, res) => {
         `, [studentId, currentMonth]);
 
         const groupsData = myGroups.rows.map(group => ({
+                group_id: group.group_id,
                 group_info: {
                 id: group.group_id,
                 name: group.group_name,
@@ -1697,6 +1656,50 @@ exports.getMyGroups = async (req, res) => {
             }
         }));
 
+        const groupIds = groupsData.map((group) => group.group_id);
+        const monthlyStats = await loadMonthlyGroupMemberStats({
+            groupIds,
+            month: currentMonth,
+        });
+        const statsByGroup = new Map();
+        for (const stat of monthlyStats) {
+            if (!statsByGroup.has(stat.group_id)) {
+                statsByGroup.set(stat.group_id, []);
+            }
+            statsByGroup.get(stat.group_id).push(stat);
+        }
+
+        const updatedGroupsData = groupsData.map((group) => {
+            const stats = statsByGroup.get(group.group_id) || [];
+            const sorted = [...stats].sort(
+                (a, b) => b.month_points - a.month_points || a.student_id - b.student_id
+            );
+            const currentUserStat = stats.find((stat) => stat.student_id === studentId) || {
+                month_points: 0,
+                last_point_day: null,
+                last_day_points: 0,
+            };
+            const rank = sorted.findIndex((stat) => stat.student_id === studentId);
+            const groupMaxPoints = sorted[0]?.month_points || 0;
+
+            return {
+                ...group,
+                group_info: {
+                    ...group.group_info,
+                    monthly_points: currentUserStat.month_points,
+                    monthly_rank: rank >= 0 ? rank + 1 : 0,
+                    group_max_points: groupMaxPoints,
+                    last_point_date: formatDateDdMmYyyy(currentUserStat.last_point_day),
+                    last_day_points: currentUserStat.last_day_points,
+                },
+                my_status: {
+                    ...group.my_status,
+                    monthly_points: currentUserStat.month_points,
+                    monthly_rank: rank >= 0 ? rank + 1 : 0,
+                },
+            };
+        });
+
         console.log(`✅ Student ${studentId} ning ${groupsData.length}ta guruhi topildi`);
 
         res.json({
@@ -1704,8 +1707,8 @@ exports.getMyGroups = async (req, res) => {
             message: 'Guruhlar ro\'yxati muvaffaqiyatli olindi',
             data: {
                 student_id: studentId,
-                total_groups: groupsData.length,
-                groups: groupsData
+                total_groups: updatedGroupsData.length,
+                groups: updatedGroupsData
             }
         });
 
@@ -1920,6 +1923,56 @@ exports.getMyGroupInfo = async (req, res) => {
 
         const group = groupInfo.rows[0];
         const payment = myPayment.rows[0];
+        const memberStats = await loadMonthlyGroupMemberStats({
+            groupIds: [groupId],
+            month: currentMonth,
+        });
+        const statsByStudentId = new Map(
+            memberStats.map((stat) => [stat.student_id, stat])
+        );
+        const sortedStats = [...memberStats].sort(
+            (a, b) => b.month_points - a.month_points || a.student_id - b.student_id
+        );
+        const currentUserStat = statsByStudentId.get(studentId) || {
+            month_points: 0,
+            last_point_day: null,
+            last_day_points: 0,
+        };
+        const currentRank = sortedStats.findIndex((stat) => stat.student_id === studentId);
+        const topPoints = sortedStats[0]?.month_points || 0;
+
+        const mappedGroupmates = groupmates.rows
+            .map((mate) => {
+                const stat = statsByStudentId.get(mate.id) || {
+                    month_points: 0,
+                    last_point_day: null,
+                    last_day_points: 0,
+                };
+                return {
+                    id: mate.id,
+                    full_name: `${mate.name} ${mate.surname}`,
+                    name: mate.name,
+                    surname: mate.surname,
+                    phone: mate.phone,
+                    avatar_key: mate.avatar_key,
+                    avatar_name: mate.avatar_name,
+                    avatar_url: buildImageUrl(mate.avatar_url),
+                    status: mate.status,
+                    status_description: mate.status_description,
+                    join_date: mate.join_date,
+                    leave_date: mate.leave_date,
+                    monthly_points: stat.month_points,
+                    rank_in_group:
+                        sortedStats.findIndex((statItem) => statItem.student_id === mate.id) + 1 || 0,
+                };
+            })
+            .sort(
+                (a, b) =>
+                    b.monthly_points - a.monthly_points ||
+                    a.surname.localeCompare(b.surname) ||
+                    a.name.localeCompare(b.name) ||
+                    a.id - b.id
+            );
 
         const responseData = {
             month: currentMonth,
@@ -1943,14 +1996,14 @@ exports.getMyGroupInfo = async (req, res) => {
                 phone: group.teacher_phone
             },
             group_statistics: {
-                total_members: groupmates.rows.length,
-                active_members: groupmates.rows.filter(m => m.status === 'active').length,
-                monthly_points: group.my_month_points || 0,
-                top_points: groupmates.rows[0]?.month_points || 0
+                total_members: mappedGroupmates.length,
+                active_members: mappedGroupmates.filter(m => m.status === 'active').length,
+                monthly_points: currentUserStat.month_points || 0,
+                top_points: topPoints
             },
             my_rating: {
-                monthly_points: parseInt(group.my_month_points || 0),
-                rank_in_group: groupmates.rows.find(m => m.id === studentId)?.rank_in_group || 0
+                monthly_points: currentUserStat.month_points || 0,
+                rank_in_group: currentRank >= 0 ? currentRank + 1 : 0
             },
             lesson_reports: lessonReports.rows.map((report) => ({
                 id: report.id,
@@ -1982,22 +2035,7 @@ exports.getMyGroupInfo = async (req, res) => {
                 group_name: report.group_name,
                 rows: Array.isArray(report.report_data?.rows) ? report.report_data.rows : [],
             })),
-            groupmates: groupmates.rows.map(mate => ({
-                id: mate.id,
-                full_name: `${mate.name} ${mate.surname}`,
-                name: mate.name,
-                surname: mate.surname,
-                phone: mate.phone,
-                avatar_key: mate.avatar_key,
-                avatar_name: mate.avatar_name,
-                avatar_url: buildImageUrl(mate.avatar_url),
-                status: mate.status,
-                status_description: mate.status_description,
-                join_date: mate.join_date,
-                leave_date: mate.leave_date,
-                monthly_points: parseInt(mate.month_points || 0),
-                rank_in_group: parseInt(mate.rank_in_group || 0)
-            }))
+            groupmates: mappedGroupmates
         };
 
         console.log(`✅ Guruh ${groupId} ma'lumotlari ${groupmates.rows.length} a'zo bilan yuborildi`);

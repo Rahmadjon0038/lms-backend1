@@ -20,6 +20,7 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'http://localhost:5000';
 const { getTeacherSubjects } = require('../models/teacherSubjectModel');
 const { checkRoomAvailability } = require('../models/roomModel');
 const { getScopedBranchId } = require('../utils/branch');
+const { loadMonthlyGroupMemberStats } = require('../utils/englishPoints');
 
 // Tasodifiy 6-8 belgili kod yaratish (Masalan: GR-A1B2C3)
 const generateUniqueCode = () => {
@@ -1638,7 +1639,7 @@ exports.getGroupById = async (req, res) => {
         const currentMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
             ? requestedMonth
             : new Date().toISOString().slice(0, 7);
-        const students = await pool.query(`
+        const studentsResult = await pool.query(`
             SELECT
                 u.id,
                 u.name,
@@ -1683,10 +1684,48 @@ exports.getGroupById = async (req, res) => {
             WHERE sg.group_id = $1 AND sg.branch_id = $3
             ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth, branchId]);
 
+        const monthlyStats = await loadMonthlyGroupMemberStats({
+            groupIds: [id],
+            month: currentMonth,
+        });
+        const statsByStudentId = new Map(
+            monthlyStats.map((stat) => [stat.student_id, stat])
+        );
+        const students = studentsResult.rows
+            .map((student) => ({
+                id: student.id,
+                name: student.name,
+                surname: student.surname,
+                full_name: `${student.name} ${student.surname}`,
+                phone: student.phone,
+                phone2: student.phone2 || null,
+                father_name: student.father_name || null,
+                father_phone: student.father_phone || null,
+                age: student.age,
+                address: student.address,
+                student_status: student.student_status,
+                course_status: student.course_status,
+                course_start_date: student.course_start_date,
+                course_end_date: student.course_end_date,
+                registration_date: student.registration_date,
+                role: student.role,
+                avatar_key: student.avatar_key || null,
+                avatar_url: student.avatar_url || null,
+                monthly_points: (
+                    statsByStudentId.get(student.id)?.month_points ??
+                    (parseInt(student.monthly_points, 10) || 0)
+                ),
+                group_status: student.group_status,
+                status_description: student.group_status_description,
+                joined_at: student.joined_at,
+                left_at: student.left_at
+            }))
+            .sort((a, b) => b.monthly_points - a.monthly_points || a.surname.localeCompare(b.surname) || a.name.localeCompare(b.name) || a.id - b.id);
+
         res.json({ 
-            success: true, 
-            group: group.rows[0], 
-            students: students.rows 
+            success: true,
+            group: group.rows[0],
+            students
         });
     } catch (err) { 
         res.status(500).json({ error: err.message }); 
@@ -3093,6 +3132,14 @@ exports.getTeacherGroupDetails = async (req, res) => {
                 u.name, u.surname
         `, [groupId, pointsMonth]);
 
+        const monthlyStats = await loadMonthlyGroupMemberStats({
+            groupIds: [groupId],
+            month: pointsMonth,
+        });
+        const statsByStudentId = new Map(
+            monthlyStats.map((stat) => [stat.student_id, stat])
+        );
+
         // Statistika
         const stats = {
             active: studentsResult.rows.filter(s => s.group_status === 'active').length,
@@ -3101,23 +3148,30 @@ exports.getTeacherGroupDetails = async (req, res) => {
             total: studentsResult.rows.length
         };
 
-        const students = studentsResult.rows.map(student => ({
-            id: student.student_id,
-            name: student.name,
-            surname: student.surname,
-            full_name: `${student.name} ${student.surname}`,
-            phone: student.phone,
-            phone2: student.phone2 || null,
-            father_name: student.father_name || null,
-            father_phone: student.father_phone || null,
-            avatar_key: student.avatar_key || null,
-            avatar_url: student.avatar_url || null,
-            monthly_points: parseInt(student.monthly_points) || 0,
-            group_status: student.group_status,
-            status_description: student.status_description,
-            join_date: student.join_date,
-            leave_date: student.leave_date
-        }));
+        const students = studentsResult.rows
+            .map((student) => {
+                const stat = statsByStudentId.get(student.student_id);
+                const monthlyPoints =
+                    stat?.month_points ?? (parseInt(student.monthly_points, 10) || 0);
+                return {
+                    id: student.student_id,
+                    name: student.name,
+                    surname: student.surname,
+                    full_name: `${student.name} ${student.surname}`,
+                    phone: student.phone,
+                    phone2: student.phone2 || null,
+                    father_name: student.father_name || null,
+                    father_phone: student.father_phone || null,
+                    avatar_key: student.avatar_key || null,
+                    avatar_url: student.avatar_url || null,
+                    monthly_points: monthlyPoints,
+                    group_status: student.group_status,
+                    status_description: student.status_description,
+                    join_date: student.join_date,
+                    leave_date: student.leave_date
+                };
+            })
+            .sort((a, b) => b.monthly_points - a.monthly_points || a.surname.localeCompare(b.surname) || a.name.localeCompare(b.name) || a.id - b.id);
 
         console.log(`✅ Teacher guruh ${groupId} ma'lumotlari olindi: ${students.length}ta talaba`);
 
