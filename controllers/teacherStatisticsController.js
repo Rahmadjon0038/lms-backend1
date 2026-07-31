@@ -30,6 +30,22 @@ const normalizeFeedback = (percent) => {
   return 'BAD';
 };
 
+const formatTashkentDateTime = (value) => {
+  if (!value) return '-';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+
+  return new Intl.DateTimeFormat('uz-UZ', {
+    timeZone: 'Asia/Tashkent',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+};
+
 const formatMonthKey = (value) => {
   if (!value) return '';
   const parsed = new Date(value);
@@ -114,6 +130,8 @@ const buildReportPayload = (row) => ({
   lesson_end_time: row.lesson_end_time || '',
   created_at: row.created_at,
   updated_at: row.updated_at,
+  created_at_label: formatTashkentDateTime(row.created_at),
+  updated_at_label: formatTashkentDateTime(row.updated_at),
   rows: Array.isArray(row.report_data?.rows) ? row.report_data.rows : [],
 });
 
@@ -594,6 +612,8 @@ exports.getManagerDailyStatistics = async (req, res) => {
         can_view: true,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        created_at_label: formatTashkentDateTime(row.created_at),
+        updated_at_label: formatTashkentDateTime(row.updated_at),
       })),
     });
   } catch (error) {
