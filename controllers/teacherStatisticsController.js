@@ -30,13 +30,13 @@ const normalizeFeedback = (percent) => {
   return 'BAD';
 };
 
-const formatTashkentDateTime = (value) => {
+const formatStoredDateTime = (value) => {
   if (!value) return '-';
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
 
   return new Intl.DateTimeFormat('uz-UZ', {
-    timeZone: 'Asia/Tashkent',
+    timeZone: 'UTC',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -130,8 +130,8 @@ const buildReportPayload = (row) => ({
   lesson_end_time: row.lesson_end_time || '',
   created_at: row.created_at,
   updated_at: row.updated_at,
-  created_at_label: formatTashkentDateTime(row.created_at),
-  updated_at_label: formatTashkentDateTime(row.updated_at),
+  created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
+  updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
   rows: Array.isArray(row.report_data?.rows) ? row.report_data.rows : [],
 });
 
@@ -566,6 +566,8 @@ exports.getManagerDailyStatistics = async (req, res) => {
           r.feedback,
           r.created_at,
           r.updated_at,
+          TO_CHAR(r.created_at, 'DD.MM.YYYY HH24:MI') AS created_at_label,
+          TO_CHAR(r.updated_at, 'DD.MM.YYYY HH24:MI') AS updated_at_label,
           g.name AS group_name,
           g.schedule AS group_schedule,
           COALESCE(u.surname, '') AS teacher_surname,
@@ -612,8 +614,8 @@ exports.getManagerDailyStatistics = async (req, res) => {
         can_view: true,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        created_at_label: formatTashkentDateTime(row.created_at),
-        updated_at_label: formatTashkentDateTime(row.updated_at),
+        created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
+        updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
       })),
     });
   } catch (error) {
