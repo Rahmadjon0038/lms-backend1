@@ -30,6 +30,11 @@ const normalizeFeedback = (percent) => {
   return 'BAD';
 };
 
+const isEnglishSubjectName = (value) => {
+  const text = String(value || '').trim().toLowerCase();
+  return text.includes('english') || text.includes('ingliz');
+};
+
 const formatStoredDateTime = (value) => {
   if (!value) return '-';
   const date = value instanceof Date ? value : new Date(value);
@@ -349,6 +354,14 @@ exports.getLessonStatistics = async (req, res) => {
       return res.status(400).json({ success: false, message: 'lessonId noto\'g\'ri' });
     }
 
+    const englishClause =
+      req.user.role === 'english-manager'
+        ? `
+          AND LOWER(COALESCE(s.name, '')) LIKE '%english%'
+          AND LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+        `
+        : '';
+
     const report = await pool.query(
       `
         SELECT
@@ -359,14 +372,17 @@ exports.getLessonStatistics = async (req, res) => {
           g.name AS group_name,
           COALESCE(u.surname, '') AS teacher_surname,
           COALESCE(u.name, '') AS teacher_name,
-          COALESCE(s.name, '') AS subject_name
+          COALESCE(s.name, '') AS subject_name,
+          COALESCE(gs.name, '') AS group_subject_name
         FROM teacher_lesson_statistics_reports r
         JOIN lessons l ON l.id = r.lesson_id
         JOIN groups g ON g.id = r.group_id
+        LEFT JOIN subjects gs ON gs.id = g.subject_id
         LEFT JOIN users u ON u.id = r.teacher_id
         LEFT JOIN subjects s ON s.id = r.subject_id
         WHERE r.lesson_id = $1
           AND g.branch_id = $2
+          ${englishClause}
         LIMIT 1
       `,
       [lessonId, req.user.branch_id || 1]
@@ -527,8 +543,12 @@ exports.getManagerDailyStatistics = async (req, res) => {
       WHERE g.branch_id = $1
         AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
         AND (
-          LOWER(COALESCE(s.name, gs.name, '')) LIKE '%english%'
-          OR LOWER(COALESCE(s.name, gs.name, '')) LIKE '%ingliz%'
+          LOWER(COALESCE(s.name, '')) LIKE '%english%'
+          OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
+        )
+        AND (
+          LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+          OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
         )
     `;
 
@@ -572,7 +592,8 @@ exports.getManagerDailyStatistics = async (req, res) => {
           g.schedule AS group_schedule,
           COALESCE(u.surname, '') AS teacher_surname,
           COALESCE(u.name, '') AS teacher_name,
-          COALESCE(s.name, gs.name, '') AS subject_name
+          COALESCE(s.name, '') AS subject_name,
+          COALESCE(gs.name, '') AS group_subject_name
         FROM teacher_lesson_statistics_reports r
         JOIN groups g ON g.id = r.group_id
         LEFT JOIN users u ON u.id = r.teacher_id
@@ -605,7 +626,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
           .filter((part) => String(part || '').trim().length > 0)
           .join(' ')
           .trim(),
-        subject_name: row.subject_name,
+        subject_name: row.group_subject_name || row.subject_name,
         report_month: row.report_month,
         total: row.total,
         percent: row.percent,
@@ -647,30 +668,69 @@ exports.getEnglishManagerTeachers = async (req, res) => {
           u.id AS teacher_id,
           u.name,
           u.surname,
-          COALESCE(COUNT(DISTINCT g.id), 0) AS groups_count,
-          COALESCE(COUNT(DISTINCT r.id), 0) AS reports_count,
-          MAX(r.created_at) AS last_report_at
+          COALESCE((
+            SELECT COUNT(DISTINCT g.id)
+            FROM groups g
+            JOIN subjects gs ON gs.id = g.subject_id
+            WHERE g.teacher_id = u.id
+              AND g.branch_id = u.branch_id
+              AND (
+                LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
+              )
+          ), 0) AS groups_count,
+          COALESCE((
+            SELECT COUNT(DISTINCT r.id)
+            FROM teacher_lesson_statistics_reports r
+            JOIN groups g ON g.id = r.group_id
+            JOIN subjects gs ON gs.id = g.subject_id
+            JOIN subjects rs ON rs.id = r.subject_id
+            WHERE g.teacher_id = u.id
+              AND g.branch_id = u.branch_id
+              AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
+              AND (
+                LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
+              )
+              AND (
+                LOWER(COALESCE(rs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(rs.name, '')) LIKE '%ingliz%'
+              )
+          ), 0) AS reports_count,
+          (
+            SELECT MAX(r.created_at)
+            FROM teacher_lesson_statistics_reports r
+            JOIN groups g ON g.id = r.group_id
+            JOIN subjects gs ON gs.id = g.subject_id
+            JOIN subjects rs ON rs.id = r.subject_id
+            WHERE g.teacher_id = u.id
+              AND g.branch_id = u.branch_id
+              AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
+              AND (
+                LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
+              )
+              AND (
+                LOWER(COALESCE(rs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(rs.name, '')) LIKE '%ingliz%'
+              )
+          ) AS last_report_at
         FROM users u
-        JOIN teacher_subjects ts ON ts.teacher_id = u.id AND ts.branch_id = u.branch_id
-        JOIN subjects s ON s.id = ts.subject_id AND s.branch_id = ts.branch_id
-        LEFT JOIN groups g
-          ON g.teacher_id = u.id
-          AND g.subject_id = ts.subject_id
-          AND g.branch_id = u.branch_id
-        LEFT JOIN teacher_lesson_statistics_reports r
-          ON r.teacher_id = u.id
-          AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
-          AND (
-            LOWER(COALESCE(s.name, '')) LIKE '%english%'
-            OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
-          )
         WHERE u.role = 'teacher'
           AND u.branch_id = $1
           AND (
-            LOWER(COALESCE(s.name, '')) LIKE '%english%'
-            OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
+            EXISTS (
+              SELECT 1
+              FROM teacher_subjects ts
+              JOIN subjects s ON s.id = ts.subject_id AND s.branch_id = ts.branch_id
+              WHERE ts.teacher_id = u.id
+                AND ts.branch_id = u.branch_id
+                AND (
+                  LOWER(COALESCE(s.name, '')) LIKE '%english%'
+                  OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
+                )
+            )
           )
-        GROUP BY u.id, u.name, u.surname
         ORDER BY u.surname ASC, u.name ASC
       `,
       [req.user.branch_id || 1, monthFilter]
@@ -721,8 +781,12 @@ exports.getEnglishManagerAvailableMonths = async (req, res) => {
         LEFT JOIN subjects gs ON gs.id = g.subject_id
         WHERE g.branch_id = $1
           AND (
-            LOWER(COALESCE(s.name, gs.name, '')) LIKE '%english%'
-            OR LOWER(COALESCE(s.name, gs.name, '')) LIKE '%ingliz%'
+            LOWER(COALESCE(s.name, '')) LIKE '%english%'
+            OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
+          )
+          AND (
+            LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+            OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
           )
       `,
       [branchId]
