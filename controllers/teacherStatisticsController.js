@@ -40,6 +40,24 @@ const formatMonthKey = (value) => {
   return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const buildMonthRange = (startMonth, endMonth) => {
+  if (!/^\d{4}-\d{2}$/.test(String(startMonth || ''))) return [];
+  if (!/^\d{4}-\d{2}$/.test(String(endMonth || ''))) return [];
+
+  const [startYear, startMon] = String(startMonth).split('-').map(Number);
+  const [endYear, endMon] = String(endMonth).split('-').map(Number);
+  const cursor = new Date(Date.UTC(startYear, startMon - 1, 1));
+  const end = new Date(Date.UTC(endYear, endMon - 1, 1));
+  const months = [];
+
+  while (cursor.getTime() <= end.getTime()) {
+    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return months;
+};
+
 const canTeacherMutateLesson = (lessonDate, now = new Date()) => {
   if (!lessonDate) return false;
   const lesson = new Date(lessonDate);
@@ -660,6 +678,46 @@ exports.getEnglishManagerTeachers = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Teacherlar yuklanmadi',
+      error: error.message,
+    });
+  }
+};
+
+exports.getEnglishManagerAvailableMonths = async (req, res) => {
+  try {
+    const branchId = req.user?.branch_id || 1;
+    const currentMonth = new Date().toISOString().slice(0, 7);
+
+    const result = await pool.query(
+      `
+        SELECT
+          MIN(COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM'))) AS first_month,
+          MAX(COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM'))) AS last_month
+        FROM teacher_lesson_statistics_reports r
+        JOIN groups g ON g.id = r.group_id
+        LEFT JOIN subjects s ON s.id = r.subject_id
+        LEFT JOIN subjects gs ON gs.id = g.subject_id
+        WHERE g.branch_id = $1
+          AND (
+            LOWER(COALESCE(s.name, gs.name, '')) LIKE '%english%'
+            OR LOWER(COALESCE(s.name, gs.name, '')) LIKE '%ingliz%'
+          )
+      `,
+      [branchId]
+    );
+
+    const firstMonth = result.rows[0]?.first_month || currentMonth;
+    const months = buildMonthRange(firstMonth, currentMonth);
+
+    return res.json({
+      success: true,
+      data: months.length ? months : [currentMonth],
+    });
+  } catch (error) {
+    console.error('English manager available months olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Oylar yuklanmadi',
       error: error.message,
     });
   }
