@@ -33,12 +33,11 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         SELECT UNNEST($1::int[]) AS group_id
       ),
       memberships AS (
-        SELECT
+        SELECT DISTINCT
           sg.group_id,
           sg.student_id,
-          sg.joined_at,
-          sg.left_at,
-          LOWER(COALESCE(s.name, '')) AS subject_name
+          LOWER(COALESCE(s.name, '')) AS subject_name,
+          g.name AS group_name
         FROM student_groups sg
         JOIN groups g ON g.id = sg.group_id
         JOIN subjects s ON s.id = g.subject_id
@@ -51,7 +50,9 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
           DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent') AS point_day,
           SUM(spe.points)::int AS day_points
         FROM student_point_events spe
-        JOIN memberships m ON m.group_id = spe.group_id
+        JOIN memberships m
+          ON m.group_id = spe.group_id
+         AND m.student_id = spe.student_id
         WHERE LOWER(m.subject_name) <> 'english'
           AND spe.month_name = $2
         GROUP BY spe.group_id, spe.student_id, DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
@@ -80,22 +81,17 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
       report_day_points AS (
         SELECT
           r.group_id,
-          sg.student_id,
+          m.student_id,
           r.lesson_date::date AS point_day,
           SUM((row->>'total')::int)::int AS day_points
         FROM teacher_lesson_statistics_reports r
         JOIN memberships m
           ON m.group_id = r.group_id
          AND LOWER(m.subject_name) = 'english'
-        JOIN student_groups sg
-          ON sg.group_id = r.group_id
-         AND sg.student_id = m.student_id
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         WHERE r.report_month = $2
-          AND row->>'student_id' = sg.student_id::text
-          AND r.lesson_date::date >= sg.joined_at::date
-          AND r.lesson_date::date <= COALESCE(sg.left_at::date, CURRENT_DATE)
-        GROUP BY r.group_id, sg.student_id, r.lesson_date::date
+          AND row->>'student_id' = m.student_id::text
+        GROUP BY r.group_id, m.student_id, r.lesson_date::date
       ),
       report_ranked AS (
         SELECT
@@ -184,10 +180,9 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
     `
       WITH memberships AS (
         SELECT
+          DISTINCT
           sg.group_id,
           sg.student_id,
-          sg.joined_at,
-          sg.left_at,
           LOWER(COALESCE(s.name, '')) AS subject_name,
           g.name AS group_name
         FROM student_groups sg
@@ -215,7 +210,9 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
           TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
         FROM student_point_events spe
-        JOIN memberships m ON m.group_id = spe.group_id
+        JOIN memberships m
+          ON m.group_id = spe.group_id
+         AND m.student_id = spe.student_id
         LEFT JOIN groups g ON g.id = spe.group_id
         LEFT JOIN users cb ON cb.id = spe.created_by
         WHERE LOWER(m.subject_name) <> 'english'
@@ -225,7 +222,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
       report_entries AS (
         SELECT
           r.id::text AS entry_id,
-          sg.student_id,
+          m.student_id,
           r.group_id,
           COALESCE(m.group_name, g.name, r.report_data->>'group_name', '') AS group_name,
           r.lesson_id,
@@ -258,16 +255,11 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
         JOIN memberships m
           ON m.group_id = r.group_id
          AND LOWER(m.subject_name) = 'english'
-        JOIN student_groups sg
-          ON sg.group_id = r.group_id
-         AND sg.student_id = m.student_id
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         LEFT JOIN groups g ON g.id = r.group_id
         LEFT JOIN users cb ON cb.id = r.created_by
-        WHERE sg.student_id = $1
-          AND row->>'student_id' = sg.student_id::text
-          AND r.lesson_date::date >= sg.joined_at::date
-          AND r.lesson_date::date <= COALESCE(sg.left_at::date, CURRENT_DATE)
+        WHERE m.student_id = $1
+          AND row->>'student_id' = m.student_id::text
           ${monthKey ? `AND r.report_month = $${monthParamIndex}` : ''}
       )
       SELECT * FROM event_entries
