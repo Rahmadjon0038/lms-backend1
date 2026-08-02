@@ -138,6 +138,62 @@ const formatDateDdMmYyyy = (value) => {
     }).format(parsed);
 };
 
+const parseDateLike = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value;
+    }
+
+    const text = String(value).trim();
+    if (!text) return null;
+
+    if (/^\d{2}\.\d{2}\.\d{4}$/.test(text)) {
+        const [day, month, year] = text.split('.').map((part) => Number.parseInt(part, 10));
+        if (!day || !month || !year) return null;
+        const parsed = new Date(Date.UTC(year, month - 1, day));
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const monthKeyFromDate = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const buildAvailableMonthKeys = (startValue, endValue = null) => {
+    const currentMonth = new Date();
+    const current = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+
+    const startDate = parseDateLike(startValue);
+    const endDate = parseDateLike(endValue) || current;
+
+    const start = startDate
+        ? new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+        : new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+    const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+    if (start > end) {
+        start.setTime(end.getTime());
+    }
+    if (end > current) {
+        end.setTime(current.getTime());
+    }
+
+    const months = [];
+    let cursor = new Date(end.getFullYear(), end.getMonth(), 1);
+    while (cursor >= start && months.length < 36) {
+        const key = monthKeyFromDate(cursor);
+        if (key) {
+            months.push(key);
+        }
+        cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+    }
+    return months;
+};
+
 // Student guruh statusini o'zgartirish - FAQAT ADMIN
 // Bu funksiya faqat bitta guruhdagi statusni o'zgartiradi, boshqa guruhlarga ta'sir qilmaydi
 // Agar student guruhda bo'lmasa, uni guruhga qo'shadi va status beradi
@@ -1629,6 +1685,10 @@ exports.getMyGroups = async (req, res) => {
                 created_date: group.group_created_date,
                 total_students: parseInt(group.total_students),
                 schedule: group.schedule || null,
+                available_months: buildAvailableMonthKeys(
+                    group.my_join_date,
+                    group.my_leave_date
+                ),
                 monthly_points: parseInt(group.month_points || 0),
                 monthly_rank: parseInt(group.rank_in_group || 0),
                 group_max_points: parseInt(group.group_max_points || 0),
@@ -1770,6 +1830,7 @@ exports.getMyGroupInfo = async (req, res) => {
                     TO_CHAR(sg.joined_at, 'DD.MM.YYYY')
                 ) as created_date,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as student_joined_date,
+                TO_CHAR(sg.left_at, 'DD.MM.YYYY') as student_left_date,
                 g.schedule,
 
                 s.name as subject_name,
@@ -1907,15 +1968,10 @@ exports.getMyGroupInfo = async (req, res) => {
                 g.name AS group_name
             FROM teacher_lesson_statistics_reports r
             JOIN groups g ON g.id = r.group_id
-            JOIN student_groups sg
-              ON sg.student_id = $1
-             AND sg.group_id = g.id
             LEFT JOIN users t ON t.id = r.teacher_id
             LEFT JOIN subjects s ON s.id = r.subject_id
             LEFT JOIN subjects gs ON gs.id = g.subject_id
             WHERE r.group_id = $2
-              AND r.lesson_date::date >= sg.joined_at::date
-              AND r.lesson_date::date <= COALESCE(sg.left_at::date, CURRENT_DATE)
             ORDER BY r.lesson_date DESC, r.lesson_start_time DESC, r.id DESC
         `, [studentId, groupId]);
 
@@ -1984,7 +2040,12 @@ exports.getMyGroupInfo = async (req, res) => {
                 start_date: group.start_date,
                 created_date: group.created_date,
                 student_joined_date: group.student_joined_date,
-                schedule: group.schedule || null
+                student_left_date: group.student_left_date,
+                schedule: group.schedule || null,
+                available_months: buildAvailableMonthKeys(
+                    group.student_joined_date,
+                    group.student_left_date
+                )
             },
             subject: {
                 name: group.subject_name
