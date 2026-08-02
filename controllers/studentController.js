@@ -163,6 +163,12 @@ const monthKeyFromDate = (date) => {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const formatDateToYmd = (value) => {
+    const date = parseDateLike(value);
+    if (!date) return null;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
 const buildAvailableMonthKeys = (startValue, endValue = null) => {
     const currentMonth = new Date();
     const current = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
@@ -1018,8 +1024,8 @@ exports.getMyGroupInfo = async (req, res) => {
                     name: studentData.group_name,
                     status: studentData.group_status,
                     classStatus: studentData.class_status,
-                    classStartDate: studentData.class_start_date ? studentData.class_start_date.toISOString().split('T')[0] : null,
-                    plannedStartDate: studentData.planned_start_date ? studentData.planned_start_date.toISOString().split('T')[0] : null,
+                    classStartDate: formatDateToYmd(studentData.class_start_date),
+                    plannedStartDate: formatDateToYmd(studentData.planned_start_date),
                     price: studentData.group_price,
                     teacher: {
                         id: studentData.teacher_id,
