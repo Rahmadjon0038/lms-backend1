@@ -61,6 +61,18 @@ const createTeacherStatisticsTables = async () => {
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     `);
 
+    await pool.query(`
+      UPDATE teacher_lesson_statistics_reports
+      SET report_month = TO_CHAR(lesson_date::date, 'YYYY-MM')
+      WHERE lesson_date IS NOT NULL
+        AND (
+          report_month IS NULL
+          OR report_month = ''
+          OR report_month !~ '^[0-9]{4}-[0-9]{2}$'
+          OR report_month <> TO_CHAR(lesson_date::date, 'YYYY-MM')
+        );
+    `);
+
     console.log("✅ 'teacher_lesson_statistics_reports' jadvali yaratildi.");
   } catch (error) {
     console.error("Teacher statistikasi jadvalini yaratishda xatolik:", error);

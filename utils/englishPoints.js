@@ -89,7 +89,7 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
           ON m.group_id = r.group_id
          AND LOWER(m.subject_name) = 'english'
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
-        WHERE r.report_month = $2
+        WHERE COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
           AND row->>'student_id' = m.student_id::text
         GROUP BY r.group_id, m.student_id, r.lesson_date::date
       ),
@@ -260,7 +260,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
         LEFT JOIN users cb ON cb.id = r.created_by
         WHERE m.student_id = $1
           AND row->>'student_id' = m.student_id::text
-          ${monthKey ? `AND r.report_month = $${monthParamIndex}` : ''}
+          ${monthKey ? `AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $${monthParamIndex}` : ''}
       )
       SELECT * FROM event_entries
       UNION ALL

@@ -1579,34 +1579,6 @@ exports.getMyGroups = async (req, res) => {
         console.log(`🎓 Student ${studentId} o'z guruhlarini so'ramoqda`);
 
         const myGroups = await pool.query(`
-            WITH month_points AS (
-                SELECT
-                    student_id,
-                    COALESCE(SUM(points), 0)::int AS month_points
-                FROM student_point_events
-                WHERE month_name = $2
-                GROUP BY student_id
-            ),
-            group_points AS (
-                SELECT
-                    sg.group_id,
-                    sg.student_id,
-                    COALESCE(mp.month_points, 0)::int AS month_points
-                FROM student_groups sg
-                LEFT JOIN month_points mp ON mp.student_id = sg.student_id
-            ),
-            ranked_points AS (
-                SELECT
-                    group_id,
-                    student_id,
-                    month_points,
-                    DENSE_RANK() OVER (
-                        PARTITION BY group_id
-                        ORDER BY month_points DESC, student_id ASC
-                    ) AS rank_in_group,
-                    MAX(month_points) OVER (PARTITION BY group_id) AS group_max_points
-                FROM group_points
-            )
             SELECT
                 g.id as group_id,
                 g.name as group_name,
@@ -1634,37 +1606,13 @@ exports.getMyGroups = async (req, res) => {
                     SELECT COUNT(*) 
                     FROM student_groups sg2 
                     WHERE sg2.group_id = g.id AND sg2.status = 'active'
-                ) as total_students,
-                COALESCE(rp.month_points, 0) as month_points,
-                COALESCE(rp.rank_in_group, 0) as rank_in_group,
-                COALESCE(rp.group_max_points, 0) as group_max_points,
-                (
-                    SELECT TO_CHAR(MAX(spe.created_at), 'DD.MM.YYYY')
-                    FROM student_point_events spe
-                    WHERE spe.student_id = sg.student_id
-                      AND spe.month_name = $2
-                ) as last_point_date,
-                (
-                    SELECT COALESCE(SUM(spe.points), 0)::int
-                    FROM student_point_events spe
-                    WHERE spe.student_id = sg.student_id
-                      AND spe.month_name = $2
-                      AND spe.created_at::date = (
-                          SELECT MAX(spe2.created_at)::date
-                          FROM student_point_events spe2
-                          WHERE spe2.student_id = sg.student_id
-                            AND spe2.month_name = $2
-                      )
-                ) as last_day_points
+                ) as total_students
                 
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
             LEFT JOIN rooms r ON g.room_id = r.id
-            LEFT JOIN ranked_points rp
-              ON rp.group_id = sg.group_id
-             AND rp.student_id = sg.student_id
             
             WHERE sg.student_id = $1
             ORDER BY 
@@ -1674,9 +1622,8 @@ exports.getMyGroups = async (req, res) => {
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
-                COALESCE(rp.month_points, 0) DESC,
                 g.name
-        `, [studentId, currentMonth]);
+        `, [studentId]);
 
         const groupsData = myGroups.rows.map(group => ({
                 group_id: group.group_id,
@@ -1695,11 +1642,11 @@ exports.getMyGroups = async (req, res) => {
                     group.my_join_date,
                     group.my_leave_date
                 ),
-                monthly_points: parseInt(group.month_points || 0),
-                monthly_rank: parseInt(group.rank_in_group || 0),
-                group_max_points: parseInt(group.group_max_points || 0),
-                last_point_date: group.last_point_date || null,
-                last_day_points: parseInt(group.last_day_points || 0)
+                monthly_points: 0,
+                monthly_rank: 0,
+                group_max_points: 0,
+                last_point_date: null,
+                last_day_points: 0
             },
             subject_info: {
                 name: group.subject_name
@@ -1715,8 +1662,8 @@ exports.getMyGroups = async (req, res) => {
                 status: group.my_status,
                 join_date: group.my_join_date,
                 leave_date: group.my_leave_date,
-                monthly_points: parseInt(group.month_points || 0),
-                monthly_rank: parseInt(group.rank_in_group || 0)
+                monthly_points: 0,
+                monthly_rank: 0
             }
         }));
 
@@ -1814,14 +1761,6 @@ exports.getMyGroupInfo = async (req, res) => {
 
         // Guruh to'liq ma'lumotlari va student qo'shilgan sana
         const groupInfo = await pool.query(`
-            WITH month_points AS (
-                SELECT
-                    student_id,
-                    COALESCE(SUM(points), 0)::int AS month_points
-                FROM student_point_events
-                WHERE month_name = $3
-                GROUP BY student_id
-            )
             SELECT 
                 g.id,
                 g.name,
@@ -1838,20 +1777,15 @@ exports.getMyGroupInfo = async (req, res) => {
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as student_joined_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as student_left_date,
                 g.schedule,
-
                 s.name as subject_name,
-
                 u.name || ' ' || u.surname as teacher_name,
-                u.phone as teacher_phone,
-                COALESCE(mp.month_points, 0)::int as my_month_points
-                
+                u.phone as teacher_phone
             FROM groups g
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
             JOIN student_groups sg ON g.id = sg.group_id AND sg.student_id = $2
-            LEFT JOIN month_points mp ON mp.student_id = sg.student_id
             WHERE g.id = $1
-        `, [groupId, studentId, currentMonth]);
+        `, [groupId, studentId]);
 
         if (groupInfo.rows.length === 0) {
             return res.status(404).json({
@@ -1862,28 +1796,6 @@ exports.getMyGroupInfo = async (req, res) => {
 
         // Guruh a'zolari (guruh doshlari)
         const groupmates = await pool.query(`
-            WITH month_points AS (
-                SELECT
-                    student_id,
-                    COALESCE(SUM(points), 0)::int AS month_points
-                FROM student_point_events
-                WHERE month_name = $2
-                GROUP BY student_id
-            ),
-            ranked_points AS (
-                SELECT
-                    sg.group_id,
-                    sg.student_id,
-                    COALESCE(mp.month_points, 0)::int AS month_points,
-                    DENSE_RANK() OVER (
-                        PARTITION BY sg.group_id
-                        ORDER BY COALESCE(mp.month_points, 0) DESC, u.surname, u.name, sg.student_id
-                    ) AS rank_in_group
-                FROM student_groups sg
-                LEFT JOIN month_points mp ON mp.student_id = sg.student_id
-                JOIN users u ON sg.student_id = u.id
-                WHERE sg.group_id = $1
-            )
             SELECT 
                 u.id,
                 u.name,
@@ -1895,28 +1807,19 @@ exports.getMyGroupInfo = async (req, res) => {
                 sg.status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
-                COALESCE(rp.month_points, 0)::int as month_points,
-                COALESCE(rp.rank_in_group, 0)::int as rank_in_group,
-                
-                -- Status tavsifi
                 CASE 
                     WHEN sg.status = 'active' THEN 'Faol'
                     WHEN sg.status = 'stopped' THEN 'Toʻxtatgan'
                     WHEN sg.status = 'finished' THEN 'Bitirgan'
                     ELSE 'Nomaʻlum'
                 END as status_description
-            
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
             LEFT JOIN profile_avatars pa
               ON LOWER(BTRIM(COALESCE(u.avatar_key, ''))) = LOWER(BTRIM(COALESCE(pa.avatar_key, '')))
              AND pa.branch_id = u.branch_id
-            LEFT JOIN ranked_points rp
-              ON rp.group_id = sg.group_id
-             AND rp.student_id = sg.student_id
             WHERE sg.group_id = $1
             ORDER BY 
-                COALESCE(rp.month_points, 0) DESC,
                 CASE sg.status 
                     WHEN 'active' THEN 1
                     WHEN 'stopped' THEN 2  
@@ -1924,7 +1827,7 @@ exports.getMyGroupInfo = async (req, res) => {
                     ELSE 4
                 END,
                 u.surname, u.name, u.id
-        `, [groupId, currentMonth]);
+        `, [groupId]);
 
         // Mening to'lov ma'lumotlarim
         const myPayment = await pool.query(`
@@ -2053,11 +1956,11 @@ exports.getMyGroupInfo = async (req, res) => {
                     group.student_left_date
                 )
             },
-            subject: {
-                name: group.subject_name
-            },
-            teacher: {
-                name: group.teacher_name,
+                subject: {
+                    name: group.subject_name
+                },
+                teacher: {
+                    name: group.teacher_name,
                 phone: group.teacher_phone
             },
             group_statistics: {
