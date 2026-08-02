@@ -182,7 +182,10 @@ exports.updateStudentGroupStatus = async (req, res) => {
         const studentGroupCheck = await pool.query(
             `SELECT sg.id, sg.status, sg.joined_at 
              FROM student_groups sg
-             WHERE sg.student_id = $1 AND sg.group_id = $2 AND sg.branch_id = $3`,
+             WHERE sg.student_id = $1
+               AND sg.group_id = $2
+               AND sg.branch_id = $3
+               AND sg.status = 'active'`,
             [student_id, group_id, branchId]
         );
 
@@ -197,11 +200,6 @@ exports.updateStudentGroupStatus = async (req, res) => {
             result = await pool.query(
                 `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
                  VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5)
-                 ON CONFLICT (student_id, group_id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    joined_at = CURRENT_TIMESTAMP,
-                    left_at = EXCLUDED.left_at,
-                    branch_id = EXCLUDED.branch_id
                  RETURNING student_id, group_id, status, joined_at, left_at`,
                 [student_id, group_id, status, left_at, branchId]
             );

@@ -26,6 +26,7 @@ const createGroupTables = async () => {
       id SERIAL PRIMARY KEY,
       student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+      branch_id INTEGER,
       joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       left_at TIMESTAMP,
       status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'stopped', 'finished')),
@@ -56,11 +57,46 @@ const createGroupTables = async () => {
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='groups' AND column_name='schedule_effective_from') THEN
             ALTER TABLE groups ADD COLUMN schedule_effective_from DATE;
           END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='branch_id') THEN
+            ALTER TABLE student_groups ADD COLUMN branch_id INTEGER;
+          END IF;
         END $$;
       `);
       console.log("✅ 'groups' jadvaliga status va room_id ustuni qo'shildi.");
     } catch (alterErr) {
       console.log("⚠️ Status ustuni qo'shishda xatolik (balki mavjud):", alterErr.message);
+    }
+
+    try {
+      await pool.query(`
+        DO $$
+        DECLARE
+          constraint_name text;
+        BEGIN
+          SELECT con.conname
+            INTO constraint_name
+          FROM pg_constraint con
+          JOIN pg_class rel ON rel.oid = con.conrelid
+          JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+          WHERE rel.relname = 'student_groups'
+            AND con.contype = 'u'
+            AND pg_get_constraintdef(con.oid) ILIKE '%(student_id, group_id)%'
+          LIMIT 1;
+
+          IF constraint_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE student_groups DROP CONSTRAINT %I', constraint_name);
+          END IF;
+        END $$;
+      `);
+
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS student_groups_active_unique_idx
+        ON student_groups(student_id, group_id, branch_id)
+        WHERE status = 'active'
+      `);
+      console.log("✅ 'student_groups' history-friendly index tayyorlandi.");
+    } catch (membershipErr) {
+      console.log("⚠️ 'student_groups' index sozlashda xatolik:", membershipErr.message);
     }
     
     console.log("✅ 'groups' va 'student_groups' SERIAL ID bilan tayyor.");
