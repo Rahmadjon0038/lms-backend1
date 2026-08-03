@@ -2793,6 +2793,63 @@ exports.updateStudentMonthlyStatus = async (req, res) => {
       // Snapshot xatosi attendance yangilashiga ta'sir qilmasin
     }
 
+    // Student guruh statusini ham sinxronlaymiz.
+    // Shu bilan admin/students sahifasidagi ko'rsatkich attendance'dagi holatga mos bo'ladi.
+    try {
+      const membershipLookup = await pool.query(
+        `SELECT id
+         FROM student_groups
+         WHERE student_id = $1
+           AND group_id = $2
+           AND branch_id = $3
+         ORDER BY
+           CASE status
+             WHEN 'active' THEN 1
+             WHEN 'stopped' THEN 2
+             WHEN 'finished' THEN 3
+             ELSE 4
+           END,
+           joined_at DESC NULLS LAST,
+           id DESC
+         LIMIT 1`,
+        [student_id, group_id, branchId]
+      );
+
+      const membershipStatus = monthly_status;
+      const leftAtValue = membershipStatus === 'active' ? null : new Date();
+
+      if (membershipLookup.rows.length > 0) {
+        await pool.query(
+          `UPDATE student_groups
+           SET status = $1,
+               left_at = $2
+           WHERE id = $3`,
+          [membershipStatus, leftAtValue, membershipLookup.rows[0].id]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5)`,
+          [student_id, group_id, membershipStatus, leftAtValue, branchId]
+        );
+      }
+
+      await pool.query(
+        `UPDATE users
+         SET course_status = $1,
+             course_end_date = $2
+         WHERE id = $3 AND branch_id = $4`,
+        [
+          membershipStatus === 'active' ? 'in_progress' : 'stopped',
+          membershipStatus === 'active' ? null : new Date(),
+          student_id,
+          branchId
+        ]
+      );
+    } catch (membershipError) {
+      console.error('Student guruh statusini sinxronlashda xatolik:', membershipError);
+    }
+
     // Yangilangan oylarning xulasasi
     const summary = await pool.query(
       `SELECT month, COUNT(*) as lesson_count
