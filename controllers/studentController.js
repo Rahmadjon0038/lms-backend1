@@ -1819,6 +1819,8 @@ exports.getMyGroupInfo = async (req, res) => {
               ON LOWER(BTRIM(COALESCE(u.avatar_key, ''))) = LOWER(BTRIM(COALESCE(pa.avatar_key, '')))
              AND pa.branch_id = u.branch_id
             WHERE sg.group_id = $1
+              AND sg.joined_at::date <= (TO_DATE($2, 'YYYY-MM') + INTERVAL '1 month' - INTERVAL '1 day')::date
+              AND (sg.left_at IS NULL OR sg.left_at::date >= TO_DATE($2, 'YYYY-MM')::date)
             ORDER BY 
                 CASE sg.status 
                     WHEN 'active' THEN 1
@@ -1827,7 +1829,7 @@ exports.getMyGroupInfo = async (req, res) => {
                     ELSE 4
                 END,
                 u.surname, u.name, u.id
-        `, [groupId]);
+        `, [groupId, currentMonth]);
 
         // Mening to'lov ma'lumotlarim
         const myPayment = await pool.query(`
@@ -1881,8 +1883,9 @@ exports.getMyGroupInfo = async (req, res) => {
             LEFT JOIN subjects s ON s.id = r.subject_id
             LEFT JOIN subjects gs ON gs.id = g.subject_id
             WHERE r.group_id = $2
+              AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $3
             ORDER BY r.lesson_date DESC, r.lesson_start_time DESC, r.id DESC
-        `, [studentId, groupId]);
+        `, [studentId, groupId, currentMonth]);
 
         const group = groupInfo.rows[0];
         const payment = myPayment.rows[0];

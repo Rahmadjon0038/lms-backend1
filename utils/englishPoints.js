@@ -163,39 +163,27 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
   const monthKey = isAllTime ? null : buildMonthFilter(month);
 
   const params = [normalizedStudentId];
-  const filters = ['m.student_id = $1'];
+  const eventFilters = ['spe.student_id = $1'];
   if (normalizedGroupId !== null) {
     params.push(normalizedGroupId);
-    filters.push(`m.group_id = $${params.length}`);
+    eventFilters.push(`spe.group_id = $${params.length}`);
   }
-  const membershipFilter = filters.join(' AND ');
 
   if (monthKey) {
     params.push(monthKey);
   }
 
+  const groupParamIndex = normalizedGroupId !== null ? 2 : null;
   const monthParamIndex = monthKey ? params.length : null;
 
   const result = await pool.query(
     `
-      WITH memberships AS (
-        SELECT
-          DISTINCT
-          sg.group_id,
-          sg.student_id,
-          LOWER(COALESCE(s.name, '')) AS subject_name,
-          g.name AS group_name
-        FROM student_groups sg
-        JOIN groups g ON g.id = sg.group_id
-        JOIN subjects s ON s.id = g.subject_id
-        WHERE ${membershipFilter}
-      ),
       event_entries AS (
         SELECT
           spe.id::text AS entry_id,
           spe.student_id,
           spe.group_id,
-          COALESCE(m.group_name, g.name, spe.metadata->>'group_name', '') AS group_name,
+          COALESCE(g.name, spe.metadata->>'group_name', '') AS group_name,
           spe.lesson_id,
           spe.month_name,
           spe.points,
@@ -210,21 +198,19 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
           TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
         FROM student_point_events spe
-        JOIN memberships m
-          ON m.group_id = spe.group_id
-         AND m.student_id = spe.student_id
         LEFT JOIN groups g ON g.id = spe.group_id
+        LEFT JOIN subjects s ON s.id = g.subject_id
         LEFT JOIN users cb ON cb.id = spe.created_by
-        WHERE LOWER(m.subject_name) <> 'english'
-          AND spe.student_id = $1
+        WHERE ${eventFilters.join(' AND ')}
+          AND (LOWER(COALESCE(s.name, '')) <> 'english' OR s.name IS NULL)
           ${monthKey ? `AND spe.month_name = $${monthParamIndex}` : ''}
       ),
       report_entries AS (
         SELECT
           r.id::text AS entry_id,
-          m.student_id,
+          (row->>'student_id')::int AS student_id,
           r.group_id,
-          COALESCE(m.group_name, g.name, r.report_data->>'group_name', '') AS group_name,
+          COALESCE(g.name, r.report_data->>'group_name', '') AS group_name,
           r.lesson_id,
           r.report_month AS month_name,
           COALESCE((row->>'total')::int, 0) AS points,
@@ -252,14 +238,11 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           TO_CHAR(DATE(r.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
           TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
         FROM teacher_lesson_statistics_reports r
-        JOIN memberships m
-          ON m.group_id = r.group_id
-         AND LOWER(m.subject_name) = 'english'
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         LEFT JOIN groups g ON g.id = r.group_id
         LEFT JOIN users cb ON cb.id = r.created_by
-        WHERE m.student_id = $1
-          AND row->>'student_id' = m.student_id::text
+        WHERE row->>'student_id' = $1::text
+          ${groupParamIndex ? `AND r.group_id = $${groupParamIndex}` : ''}
           ${monthKey ? `AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $${monthParamIndex}` : ''}
       )
       SELECT * FROM event_entries
