@@ -433,7 +433,7 @@ exports.getMonthlySnapshots = async (req, res) => {
 
     // Pagination
     const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNumber = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const limitNumber = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 1000);
     const offsetNumber = (pageNumber - 1) * limitNumber;
 
     const query = `
