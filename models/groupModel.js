@@ -29,7 +29,7 @@ const createGroupTables = async () => {
       branch_id INTEGER,
       joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       left_at TIMESTAMP,
-      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'stopped', 'finished')),
+      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'stopped', 'finished', 'removed')),
       UNIQUE(student_id, group_id)
     );
   `;
@@ -93,6 +93,30 @@ const createGroupTables = async () => {
         CREATE UNIQUE INDEX IF NOT EXISTS student_groups_active_unique_idx
         ON student_groups(student_id, group_id, branch_id)
         WHERE status = 'active'
+      `);
+
+      await pool.query(`
+        DO $$
+        DECLARE
+          constraint_name text;
+        BEGIN
+          SELECT con.conname
+            INTO constraint_name
+          FROM pg_constraint con
+          JOIN pg_class rel ON rel.oid = con.conrelid
+          WHERE rel.relname = 'student_groups'
+            AND con.contype = 'c'
+            AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+          LIMIT 1;
+
+          IF constraint_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE student_groups DROP CONSTRAINT %I', constraint_name);
+          END IF;
+
+          ALTER TABLE student_groups
+            ADD CONSTRAINT student_groups_status_check
+            CHECK (status IN ('active', 'stopped', 'finished', 'removed'));
+        END $$;
       `);
       console.log("✅ 'student_groups' history-friendly index tayyorlandi.");
     } catch (membershipErr) {
