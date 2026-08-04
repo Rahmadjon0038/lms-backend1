@@ -109,7 +109,7 @@ const normalizeUnassignedReason = (reason) => {
 };
 
 const closeStudentGroupMembership = async ({ studentId, groupId, branchId, status = 'removed' }) => {
-    return pool.query(
+    const updateMembership = async (nextStatus) => pool.query(
         `UPDATE student_groups
          SET status = $1,
              left_at = COALESCE(left_at, CURRENT_TIMESTAMP)
@@ -133,8 +133,26 @@ const closeStudentGroupMembership = async ({ studentId, groupId, branchId, statu
            LIMIT 1
          )
          RETURNING *`,
-        [status, studentId, groupId, branchId]
+        [nextStatus, studentId, groupId, branchId]
     );
+
+    try {
+        return await updateMembership(status);
+    } catch (err) {
+        const isStatusCheckViolation = (
+            err?.code === '23514'
+            && /student_groups/i.test(err?.constraint || '')
+        ) || /removed/i.test(err?.message || '');
+
+        if (status === 'removed' && isStatusCheckViolation) {
+            console.warn(
+                `⚠️ student_groups.status hali 'removed' ni qabul qilmayapti, vaqtincha 'stopped' ga qaytildi: student=${studentId}, group=${groupId}, branch=${branchId}`
+            );
+            return updateMembership('stopped');
+        }
+
+        throw err;
+    }
 };
 
 const syncMembershipSnapshotsAfterClose = async ({ studentId, groupId, branchId }) => {
