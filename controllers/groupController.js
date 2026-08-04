@@ -119,13 +119,14 @@ const closeStudentGroupMembership = async ({ studentId, groupId, branchId, statu
            WHERE student_id = $2
              AND group_id = $3
              AND branch_id = $4
-             AND status IN ('active', 'stopped', 'removed')
+             AND status IN ('active', 'stopped', 'finished', 'removed')
              ORDER BY
              CASE status
                WHEN 'active' THEN 1
                WHEN 'stopped' THEN 2
-               WHEN 'removed' THEN 3
-               ELSE 4
+               WHEN 'finished' THEN 3
+               WHEN 'removed' THEN 4
+               ELSE 5
              END,
              joined_at DESC NULLS LAST,
              id DESC
