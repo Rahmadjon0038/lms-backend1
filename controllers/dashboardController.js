@@ -611,6 +611,16 @@ const getRemovedStudents = async (req, res) => {
          sg.group_id,
          TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') as left_date,
          TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as left_at,
+         COALESCE((
+           SELECT COUNT(DISTINCT l.date)
+           FROM attendance a
+           JOIN lessons l ON l.id = a.lesson_id
+           WHERE a.student_id = sg.student_id
+             AND a.group_id = sg.group_id
+             AND COALESCE(a.is_marked, false) = true
+             AND a.status = 'keldi'
+             AND (l.date + COALESCE(l.start_time, '00:00:00'::time)) < COALESCE(sg.left_at, CURRENT_TIMESTAMP)
+         ), 0)::int as attended_days_before_removal,
          u.name as student_name,
          u.surname as student_surname,
          u.phone as student_phone,
