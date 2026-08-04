@@ -598,6 +598,55 @@ const getDebtorStudents = async (req, res) => {
   }
 };
 
+const getRemovedStudents = async (req, res) => {
+  try {
+    const branchId = getScopedBranchId(req);
+    const { month } = req.query;
+    const currentMonth = isValidMonth(month) ? month : getCurrentMonth();
+
+    const result = await pool.query(
+      `SELECT
+         sg.id,
+         sg.student_id,
+         sg.group_id,
+         TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') as left_date,
+         TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'DD.MM.YYYY HH24:MI') as left_at,
+         u.name as student_name,
+         u.surname as student_surname,
+         u.phone as student_phone,
+         g.name as group_name,
+         s.name as subject_name,
+         CONCAT(t.name, ' ', t.surname) as teacher_name
+       FROM student_groups sg
+       JOIN users u ON u.id = sg.student_id AND u.branch_id = sg.branch_id
+       JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
+       LEFT JOIN subjects s ON s.id = g.subject_id AND s.branch_id = g.branch_id
+       LEFT JOIN users t ON t.id = g.teacher_id AND t.branch_id = g.branch_id
+       WHERE sg.branch_id = $1
+         AND sg.status = 'removed'
+         AND TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+       ORDER BY sg.left_at DESC, u.surname ASC, u.name ASC`,
+      [branchId, currentMonth]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        month: currentMonth,
+        total: result.rowCount,
+        students: result.rows,
+      },
+    });
+  } catch (error) {
+    console.error('Removed students stats xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Guruhdan chiqarilgan talabalar ro\'yxatini olishda xatolik',
+      errors: { detail: error.message },
+    });
+  }
+};
+
 // Tizim ish boshlagan oy (bazadagi eng birinchi foydalanuvchi/guruh sanasi) —
 // mobil ilovadagi oy filtrlarini shu oydan boshlash uchun
 const getSystemStartMonth = async (req, res) => {
@@ -950,6 +999,7 @@ module.exports = {
   getAdminMonthlyStats,
   getAdminOverviewStats,
   getDebtorStudents,
+  getRemovedStudents,
   getSuperAdminStats,
   getSystemStartMonth,
 };

@@ -7,6 +7,7 @@ const {
   getAdminMonthlyStats,
   getAdminOverviewStats,
   getDebtorStudents,
+  getRemovedStudents,
   getSuperAdminStats,
   getSystemStartMonth,
 } = require('../controllers/dashboardController');
@@ -92,6 +93,27 @@ router.get('/stats/overview', protect, protectAdmin, getAdminOverviewStats);
  *         description: OK
  */
 router.get('/debtors', protect, protectAdmin, getDebtorStudents);
+
+/**
+ * @swagger
+ * /api/dashboard/removed-students:
+ *   get:
+ *     summary: Joriy oyda guruhdan chiqarilgan talabalar ro'yxati
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2026-08"
+ *         description: Oy (YYYY-MM). Default joriy oy
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get('/removed-students', protect, protectAdmin, getRemovedStudents);
 
 /**
  * @swagger
