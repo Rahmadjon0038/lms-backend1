@@ -623,7 +623,7 @@ const getRemovedStudents = async (req, res) => {
        LEFT JOIN subjects s ON s.id = g.subject_id AND s.branch_id = g.branch_id
        LEFT JOIN users t ON t.id = g.teacher_id AND t.branch_id = g.branch_id
        WHERE sg.branch_id = $1
-         AND sg.status = 'removed'
+         AND sg.status IN ('removed', 'stopped')
          AND TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
        ORDER BY sg.left_at DESC, u.surname ASC, u.name ASC`,
       [branchId, currentMonth]
