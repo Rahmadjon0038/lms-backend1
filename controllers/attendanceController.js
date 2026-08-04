@@ -217,7 +217,7 @@ const syncLessonAttendanceForDate = async (lessonId, groupId, lessonDate, branch
      WHERE sg.group_id = $1
        AND sg.branch_id = $3
        AND DATE(sg.joined_at) <= $2::date
-       AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
+       AND (sg.left_at IS NULL OR DATE(sg.left_at) > $2::date)`,
     [groupId, lessonDate, branchId]
   );
 
@@ -793,7 +793,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
                AND sg.group_id = a.group_id
                AND sg.branch_id = $2
                AND DATE(sg.joined_at) <= l.date
-               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
          WHERE l.date = $1::date
            AND l.branch_id = $2
@@ -942,7 +942,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
        LEFT JOIN student_groups sg ON sg.group_id = g.id
          AND sg.branch_id = g.branch_id
          AND DATE(sg.joined_at) <= $2::date
-         AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
+         AND (sg.left_at IS NULL OR DATE(sg.left_at) > $2::date)
        WHERE g.teacher_id = $1
          AND g.branch_id = $3
          AND g.class_status = 'started'
@@ -1021,7 +1021,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
                AND sg.group_id = a.group_id
                AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
-               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
          LEFT JOIN teacher_lesson_statistics_reports r
            ON r.lesson_id = l.id
@@ -1168,7 +1168,7 @@ exports.getGroupsForAttendance = async (req, res) => {
       LEFT JOIN student_groups sg ON g.id = sg.group_id
         AND sg.branch_id = g.branch_id
         AND sg.status = 'active'
-        ${countAllStudents ? '' : 'AND DATE(sg.joined_at) <= $1::date AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $1::date)'}
+        ${countAllStudents ? '' : 'AND DATE(sg.joined_at) <= $1::date AND (sg.left_at IS NULL OR DATE(sg.left_at) > $1::date)'}
       LEFT JOIN rooms r ON g.room_id = r.id AND r.branch_id = g.branch_id
       WHERE g.class_status = 'started'
     `;
@@ -1267,7 +1267,7 @@ exports.getGroupsForAttendance = async (req, res) => {
                AND sg.group_id = a.group_id
                AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
-               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
          LEFT JOIN teacher_lesson_statistics_reports r
            ON r.lesson_id = l.id
@@ -1540,7 +1540,7 @@ exports.getLessonStudents = async (req, res) => {
              AND sg.group_id = l.group_id
              AND sg.branch_id = l.branch_id
              AND DATE(sg.joined_at) <= l.date
-             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
          )`,
       [lesson_id, branchId]
     );
@@ -1554,7 +1554,7 @@ exports.getLessonStudents = async (req, res) => {
       WHERE sg.group_id = $1
         AND sg.branch_id = $3
         AND DATE(sg.joined_at) <= $2::date
-        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)`,
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) > $2::date)`,
       [group_id, currentLessonDate, branchId]
     );
 
@@ -1647,7 +1647,7 @@ exports.getLessonStudents = async (req, res) => {
         AND sg.group_id = a.group_id
         AND sg.branch_id = a.branch_id
         AND DATE(sg.joined_at) <= $2::date
-        AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $2::date)
+        AND (sg.left_at IS NULL OR DATE(sg.left_at) > $2::date)
        LEFT JOIN monthly_snapshots ms 
          ON ms.student_id = a.student_id 
         AND ms.group_id = a.group_id 
@@ -1869,7 +1869,7 @@ exports.getAttendanceByDate = async (req, res) => {
             AND sg.group_id = a.group_id
             AND sg.branch_id = $2
             AND DATE(sg.joined_at) <= l.date
-            AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+            AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
         )
       WHERE l.date = $1::date
         AND l.branch_id = $2
@@ -1960,7 +1960,7 @@ exports.getAttendanceByDate = async (req, res) => {
           AND sg.group_id = a.group_id
           AND sg.branch_id = a.branch_id
           AND DATE(sg.joined_at) <= l.date
-          AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+          AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
          LEFT JOIN monthly_snapshots ms
            ON ms.student_id = a.student_id
           AND ms.group_id = a.group_id
@@ -2341,7 +2341,7 @@ exports.getMonthlyAttendance = async (req, res) => {
       const { monthStart, monthEnd } = getMonthBounds(monthStr);
       const match = periods.find(p => {
         const joinedOk = !p.joined_at || p.joined_at <= monthEnd;
-        const leftOk = !p.left_at || p.left_at >= monthStart;
+        const leftOk = !p.left_at || p.left_at > monthStart;
         return joinedOk && leftOk;
       });
       if (match) return match.joined_at;
@@ -2409,7 +2409,7 @@ exports.getMonthlyAttendance = async (req, res) => {
              AND sg.group_id = a.group_id
              AND sg.branch_id = $3
              AND DATE(sg.joined_at) <= $5::date
-             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= $4::date)
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) > $4::date)
          )
        GROUP BY a.student_id, u.name, u.surname, u.phone, a.monthly_status
        ORDER BY a.monthly_status, u.name`,
@@ -3040,7 +3040,7 @@ exports.getGroupLessons = async (req, res) => {
              AND sg.group_id = a.group_id
              AND sg.branch_id = $3
              AND DATE(sg.joined_at) <= l.date
-             AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+             AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
          )
        LEFT JOIN teacher_lesson_statistics_reports r
          ON r.lesson_id = l.id
@@ -3169,7 +3169,7 @@ exports.getMyLessons = async (req, res) => {
                AND sg.group_id = a.group_id
                AND sg.branch_id = $2
                AND DATE(sg.joined_at) <= l.date
-               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
        WHERE l.teacher_id = $1
          AND l.branch_id = $2
@@ -3368,7 +3368,7 @@ exports.getAdminTeacherLessons = async (req, res) => {
                AND sg.group_id = a.group_id
                AND sg.branch_id = $3
                AND DATE(sg.joined_at) <= l.date
-               AND (sg.left_at IS NULL OR DATE(sg.left_at) >= l.date)
+               AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
        WHERE l.teacher_id = $1
          AND l.date = $2::date
