@@ -108,15 +108,29 @@ const normalizeUnassignedReason = (reason) => {
     return normalized || "Sabab ko'rsatilmagan";
 };
 
-const closeStudentGroupMembership = async ({ studentId, groupId, branchId, status = 'stopped' }) => {
+const closeStudentGroupMembership = async ({ studentId, groupId, branchId, status = 'removed' }) => {
     return pool.query(
         `UPDATE student_groups
          SET status = $1,
              left_at = COALESCE(left_at, CURRENT_TIMESTAMP)
-         WHERE student_id = $2
-           AND group_id = $3
-           AND branch_id = $4
-           AND status = 'active'
+         WHERE id = (
+           SELECT id
+           FROM student_groups
+           WHERE student_id = $2
+             AND group_id = $3
+             AND branch_id = $4
+             AND status IN ('active', 'stopped', 'removed')
+             ORDER BY
+             CASE status
+               WHEN 'active' THEN 1
+               WHEN 'stopped' THEN 2
+               WHEN 'removed' THEN 3
+               ELSE 4
+             END,
+             joined_at DESC NULLS LAST,
+             id DESC
+           LIMIT 1
+         )
          RETURNING *`,
         [status, studentId, groupId, branchId]
     );
@@ -931,7 +945,7 @@ exports.removeStudentFromGroup = async (req, res) => {
             studentId: student_id,
             groupId: group_id,
             branchId,
-            status: 'stopped',
+            status: 'removed',
         });
         if (result.rows.length === 0) return res.status(404).json({ message: "Bu student guruhda topilmadi" });
         await syncMembershipSnapshotsAfterClose({
@@ -1253,7 +1267,7 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
                 studentId,
                 groupId,
                 branchId,
-                status: 'stopped',
+            status: 'removed',
             });
 
             if (closeRes.rows.length === 0) {
@@ -1747,6 +1761,7 @@ exports.getGroupById = async (req, res) => {
                 GROUP BY student_id
             ) spe ON spe.student_id = u.id
             WHERE sg.group_id = $1 AND sg.branch_id = $3
+              AND sg.status = 'active'
             ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth, branchId]);
 
         const monthlyStats = await loadMonthlyGroupMemberStats({
@@ -1991,7 +2006,7 @@ exports.changeStudentGroup = async (req, res) => {
                 studentId: student_id,
                 groupId: oldGroupId,
                 branchId,
-                status: 'stopped',
+                status: 'removed',
             });
             await syncMembershipSnapshotsAfterClose({
                 studentId: student_id,
