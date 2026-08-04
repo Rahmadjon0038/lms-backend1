@@ -622,6 +622,7 @@ const getRemovedStudents = async (req, res) => {
                AND a.group_id = sg.group_id
                AND a.branch_id = sg.branch_id
                AND a.status IN ('keldi', 'present')
+               AND TO_CHAR(l.date, 'YYYY-MM') = $2
                AND (
                  l.date < COALESCE((sg.left_at AT TIME ZONE 'Asia/Tashkent')::date, CURRENT_DATE)
                  OR (
@@ -629,14 +630,6 @@ const getRemovedStudents = async (req, res) => {
                    AND COALESCE(l.start_time, '00:00:00'::time) <= COALESCE((sg.left_at AT TIME ZONE 'Asia/Tashkent')::time, CURRENT_TIME)
                  )
                )
-           ),
-           (
-             SELECT COALESCE(SUM(ms.attended_lessons), 0)::int
-             FROM monthly_snapshots ms
-             WHERE ms.student_id = sg.student_id
-               AND ms.group_id = sg.group_id
-               AND ms.branch_id = sg.branch_id
-               AND ms.month <= TO_CHAR(COALESCE(sg.left_at, CURRENT_TIMESTAMP), 'YYYY-MM')
            ),
            0
          )::int as attended_days_before_removal,
