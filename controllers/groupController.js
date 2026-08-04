@@ -122,6 +122,21 @@ const closeStudentGroupMembership = async ({ studentId, groupId, branchId, statu
     );
 };
 
+const syncMembershipSnapshotsAfterClose = async ({ studentId, groupId, branchId }) => {
+    const currentMonth = todayAsDateString().slice(0, 7);
+
+    return pool.query(
+        `UPDATE monthly_snapshots
+         SET monthly_status = 'stopped',
+             snapshot_updated_at = CURRENT_TIMESTAMP
+         WHERE student_id = $1
+           AND group_id = $2
+           AND branch_id = $3
+           AND month >= $4`,
+        [studentId, groupId, branchId, currentMonth]
+    );
+};
+
 const getGroupMembershipMeta = async (groupId, branchId = 1) => {
     const groupRes = await pool.query(
         `SELECT g.id, g.name as group_name, g.teacher_id, g.status, g.is_active, g.branch_id,
@@ -919,6 +934,11 @@ exports.removeStudentFromGroup = async (req, res) => {
             status: 'stopped',
         });
         if (result.rows.length === 0) return res.status(404).json({ message: "Bu student guruhda topilmadi" });
+        await syncMembershipSnapshotsAfterClose({
+            studentId: student_id,
+            groupId: group_id,
+            branchId,
+        });
         await syncStudentPrimaryGroup(student_id, reason, branchId);
         res.json({ success: true, message: "Student guruhdan chiqarildi" });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1241,6 +1261,11 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
                 continue;
             }
 
+            await syncMembershipSnapshotsAfterClose({
+                studentId: studentId,
+                groupId: groupId,
+                branchId,
+            });
             await syncStudentPrimaryGroup(studentId, reason, branchId);
 
             const member = memberMap.get(studentId);
@@ -1967,6 +1992,11 @@ exports.changeStudentGroup = async (req, res) => {
                 groupId: oldGroupId,
                 branchId,
                 status: 'stopped',
+            });
+            await syncMembershipSnapshotsAfterClose({
+                studentId: student_id,
+                groupId: oldGroupId,
+                branchId,
             });
         }
 
