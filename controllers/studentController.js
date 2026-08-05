@@ -789,41 +789,29 @@ exports.getAllStudents = async (req, res) => {
             )
           )
       ),
-      student_statuses AS (
+      student_memberships AS (
         SELECT
           fs.id AS student_id,
-          CASE
-            WHEN EXISTS (
-              SELECT 1
-              FROM student_groups sg
-              WHERE sg.student_id = fs.id
-                AND sg.branch_id = fs.branch_id
-                AND sg.status = 'active'
-            ) THEN 'active'
-            WHEN EXISTS (
-              SELECT 1
-              FROM student_groups sg
-              WHERE sg.student_id = fs.id
-                AND sg.branch_id = fs.branch_id
-                AND sg.status = 'stopped'
-            ) THEN 'stopped'
-            WHEN EXISTS (
-              SELECT 1
-              FROM student_groups sg
-              WHERE sg.student_id = fs.id
-                AND sg.branch_id = fs.branch_id
-                AND sg.status = 'finished'
-            ) THEN 'finished'
-            ELSE 'unassigned'
-          END AS overall_status
+          sg.id AS membership_id,
+          sg.status AS membership_status,
+          g.status AS group_admin_status,
+          g.class_status AS group_class_status,
+          COALESCE(g.class_start_date, g.start_date, g.created_at::date) AS group_started_on
         FROM filtered_students fs
+        LEFT JOIN student_groups sg
+          ON sg.student_id = fs.id
+         AND sg.branch_id = fs.branch_id
+         AND sg.status <> 'removed'
+        LEFT JOIN groups g
+          ON g.id = sg.group_id
+         AND g.branch_id = sg.branch_id
       )
       SELECT
         COUNT(*)::int as total_students,
-        COUNT(*) FILTER (WHERE overall_status <> 'unassigned')::int as students_with_groups,
-        COUNT(*) FILTER (WHERE overall_status = 'unassigned')::int as unassigned_students,
-        COUNT(*) FILTER (WHERE overall_status = 'stopped')::int as stopped,
-        COUNT(*) FILTER (WHERE overall_status = 'finished')::int as finished,
+        COUNT(*) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
+        COUNT(*) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
+        COUNT(*) FILTER (WHERE membership_status = 'stopped')::int as stopped,
+        COUNT(*) FILTER (WHERE membership_status = 'finished')::int as finished,
         (
           SELECT COUNT(*)
           FROM filtered_students fs
@@ -838,7 +826,7 @@ exports.getAllStudents = async (req, res) => {
             AND g.class_status = 'started'
             AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= CURRENT_DATE
         )::int as active_attendance_students
-      FROM student_statuses
+      FROM student_memberships
     `;
     const statsResult = await pool.query(statsQuery, params);
     const statsRow = statsResult.rows[0] || {};
