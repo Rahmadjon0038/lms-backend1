@@ -777,23 +777,7 @@ exports.getAllStudents = async (req, res) => {
         FROM users u
         LEFT JOIN subjects sp ON u.subject_id = sp.id
         ${statsJoinSql}
-        WHERE ${whereConditions.join(' AND ')}
-          AND (
-            EXISTS (
-              SELECT 1
-              FROM student_groups sg_active
-              WHERE sg_active.student_id = u.id
-                AND sg_active.branch_id = u.branch_id
-                AND sg_active.status IN ('active', 'stopped', 'finished')
-            )
-            OR NOT EXISTS (
-              SELECT 1
-              FROM student_groups sg_removed
-              WHERE sg_removed.student_id = u.id
-                AND sg_removed.branch_id = u.branch_id
-                AND sg_removed.status = 'removed'
-            )
-          )
+      WHERE ${whereConditions.join(' AND ')}
       ),
       student_memberships AS (
         SELECT
@@ -813,13 +797,13 @@ exports.getAllStudents = async (req, res) => {
          AND g.branch_id = sg.branch_id
       )
       SELECT
-        COUNT(*)::int as total_students,
-        COUNT(*) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
-        COUNT(*) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
-        COUNT(*) FILTER (WHERE membership_status = 'stopped')::int as stopped,
-        COUNT(*) FILTER (WHERE membership_status = 'finished')::int as finished,
+        COUNT(DISTINCT student_id)::int as total_students,
+        COUNT(DISTINCT student_id) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
+        COUNT(DISTINCT student_id) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
+        COUNT(DISTINCT student_id) FILTER (WHERE membership_status = 'stopped')::int as stopped,
+        COUNT(DISTINCT student_id) FILTER (WHERE membership_status = 'finished')::int as finished,
         (
-          SELECT COUNT(*)
+          SELECT COUNT(DISTINCT fs.id)
           FROM filtered_students fs
           JOIN student_groups sg
             ON sg.student_id = fs.id
