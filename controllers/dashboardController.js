@@ -1117,6 +1117,7 @@ const getAdmissionsStatistics = async (req, res) => {
         name: `${row.name} ${row.surname}`.trim(),
         phone: row.phone || '',
         date: row.admission_date,
+        created_at: row.created_at || null,
         record_type: row.record_type || 'admission',
         admitted_by: row.admitted_by,
         admin_name: isRemovedRecord
@@ -1155,6 +1156,7 @@ const getAdmissionsStatistics = async (req, res) => {
         subject_id: row.subject_id || null,
         removed_by: isRemovedRecord ? row.left_by || null : null,
         removed_by_name: isRemovedRecord ? row.left_by_name || null : null,
+        closed_left_at: row.closed_left_at || row.removed_at || null,
       };
     };
 
