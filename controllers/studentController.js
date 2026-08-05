@@ -806,15 +806,19 @@ exports.getAllStudents = async (req, res) => {
     `;
     const statsResult = await pool.query(statsQuery, params);
     const statsRow = statsResult.rows[0] || {};
+    const activeCount = parseInt(statsRow.active || 0, 10);
+    const stoppedCount = parseInt(statsRow.stopped || 0, 10);
+    const finishedCount = parseInt(statsRow.finished || 0, 10);
+    const unassignedCount = parseInt(statsRow.unassigned_students || 0, 10);
 
     const stats = {
-      total_students: total,
-      students_with_groups: parseInt(statsRow.students_with_groups || 0, 10),
-      unassigned_students: parseInt(statsRow.unassigned_students || 0, 10),
+      total_students: activeCount + stoppedCount + finishedCount + unassignedCount,
+      students_with_groups: activeCount + stoppedCount + finishedCount,
+      unassigned_students: unassignedCount,
       group_memberships: {
-        active: parseInt(statsRow.active || 0, 10),
-        stopped: parseInt(statsRow.stopped || 0, 10),
-        finished: parseInt(statsRow.finished || 0, 10)
+        active: activeCount,
+        stopped: stoppedCount,
+        finished: finishedCount
       }
     };
     
