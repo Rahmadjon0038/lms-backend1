@@ -608,7 +608,9 @@ exports.getAllStudents = async (req, res) => {
     // Agar specific filters bo'lsa, JOIN qo'shamiz
     // unassigned=true bo'lsa, teacher/group/group_status filtrlari ishlamaydi (guruhsizlar uchun)
     if (!unassignedOnly && (teacher_id || group_id || subject_id || group_status)) {
-      joinConditions.push('LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.branch_id = u.branch_id');
+      // 'removed' a'zoliklar bu yerda hisobga olinmaydi — chiqarilgan talaba
+      // eski guruhga "tegishli" deb hisoblanmasligi kerak (teacher/subject/group filtrlarida)
+      joinConditions.push("LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.branch_id = u.branch_id AND sg.status <> 'removed'");
       joinConditions.push('LEFT JOIN groups g ON sg.group_id = g.id AND g.branch_id = u.branch_id');
       
       // Teacher filter
