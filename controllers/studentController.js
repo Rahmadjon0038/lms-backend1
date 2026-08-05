@@ -764,45 +764,68 @@ exports.getAllStudents = async (req, res) => {
       statsJoins.add('LEFT JOIN groups g ON sg.group_id = g.id AND g.branch_id = u.branch_id');
     }
 
+    const statsJoinSql = Array.from(statsJoins).join(' ');
     const statsQuery = `
-      WITH current_student_groups AS (
-        SELECT sg.student_id, sg.status
-        FROM student_groups sg
-        WHERE sg.branch_id = $1
-          AND sg.status IN ('active', 'stopped', 'finished')
+      WITH filtered_students AS (
+        SELECT DISTINCT u.id, u.branch_id
+        FROM users u
+        LEFT JOIN subjects sp ON u.subject_id = sp.id
+        ${statsJoinSql}
+        WHERE ${whereConditions.join(' AND ')}
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM student_groups sg_active
+              WHERE sg_active.student_id = u.id
+                AND sg_active.branch_id = u.branch_id
+                AND sg_active.status IN ('active', 'stopped', 'finished')
+            )
+            OR NOT EXISTS (
+              SELECT 1
+              FROM student_groups sg_removed
+              WHERE sg_removed.student_id = u.id
+                AND sg_removed.branch_id = u.branch_id
+                AND sg_removed.status = 'removed'
+            )
+          )
+      ),
+      student_statuses AS (
+        SELECT
+          fs.id AS student_id,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM student_groups sg
+              WHERE sg.student_id = fs.id
+                AND sg.branch_id = fs.branch_id
+                AND sg.status = 'active'
+            ) THEN 'active'
+            WHEN EXISTS (
+              SELECT 1
+              FROM student_groups sg
+              WHERE sg.student_id = fs.id
+                AND sg.branch_id = fs.branch_id
+                AND sg.status = 'stopped'
+            ) THEN 'stopped'
+            WHEN EXISTS (
+              SELECT 1
+              FROM student_groups sg
+              WHERE sg.student_id = fs.id
+                AND sg.branch_id = fs.branch_id
+                AND sg.status = 'finished'
+            ) THEN 'finished'
+            ELSE 'unassigned'
+          END AS overall_status
+        FROM filtered_students fs
       )
       SELECT
-        COUNT(DISTINCT u.id) as total_students,
-        COUNT(DISTINCT csg.student_id) as students_with_groups,
-        COUNT(DISTINCT CASE
-          WHEN csg.student_id IS NULL
-           AND NOT EXISTS (
-             SELECT 1
-             FROM student_groups sg2
-             WHERE sg2.student_id = u.id
-               AND sg2.branch_id = u.branch_id
-               AND sg2.status = 'removed'
-           )
-          THEN u.id
-        END) as unassigned_students,
-        COUNT(*) FILTER (WHERE csg.status = 'active') as active,
-        COUNT(*) FILTER (WHERE csg.status = 'stopped') as stopped,
-        COUNT(*) FILTER (WHERE csg.status = 'finished') as finished
-      FROM users u
-      LEFT JOIN current_student_groups csg ON csg.student_id = u.id
-      LEFT JOIN subjects sp ON u.subject_id = sp.id
-      ${Array.from(statsJoins).join(' ')}
-      WHERE ${whereConditions.join(' AND ')}
-        AND (
-          csg.student_id IS NOT NULL
-          OR NOT EXISTS (
-            SELECT 1
-            FROM student_groups sg2
-            WHERE sg2.student_id = u.id
-              AND sg2.branch_id = u.branch_id
-              AND sg2.status = 'removed'
-          )
-        )
+        COUNT(*)::int as total_students,
+        COUNT(*) FILTER (WHERE overall_status = 'active')::int as active,
+        COUNT(*) FILTER (WHERE overall_status = 'stopped')::int as stopped,
+        COUNT(*) FILTER (WHERE overall_status = 'finished')::int as finished,
+        COUNT(*) FILTER (WHERE overall_status = 'unassigned')::int as unassigned_students,
+        COUNT(*) FILTER (WHERE overall_status <> 'unassigned')::int as students_with_groups
+      FROM student_statuses
     `;
     const statsResult = await pool.query(statsQuery, params);
     const statsRow = statsResult.rows[0] || {};
@@ -810,10 +833,11 @@ exports.getAllStudents = async (req, res) => {
     const stoppedCount = parseInt(statsRow.stopped || 0, 10);
     const finishedCount = parseInt(statsRow.finished || 0, 10);
     const unassignedCount = parseInt(statsRow.unassigned_students || 0, 10);
+    const studentsWithGroupsCount = parseInt(statsRow.students_with_groups || 0, 10);
 
     const stats = {
-      total_students: activeCount + stoppedCount + finishedCount + unassignedCount,
-      students_with_groups: activeCount + stoppedCount + finishedCount,
+      total_students: parseInt(statsRow.total_students || 0, 10),
+      students_with_groups: studentsWithGroupsCount,
       unassigned_students: unassignedCount,
       group_memberships: {
         active: activeCount,
