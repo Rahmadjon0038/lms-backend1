@@ -712,6 +712,8 @@ exports.getAllStudents = async (req, res) => {
             ELSE NULL
           END as status_changed_date,
           TO_CHAR(sg.left_at, 'DD.MM.YYYY') as formatted_left_date,
+          g.teacher_id,
+          g.subject_id,
           CONCAT(t.name, ' ', t.surname) as teacher_name,
           s.name as subject_name,
           r.room_number,
