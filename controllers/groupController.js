@@ -1697,11 +1697,11 @@ exports.getAllGroups = async (req, res) => {
                             WHERE ts.teacher_id = u.id AND ts.branch_id = g.branch_id AND sub.branch_id = g.branch_id),
                             '[]'::json
                         ) as teacher_subjects,
-                        -- Guruhda talabalar statistikasi
+                        -- Guruhda talabalar statistikasi ('removed' a'zoliklar hisobga olinmaydi)
                         COALESCE(
                             (SELECT COUNT(*)::integer
                             FROM student_groups sg
-                            WHERE sg.group_id = g.id AND sg.branch_id = g.branch_id),
+                            WHERE sg.group_id = g.id AND sg.branch_id = g.branch_id AND sg.status <> 'removed'),
                             0
                         ) as total_students_count,
                         COALESCE(
