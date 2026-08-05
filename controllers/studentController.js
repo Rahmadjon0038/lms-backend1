@@ -625,7 +625,11 @@ exports.getAllStudents = async (req, res) => {
       
       // Subject filter
       if (subject_id) {
-        whereConditions.push(`(g.subject_id = $${paramIdx} OR u.subject_id = $${paramIdx})`);
+        whereConditions.push(`(
+          (sg.student_id IS NULL AND u.subject_id = $${paramIdx})
+          OR
+          (sg.student_id IS NOT NULL AND g.subject_id = $${paramIdx})
+        )`);
         params.push(subject_id);
         paramIdx++;
       }
