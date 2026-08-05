@@ -699,6 +699,7 @@ exports.getAllStudents = async (req, res) => {
           sg.status as group_status,
           sg.joined_at as group_joined_at,
           sg.left_at as group_left_at,
+          sg.left_reason,
           CASE
             WHEN sg.status = 'active' THEN 'Faol'
             WHEN sg.status = 'stopped' THEN 'Nofaol'
@@ -764,23 +765,50 @@ exports.getAllStudents = async (req, res) => {
     }
 
     const statsQuery = `
+      WITH current_student_groups AS (
+        SELECT sg.student_id, sg.status
+        FROM student_groups sg
+        WHERE sg.branch_id = $1
+          AND sg.status IN ('active', 'stopped', 'finished')
+      )
       SELECT
-        COUNT(*) as total_students,
-        COUNT(*) FILTER (WHERE sg.student_id IS NOT NULL) as students_with_groups,
-        COUNT(DISTINCT CASE WHEN sg.student_id IS NULL THEN u.id END) as unassigned_students,
-        COUNT(*) FILTER (WHERE sg.status = 'active') as active,
-        COUNT(*) FILTER (WHERE sg.status = 'stopped') as stopped,
-        COUNT(*) FILTER (WHERE sg.status = 'finished') as finished
+        COUNT(DISTINCT u.id) as total_students,
+        COUNT(DISTINCT csg.student_id) as students_with_groups,
+        COUNT(DISTINCT CASE
+          WHEN csg.student_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM student_groups sg2
+             WHERE sg2.student_id = u.id
+               AND sg2.branch_id = u.branch_id
+               AND sg2.status = 'removed'
+           )
+          THEN u.id
+        END) as unassigned_students,
+        COUNT(*) FILTER (WHERE csg.status = 'active') as active,
+        COUNT(*) FILTER (WHERE csg.status = 'stopped') as stopped,
+        COUNT(*) FILTER (WHERE csg.status = 'finished') as finished
       FROM users u
+      LEFT JOIN current_student_groups csg ON csg.student_id = u.id
       LEFT JOIN subjects sp ON u.subject_id = sp.id
       ${Array.from(statsJoins).join(' ')}
       WHERE ${whereConditions.join(' AND ')}
+        AND (
+          csg.student_id IS NOT NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM student_groups sg2
+            WHERE sg2.student_id = u.id
+              AND sg2.branch_id = u.branch_id
+              AND sg2.status = 'removed'
+          )
+        )
     `;
     const statsResult = await pool.query(statsQuery, params);
     const statsRow = statsResult.rows[0] || {};
 
     const stats = {
-      total_students: parseInt(statsRow.total_students || 0, 10),
+      total_students: total,
       students_with_groups: parseInt(statsRow.students_with_groups || 0, 10),
       unassigned_students: parseInt(statsRow.unassigned_students || 0, 10),
       group_memberships: {
@@ -897,17 +925,23 @@ exports.getDuplicateStudents = async (req, res) => {
 
     const enrichedStudents = students.map((student) => {
       const studentGroups = groupsByStudent.get(student.id) || [];
-      const activeOrLatestGroup = studentGroups.find((group) => group.group_status === 'active') || studentGroups[0] || null;
+      const activeGroup = studentGroups.find((group) => group.group_status === 'active') || null;
+      const latestClosedGroup = studentGroups.find((group) => group.group_status !== 'active') || null;
+      const resolvedReason =
+        activeGroup?.group_status === 'active'
+          ? null
+          : (latestClosedGroup?.left_reason || student.unassigned_reason || null);
 
       return {
         ...student,
-        subject_id: activeOrLatestGroup?.subject_id || student.registered_subject_id || null,
-        subject_name: activeOrLatestGroup?.subject_name || student.registered_subject_name || null,
-        group_id: activeOrLatestGroup?.group_id || null,
-        group_name: activeOrLatestGroup?.group_name || null,
-        group_status: activeOrLatestGroup?.group_status || null,
-        group_status_description: activeOrLatestGroup?.group_status_description || null,
-        teacher_name: activeOrLatestGroup?.teacher_name || null,
+        subject_id: activeGroup?.subject_id || student.registered_subject_id || null,
+        subject_name: activeGroup?.subject_name || student.registered_subject_name || null,
+        group_id: activeGroup?.group_id || null,
+        group_name: activeGroup?.group_name || null,
+        group_status: activeGroup?.group_status || null,
+        group_status_description: activeGroup?.group_status_description || null,
+        teacher_name: activeGroup?.teacher_name || null,
+        unassigned_reason: resolvedReason,
         groups: studentGroups.map((group) => ({
           ...group,
           started_at: (group.group_admin_status === 'active' && group.group_class_status === 'started' && group.class_start_date)

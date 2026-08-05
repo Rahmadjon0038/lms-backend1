@@ -603,6 +603,7 @@ const getRemovedStudents = async (req, res) => {
     const branchId = getScopedBranchId(req);
     const { month } = req.query;
     const currentMonth = isValidMonth(month) ? month : getCurrentMonth();
+    const monthStart = `${currentMonth}-01`;
 
     const result = await pool.query(
       `SELECT
@@ -666,6 +667,669 @@ const getRemovedStudents = async (req, res) => {
       message: 'Guruhdan chiqarilgan talabalar ro\'yxatini olishda xatolik',
       errors: { detail: error.message },
     });
+  }
+};
+
+const getAdmissionsStatistics = async (req, res) => {
+  try {
+    const branchId = getScopedBranchId(req);
+    const { month } = req.query;
+    const currentMonth = isValidMonth(month) ? month : getCurrentMonth();
+    const monthStart = `${currentMonth}-01`;
+
+    const admissionsQuery = `
+        WITH admissions AS (
+         SELECT
+             u.id,
+             u.name,
+             u.surname,
+             u.phone,
+             u.created_at,
+             TO_CHAR(u.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS admission_date,
+             'admission'::text AS record_type,
+             u.admitted_by,
+             COALESCE(
+               NULLIF(BTRIM(u.admitted_by_name), ''),
+               CONCAT_WS(' ', admin_u.name, admin_u.surname),
+               'Noma''lum'
+             ) AS admitted_by_name,
+             u.followup_status,
+             u.followup_note,
+             u.followup_at,
+             u.followup_by,
+             u.followup_by_name,
+             COALESCE(NULLIF(BTRIM(u.unassigned_reason), ''), 'Yangi qo''shilgan') AS unassigned_reason,
+             u.subject_id,
+             COALESCE(s.name, '') AS subject_name,
+             u.group_id,
+             u.group_name,
+             u.teacher_id,
+             u.teacher_name,
+             u.course_status,
+             u.course_start_date,
+             u.course_end_date
+           FROM users u
+           LEFT JOIN users admin_u
+             ON admin_u.id = u.admitted_by
+            AND admin_u.branch_id = u.branch_id
+           LEFT JOIN subjects s
+             ON s.id = u.subject_id
+            AND s.branch_id = u.branch_id
+           WHERE u.role = 'student'
+             AND u.branch_id = $1
+             AND TO_CHAR(u.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+         ),
+         removed_memberships AS (
+         SELECT DISTINCT ON (sg.student_id, sg.group_id)
+            u.id,
+            u.name,
+            u.surname,
+            u.phone,
+             sg.left_at AS created_at,
+             TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS admission_date,
+             u.admitted_by,
+             COALESCE(
+               NULLIF(BTRIM(u.admitted_by_name), ''),
+               CONCAT_WS(' ', admin_u.name, admin_u.surname),
+               'Noma''lum'
+             ) AS admitted_by_name,
+             COALESCE(NULLIF(BTRIM(sg.left_reason), ''), NULLIF(BTRIM(u.unassigned_reason), ''), 'Sabab ko''rsatilmagan') AS unassigned_reason,
+             sg.group_id,
+             g.name AS group_name,
+             g.teacher_id,
+             CONCAT_WS(' ', t.name, t.surname) AS teacher_name,
+             u.course_status,
+             u.course_start_date,
+             u.course_end_date,
+             TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS removed_at
+           FROM student_groups sg
+           JOIN users u
+             ON u.id = sg.student_id
+            AND u.branch_id = sg.branch_id
+           LEFT JOIN users admin_u
+             ON admin_u.id = u.admitted_by
+            AND admin_u.branch_id = u.branch_id
+           JOIN groups g
+             ON g.id = sg.group_id
+            AND g.branch_id = sg.branch_id
+           LEFT JOIN users t
+             ON t.id = g.teacher_id
+            AND t.branch_id = sg.branch_id
+           WHERE sg.branch_id = $1
+             AND sg.status IN ('removed', 'stopped', 'finished')
+             AND sg.left_at IS NOT NULL
+             AND TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+           ORDER BY sg.student_id, sg.group_id, sg.left_at DESC NULLS LAST, sg.id DESC
+         ),
+         active_memberships AS (
+           SELECT DISTINCT ON (sg.student_id)
+             sg.student_id,
+             sg.group_id,
+             sg.status AS membership_status,
+             TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS joined_date,
+             g.name AS active_group_name,
+             COALESCE(s.name, '') AS active_subject_name,
+             CONCAT_WS(' ', t.name, t.surname) AS active_teacher_name
+           FROM student_groups sg
+           JOIN groups g
+             ON g.id = sg.group_id
+            AND g.branch_id = sg.branch_id
+           LEFT JOIN subjects s
+             ON s.id = g.subject_id
+           LEFT JOIN users t
+             ON t.id = g.teacher_id
+            AND t.branch_id = sg.branch_id
+           WHERE sg.branch_id = $1
+             AND sg.status = 'active'
+           ORDER BY sg.student_id, sg.joined_at DESC NULLS LAST, sg.id DESC
+         ),
+         closed_memberships AS (
+           SELECT DISTINCT ON (sg.student_id)
+             sg.student_id,
+             sg.group_id,
+             sg.status AS membership_status,
+             TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS left_at,
+             g.name AS closed_group_name,
+             COALESCE(s.name, '') AS closed_subject_name,
+             CONCAT_WS(' ', t.name, t.surname) AS closed_teacher_name
+           FROM student_groups sg
+           JOIN groups g
+             ON g.id = sg.group_id
+            AND g.branch_id = sg.branch_id
+           LEFT JOIN subjects s
+             ON s.id = g.subject_id
+           LEFT JOIN users t
+             ON t.id = g.teacher_id
+            AND t.branch_id = sg.branch_id
+          WHERE sg.branch_id = $1
+             AND sg.status IN ('removed', 'stopped', 'finished')
+             AND sg.left_at IS NOT NULL
+             AND TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+          ORDER BY sg.student_id, sg.left_at DESC NULLS LAST, sg.id DESC
+         )
+         SELECT
+           a.id,
+           a.name,
+           a.surname,
+           a.phone,
+           a.admission_date,
+          a.created_at,
+          a.record_type,
+          a.admitted_by,
+          a.admitted_by_name,
+          a.followup_status,
+          a.followup_note,
+          a.followup_at,
+          a.followup_by,
+          a.followup_by_name,
+          a.unassigned_reason,
+          a.subject_id,
+          a.subject_name,
+          a.group_id,
+          a.group_name,
+          a.teacher_id,
+          a.teacher_name,
+          a.course_status,
+           a.course_start_date,
+           a.course_end_date,
+           am.group_id AS active_group_id,
+           am.active_group_name,
+           am.active_subject_name,
+           am.active_teacher_name,
+           am.membership_status AS active_membership_status,
+           am.joined_date AS active_joined_date,
+           cm.group_id AS closed_group_id,
+           cm.closed_group_name,
+           cm.closed_subject_name,
+           cm.closed_teacher_name,
+           cm.membership_status AS closed_membership_status,
+           cm.left_at AS closed_left_at
+        FROM admissions a
+         LEFT JOIN active_memberships am ON am.student_id = a.id
+         LEFT JOIN closed_memberships cm ON cm.student_id = a.id
+      `;
+
+    const groupJoinsQuery = `
+        WITH group_joins AS (
+          SELECT DISTINCT ON (sg.student_id, sg.group_id)
+            CONCAT(sg.student_id, '-join-', sg.group_id, '-', TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYYMMDDHH24MI')) AS id,
+            u.name,
+            u.surname,
+            u.phone,
+            sg.joined_at AS created_at,
+            TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS admission_date,
+            'group_join'::text AS record_type,
+            sg.joined_by AS admitted_by,
+            COALESCE(
+              NULLIF(BTRIM(sg.joined_by_name), ''),
+              CONCAT_WS(' ', join_admin.name, join_admin.surname),
+              'Noma''lum'
+            ) AS admitted_by_name,
+            u.followup_status,
+            u.followup_note,
+            u.followup_at,
+            u.followup_by,
+            u.followup_by_name,
+            COALESCE(NULLIF(BTRIM(u.unassigned_reason), ''), 'Guruhga biriktirilgan') AS unassigned_reason,
+            sg.group_id,
+            g.name AS group_name,
+            COALESCE(s.name, '') AS subject_name,
+            g.teacher_id,
+            CONCAT_WS(' ', t.name, t.surname) AS teacher_name,
+            u.course_status,
+            u.course_start_date,
+            u.course_end_date,
+            TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS joined_at,
+            EXISTS (
+              SELECT 1
+              FROM student_groups prev
+              WHERE prev.student_id = sg.student_id
+                AND prev.branch_id = sg.branch_id
+                AND prev.group_id = sg.group_id
+                AND prev.status IN ('removed', 'stopped', 'finished')
+                AND prev.left_at IS NOT NULL
+                AND prev.left_at < sg.joined_at
+            ) AS is_rejoined
+          FROM student_groups sg
+          JOIN users u
+            ON u.id = sg.student_id
+           AND u.branch_id = sg.branch_id
+          LEFT JOIN users join_admin
+            ON join_admin.id = sg.joined_by
+           AND join_admin.branch_id = sg.branch_id
+          JOIN groups g
+            ON g.id = sg.group_id
+           AND g.branch_id = sg.branch_id
+          LEFT JOIN subjects s
+            ON s.id = g.subject_id
+          LEFT JOIN users t
+            ON t.id = g.teacher_id
+           AND t.branch_id = sg.branch_id
+          WHERE sg.branch_id = $1
+            AND sg.status = 'active'
+            AND sg.joined_at IS NOT NULL
+            AND TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+            AND u.created_at < $3::date
+          ORDER BY sg.student_id, sg.group_id, sg.joined_at DESC NULLS LAST, sg.id DESC
+        )
+        SELECT
+          g.id,
+          g.name,
+          g.surname,
+          g.phone,
+          g.admission_date,
+          g.created_at,
+          g.record_type,
+          g.admitted_by,
+          g.admitted_by_name,
+          g.followup_status,
+          g.followup_note,
+          g.followup_at,
+          g.followup_by,
+          g.followup_by_name,
+          g.unassigned_reason,
+          g.group_id,
+          g.group_name,
+          g.subject_name,
+          g.teacher_id,
+          g.teacher_name,
+          g.course_status,
+          g.course_start_date,
+          g.course_end_date,
+          g.is_rejoined,
+          NULL::int AS active_group_id,
+          NULL::text AS active_group_name,
+          NULL::text AS active_subject_name,
+          NULL::text AS active_teacher_name,
+          NULL::text AS active_membership_status,
+          NULL::text AS active_joined_date,
+          g.group_id AS closed_group_id,
+          g.group_name AS closed_group_name,
+          g.subject_name AS closed_subject_name,
+          g.teacher_name AS closed_teacher_name,
+          'active'::text AS closed_membership_status,
+          g.joined_at AS closed_left_at
+        FROM group_joins g
+        ORDER BY created_at DESC, surname ASC, name ASC`;
+
+    const removedQuery = `
+        WITH removed_memberships AS (
+          SELECT DISTINCT ON (sg.student_id, sg.group_id)
+            u.id,
+            u.name,
+            u.surname,
+            u.phone,
+            sg.left_at AS created_at,
+            TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS admission_date,
+            'removed'::text AS record_type,
+            u.admitted_by,
+            COALESCE(
+              NULLIF(BTRIM(u.admitted_by_name), ''),
+              CONCAT_WS(' ', admin_u.name, admin_u.surname),
+              'Noma''lum'
+            ) AS admitted_by_name,
+            sg.left_by,
+            COALESCE(
+              NULLIF(BTRIM(sg.left_by_name), ''),
+              CONCAT_WS(' ', left_admin.name, left_admin.surname)
+            ) AS left_by_name,
+            sg.followup_status,
+            sg.followup_note,
+            sg.followup_at,
+            sg.followup_by,
+            sg.followup_by_name,
+            COALESCE(NULLIF(BTRIM(sg.left_reason), ''), NULLIF(BTRIM(u.unassigned_reason), ''), 'Sabab ko''rsatilmagan') AS unassigned_reason,
+            sg.group_id,
+            g.name AS group_name,
+            COALESCE(s.name, '') AS subject_name,
+            g.teacher_id,
+            CONCAT_WS(' ', t.name, t.surname) AS teacher_name,
+            u.course_status,
+            u.course_start_date,
+            u.course_end_date,
+            TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS removed_at
+          FROM student_groups sg
+          JOIN users u
+            ON u.id = sg.student_id
+           AND u.branch_id = sg.branch_id
+          LEFT JOIN users admin_u
+            ON admin_u.id = u.admitted_by
+           AND admin_u.branch_id = u.branch_id
+          LEFT JOIN users left_admin
+            ON left_admin.id = sg.left_by
+           AND left_admin.branch_id = sg.branch_id
+          JOIN groups g
+            ON g.id = sg.group_id
+           AND g.branch_id = sg.branch_id
+          LEFT JOIN subjects s
+            ON s.id = g.subject_id
+          LEFT JOIN users t
+            ON t.id = g.teacher_id
+           AND t.branch_id = sg.branch_id
+          WHERE sg.branch_id = $1
+            AND sg.status IN ('removed', 'stopped', 'finished')
+            AND sg.left_at IS NOT NULL
+            AND TO_CHAR(sg.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+            AND NOT EXISTS (
+              SELECT 1
+              FROM student_groups sg_rejoin
+              WHERE sg_rejoin.student_id = sg.student_id
+                AND sg_rejoin.branch_id = sg.branch_id
+                AND sg_rejoin.status = 'active'
+                AND sg_rejoin.joined_at IS NOT NULL
+                AND sg_rejoin.joined_at > sg.left_at
+            )
+          ORDER BY sg.student_id, sg.group_id, sg.left_at DESC NULLS LAST, sg.id DESC
+        )
+         SELECT
+          r.id,
+          r.name,
+          r.surname,
+          r.phone,
+          r.admission_date,
+          r.created_at,
+          r.record_type,
+          r.admitted_by,
+          r.admitted_by_name,
+          r.left_by,
+          r.left_by_name,
+          r.followup_status,
+          r.followup_note,
+          r.followup_at,
+          r.followup_by,
+          r.followup_by_name,
+          r.unassigned_reason,
+          r.group_id,
+          r.group_name,
+          r.subject_name,
+          r.teacher_id,
+          r.teacher_name,
+          r.course_status,
+          r.course_start_date,
+          r.course_end_date,
+          NULL::int AS active_group_id,
+          NULL::text AS active_group_name,
+          NULL::text AS active_subject_name,
+          NULL::text AS active_teacher_name,
+          NULL::text AS active_membership_status,
+          NULL::text AS active_joined_date,
+          r.group_id AS closed_group_id,
+          r.group_name AS closed_group_name,
+          NULL::text AS closed_subject_name,
+          r.teacher_name AS closed_teacher_name,
+          'removed'::text AS closed_membership_status,
+          r.removed_at AS closed_left_at
+        FROM removed_memberships r
+         ORDER BY created_at DESC, surname ASC, name ASC`;
+
+    const [admissionsResult, groupJoinsResult, removedResult, adminsResult] = await Promise.all([
+      pool.query(admissionsQuery, [branchId, currentMonth]),
+      pool.query(groupJoinsQuery, [branchId, currentMonth, monthStart]),
+      pool.query(removedQuery, [branchId, currentMonth]),
+      pool.query(
+        `SELECT
+           u.id,
+           CONCAT_WS(' ', u.name, u.surname) AS admin_name
+         FROM users u
+         WHERE u.role = 'admin'
+           AND u.branch_id = $1
+           AND COALESCE(u.status, 'active') = 'active'
+         ORDER BY admin_name ASC
+         LIMIT 3`,
+        [branchId]
+      ),
+    ]);
+
+    const callReasonPattern = /(chaqir|gaplash|qayta|aloqa|bog'lan|boglan|telefon|muloqot|kelmadi|kelmay)/i;
+    const resolvedReasonPattern = /(hal bo'ldi|hal qilindi|qabul qilindi|o'qiydi|o'qimoqda|guruhga biriktir|biriktirilgan|qo'shil|qo'shildi|davom etadi|qoladi)/i;
+    const newReasonPattern = /(yangi|qo'shil|qabul)/i;
+
+    const classifyAdmission = (row) => {
+      const reasonText = String(row.unassigned_reason || '').trim();
+      const followupStatus = String(row.followup_status || '').trim();
+      const isRemovedRecord = String(row.record_type || '').toLowerCase() === 'removed';
+      const isGrouped = Boolean(row.active_group_id || row.active_group_name) || row.course_status === 'in_progress';
+      const isRemoved = isRemovedRecord || Boolean(row.closed_group_id || row.closed_group_name) || ['removed', 'stopped', 'finished', 'dropped', 'completed'].includes(String(row.course_status || '').toLowerCase());
+      const isCalled = followupStatus === 'called_unresolved' || followupStatus === 'called_resolved' || callReasonPattern.test(reasonText);
+      const isCalledResolved = isCalled && resolvedReasonPattern.test(reasonText);
+      const isCalledUnresolved = followupStatus === 'called_unresolved' || (isCalled && !resolvedReasonPattern.test(reasonText));
+      const isNew = !isGrouped && !isRemoved && newReasonPattern.test(reasonText);
+
+      let status = 'unresolved';
+      if (isRemoved) {
+        status = 'removed';
+      } else if (isGrouped) {
+        status = 'grouped';
+      } else if (isCalledResolved) {
+        status = 'called_resolved';
+      } else if (isCalledUnresolved) {
+        status = 'called_unresolved';
+      } else if (isNew) {
+        status = 'new';
+      }
+
+        return {
+        id: row.id,
+        name: `${row.name} ${row.surname}`.trim(),
+        phone: row.phone || '',
+        date: row.admission_date,
+        record_type: row.record_type || 'admission',
+        admitted_by: row.admitted_by,
+        admin_name: isRemovedRecord
+          ? row.left_by_name || 'Noma\'lum'
+          : row.admitted_by_name || 'Noma\'lum',
+        admin_id: isRemovedRecord ? row.left_by || row.admitted_by || null : row.admitted_by || null,
+        group_id: row.group_id || row.active_group_id || row.closed_group_id || null,
+        active_group_id: row.active_group_id || row.group_id || null,
+        closed_group_id: row.closed_group_id || row.group_id || null,
+        followup_status: followupStatus || null,
+        followup_note: row.followup_note || null,
+        followup_at: row.followup_at || null,
+        followup_by: row.followup_by || null,
+        followup_by_name: row.followup_by_name || null,
+        status,
+        group: row.active_group_name || row.group_name || row.closed_group_name || null,
+        subject: row.active_subject_name || row.subject_name || row.closed_subject_name || null,
+        teacher: row.active_teacher_name || row.teacher_name || row.closed_teacher_name || null,
+        is_rejoined: Boolean(row.is_rejoined),
+        note:
+          status === 'grouped'
+            ? 'Guruhga biriktirilgan'
+            : status === 'removed'
+              ? 'Guruhdan chiqarilgan'
+              : status === 'called_unresolved'
+                ? 'Gaplashildi, hal bo\'lmadi'
+                : status === 'called_resolved'
+                  ? 'Gaplashildi, hal bo\'ldi'
+                : status === 'new'
+                  ? 'Yangi kelgan'
+                  : 'Hali guruh tanlanmagan',
+        reason: reasonText,
+        current_status: row.course_status || 'not_started',
+        subject_id: row.subject_id || null,
+        removed_by: isRemovedRecord ? row.left_by || null : null,
+        removed_by_name: isRemovedRecord ? row.left_by_name || null : null,
+      };
+    };
+
+    const summarize = (items) => {
+      const grouped = items.filter((item) => item.status === 'grouped').length;
+      const unresolved = items.filter((item) => item.status === 'unresolved').length;
+      const removed = items.filter((item) => item.status === 'removed').length;
+      const calledUnresolved = items.filter((item) => item.status === 'called_unresolved').length;
+      const calledResolved = items.filter((item) => item.status === 'called_resolved').length;
+      const newCount = items.filter((item) => item.status === 'new').length;
+
+      return {
+        total: items.length,
+        grouped,
+        unresolved,
+        calledUnresolved,
+        calledResolved,
+        removed,
+        new: newCount,
+        unassigned: unresolved + calledUnresolved,
+      };
+    };
+
+    const mergedById = new Map();
+
+    const mergeRow = (row) => {
+      if (!row?.id) return;
+      const key = `${String(row.record_type || 'unknown')}:${String(row.id)}:${String(row.group_id || '')}:${String(row.created_at || '')}`;
+      const prev = mergedById.get(key);
+      const prevPriority = prev?.record_type === 'removed' ? 2 : 1;
+      const nextPriority = row.record_type === 'removed' ? 2 : 1;
+
+      if (!prev) {
+        mergedById.set(key, row);
+        return;
+      }
+
+      if (nextPriority > prevPriority) {
+        mergedById.set(key, row);
+        return;
+      }
+
+      if (nextPriority === prevPriority) {
+        const prevTs = new Date(prev.created_at || 0).getTime();
+        const nextTs = new Date(row.created_at || 0).getTime();
+        if (Number.isFinite(nextTs) && nextTs >= prevTs) {
+          mergedById.set(key, row);
+        }
+      }
+    };
+
+    (admissionsResult.rows || []).forEach(mergeRow);
+    (groupJoinsResult?.rows || []).forEach(mergeRow);
+    (removedResult.rows || []).forEach(mergeRow);
+
+    const students = Array.from(mergedById.values()).map(classifyAdmission);
+    const admissionsOnly = students.filter((item) => item.record_type === 'admission');
+    const summary = summarize(admissionsOnly);
+
+    const admins = (adminsResult.rows || []).map((admin) => {
+      const admittedItems = admissionsOnly.filter((student) => Number(student.admin_id) === Number(admin.id));
+      const adminSummary = summarize(admittedItems);
+      return {
+        id: admin.id,
+        name: admin.admin_name,
+        ...adminSummary,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        month: currentMonth,
+        summary,
+        admins,
+        students,
+      },
+    });
+  } catch (error) {
+    console.error('Qabul statistikasi xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Qabul statistikalarini olishda xatolik yuz berdi',
+      errors: { detail: error.message },
+    });
+  }
+};
+
+const markAdmissionFollowup = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const branchId = getScopedBranchId(req);
+    const studentId = Number(req.body?.student_id);
+    const groupIdRaw = req.body?.group_id;
+    const groupId = groupIdRaw === undefined || groupIdRaw === null || groupIdRaw === ''
+      ? null
+      : Number(groupIdRaw);
+    const status = String(req.body?.status || 'called_unresolved').trim();
+    const note = String(req.body?.note || '').trim() || null;
+
+    if (!Number.isInteger(studentId) || studentId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'student_id noto\'g\'ri',
+      });
+    }
+
+    if (!['called_unresolved', 'called_resolved'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'status noto\'g\'ri',
+      });
+    }
+
+    const adminName = [req.user?.name, req.user?.surname].filter(Boolean).join(' ').trim() || 'Noma\'lum';
+
+    let resolvedGroupId = Number.isInteger(groupId) && groupId > 0 ? groupId : null;
+    if (!resolvedGroupId) {
+      const membershipLookup = await client.query(
+        `SELECT group_id
+           FROM student_groups
+          WHERE student_id = $1
+            AND branch_id = $2
+          ORDER BY left_at DESC NULLS LAST, joined_at DESC NULLS LAST, id DESC
+          LIMIT 1`,
+        [studentId, branchId]
+      );
+      const lookupGroupId = Number(membershipLookup.rows[0]?.group_id);
+      if (Number.isInteger(lookupGroupId) && lookupGroupId > 0) {
+        resolvedGroupId = lookupGroupId;
+      }
+    }
+
+    const userResult = await client.query(
+      `UPDATE users
+       SET followup_status = $1,
+           followup_note = $2,
+           followup_at = NOW(),
+           followup_by = $3,
+           followup_by_name = $4
+       WHERE id = $5
+         AND branch_id = $6
+       RETURNING id, followup_status, followup_note, followup_at, followup_by, followup_by_name`,
+      [status, note, req.user.id, adminName, studentId, branchId]
+    );
+
+    let membershipResult = { rowCount: 0, rows: [] };
+
+    if (resolvedGroupId) {
+      membershipResult = await client.query(
+        `UPDATE student_groups
+         SET followup_status = $1,
+             followup_note = $2,
+             followup_at = NOW(),
+             followup_by = $3,
+             followup_by_name = $4
+        WHERE student_id = $5
+          AND group_id = $6
+          AND branch_id = $7
+         RETURNING id, student_id, group_id, followup_status, followup_note, followup_at, followup_by, followup_by_name`,
+        [status, note, req.user.id, adminName, studentId, resolvedGroupId, branchId]
+      );
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        user: userResult.rows[0] || null,
+        membership: membershipResult.rows[0] || null,
+      },
+    });
+  } catch (error) {
+    console.error('Gaplashilgan holatini belgilashda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Gaplashilgan holatini saqlashda xatolik yuz berdi',
+      errors: { detail: error.message },
+    });
+  } finally {
+    client.release();
   }
 };
 
@@ -1022,6 +1686,8 @@ module.exports = {
   getAdminOverviewStats,
   getDebtorStudents,
   getRemovedStudents,
+  getAdmissionsStatistics,
+  markAdmissionFollowup,
   getSuperAdminStats,
   getSystemStartMonth,
 };

@@ -33,6 +33,8 @@ const createUserTable = async () => {
       group_name VARCHAR(255),
       teacher_id INTEGER,
       teacher_name VARCHAR(255),
+      admitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      admitted_by_name VARCHAR(255),
       course_status VARCHAR(20) DEFAULT 'not_started', -- 'not_started', 'in_progress', 'completed', 'dropped'
       course_start_date TIMESTAMP, -- Kurs boshlangan sana
       course_end_date TIMESTAMP, -- Kurs tugatgan sana
@@ -40,6 +42,11 @@ const createUserTable = async () => {
       password_reset_key_plain VARCHAR(64), -- admin ko'rishi uchun joriy recovery key
       password_reset_key_hash TEXT, -- one-time reset key hash
       password_reset_key_rotated_at TIMESTAMP, -- key oxirgi yangilangan vaqt
+      followup_status VARCHAR(30), -- gaplashilgan holat: called_unresolved / called_resolved
+      followup_note TEXT,
+      followup_at TIMESTAMP,
+      followup_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      followup_by_name VARCHAR(255),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -99,6 +106,12 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='teacher_name') THEN
             ALTER TABLE users ADD COLUMN teacher_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='admitted_by') THEN
+            ALTER TABLE users ADD COLUMN admitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='admitted_by_name') THEN
+            ALTER TABLE users ADD COLUMN admitted_by_name VARCHAR(255);
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='father_name') THEN
             ALTER TABLE users ADD COLUMN father_name VARCHAR(100);
@@ -163,6 +176,21 @@ const createUserTable = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='password_reset_key_rotated_at') THEN
             ALTER TABLE users ADD COLUMN password_reset_key_rotated_at TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='followup_status') THEN
+            ALTER TABLE users ADD COLUMN followup_status VARCHAR(30);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='followup_note') THEN
+            ALTER TABLE users ADD COLUMN followup_note TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='followup_at') THEN
+            ALTER TABLE users ADD COLUMN followup_at TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='followup_by') THEN
+            ALTER TABLE users ADD COLUMN followup_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='followup_by_name') THEN
+            ALTER TABLE users ADD COLUMN followup_by_name VARCHAR(255);
           END IF;
         END $$;
       `);

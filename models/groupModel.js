@@ -28,7 +28,17 @@ const createGroupTables = async () => {
       group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
       branch_id INTEGER,
       joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      joined_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      joined_by_name VARCHAR(255),
       left_at TIMESTAMP,
+      left_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      left_by_name VARCHAR(255),
+      left_reason TEXT,
+      followup_status VARCHAR(30),
+      followup_note TEXT,
+      followup_at TIMESTAMP,
+      followup_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      followup_by_name VARCHAR(255),
       status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'stopped', 'finished', 'removed')),
       UNIQUE(student_id, group_id)
     );
@@ -59,6 +69,36 @@ const createGroupTables = async () => {
           END IF;
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='branch_id') THEN
             ALTER TABLE student_groups ADD COLUMN branch_id INTEGER;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='left_reason') THEN
+            ALTER TABLE student_groups ADD COLUMN left_reason TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='joined_by') THEN
+            ALTER TABLE student_groups ADD COLUMN joined_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='joined_by_name') THEN
+            ALTER TABLE student_groups ADD COLUMN joined_by_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='left_by') THEN
+            ALTER TABLE student_groups ADD COLUMN left_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='left_by_name') THEN
+            ALTER TABLE student_groups ADD COLUMN left_by_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='followup_status') THEN
+            ALTER TABLE student_groups ADD COLUMN followup_status VARCHAR(30);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='followup_note') THEN
+            ALTER TABLE student_groups ADD COLUMN followup_note TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='followup_at') THEN
+            ALTER TABLE student_groups ADD COLUMN followup_at TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='followup_by') THEN
+            ALTER TABLE student_groups ADD COLUMN followup_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_groups' AND column_name='followup_by_name') THEN
+            ALTER TABLE student_groups ADD COLUMN followup_by_name VARCHAR(255);
           END IF;
         END $$;
       `);

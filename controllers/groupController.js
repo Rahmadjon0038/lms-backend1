@@ -108,11 +108,19 @@ const normalizeUnassignedReason = (reason) => {
     return normalized || "Sabab ko'rsatilmagan";
 };
 
-const closeStudentGroupMembership = async ({ studentId, groupId, branchId, status = 'removed' }) => {
+const getRequestUserFullName = (user) => {
+    const fullName = [user?.name, user?.surname].filter(Boolean).join(' ').trim();
+    return fullName || user?.username || null;
+};
+
+const closeStudentGroupMembership = async ({ studentId, groupId, branchId, status = 'removed', reason = null, leftBy = null, leftByName = null }) => {
     const updateMembership = async (nextStatus) => pool.query(
         `UPDATE student_groups
          SET status = $1,
-             left_at = COALESCE(left_at, CURRENT_TIMESTAMP)
+             left_at = COALESCE(left_at, CURRENT_TIMESTAMP),
+             left_by = COALESCE($5, left_by),
+             left_by_name = COALESCE(NULLIF(BTRIM($6), ''), left_by_name),
+             left_reason = COALESCE(NULLIF(BTRIM($7), ''), left_reason)
          WHERE id = (
            SELECT id
            FROM student_groups
@@ -133,7 +141,7 @@ const closeStudentGroupMembership = async ({ studentId, groupId, branchId, statu
            LIMIT 1
          )
          RETURNING *`,
-        [nextStatus, studentId, groupId, branchId]
+        [nextStatus, studentId, groupId, branchId, leftBy, leftByName, reason]
     );
 
     try {
@@ -168,6 +176,44 @@ const syncMembershipSnapshotsAfterClose = async ({ studentId, groupId, branchId 
            AND month >= $4`,
         [studentId, groupId, branchId, currentMonth]
     );
+};
+
+const syncMembershipSnapshotsAfterReopen = async ({ studentId, groupId, branchId }) => {
+    const currentMonth = todayAsDateString().slice(0, 7);
+
+    try {
+        await pool.query(
+            `UPDATE monthly_snapshots
+             SET monthly_status = 'active',
+                 payment_status = CASE
+                   WHEN paid_amount >= required_amount THEN 'paid'
+                   WHEN paid_amount > 0 THEN 'partial'
+                   ELSE 'unpaid'
+                 END,
+                 snapshot_updated_at = CURRENT_TIMESTAMP
+             WHERE student_id = $1
+               AND group_id = $2
+               AND branch_id = $3
+               AND month >= $4`,
+            [studentId, groupId, branchId, currentMonth]
+        );
+
+        await pool.query(
+            `UPDATE attendance
+             SET monthly_status = 'active',
+                 updated_at = NOW()
+             WHERE student_id = $1
+               AND group_id = $2
+               AND branch_id = $3
+               AND month >= $4`,
+            [studentId, groupId, branchId, currentMonth]
+        );
+    } catch (error) {
+        console.warn(
+            '⚠️ Reopen sync xatosi, lekin qo\'shish davom etadi:',
+            error?.message || error
+        );
+    }
 };
 
 const getGroupMembershipMeta = async (groupId, branchId = 1) => {
@@ -965,6 +1011,9 @@ exports.removeStudentFromGroup = async (req, res) => {
             groupId: group_id,
             branchId,
             status: 'removed',
+            reason,
+            leftBy: req.user?.id || null,
+            leftByName: getRequestUserFullName(req.user),
         });
         if (result.rows.length === 0) return res.status(404).json({ message: "Bu student guruhda topilmadi" });
         await syncMembershipSnapshotsAfterClose({
@@ -1048,13 +1097,6 @@ exports.adminAddStudentToGroup = async (req, res) => {
             [student_id, group_id, branchId]
         );
 
-        if (activeMembership.rows.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: `${student.name} ${student.surname} allaqachon ushbu guruhda faol`
-            });
-        }
-
         // Student_groups jadvaliga qo'shish - guruh holatiga qarab status belgilash
         let studentGroupStatus = 'active';
         
@@ -1062,13 +1104,18 @@ exports.adminAddStudentToGroup = async (req, res) => {
         if (groupData.status === 'blocked') {
             studentGroupStatus = 'stopped';
         }
-        
-        const result = await pool.query(
-            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL, $4)
-             RETURNING *`,
-            [student_id, group_id, studentGroupStatus, branchId]
-        );
+
+        let result;
+        if (activeMembership.rows.length > 0) {
+            result = activeMembership;
+        } else {
+            result = await pool.query(
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, joined_by, joined_by_name, left_at, branch_id)
+                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5, NULL, $6)
+                 RETURNING *`,
+                [student_id, group_id, studentGroupStatus, req.user?.id || null, getRequestUserFullName(req.user), branchId]
+            );
+        }
 
         // Users jadvalida studentning ma'lumotlarini yangilash
         const updateResult = await pool.query(
@@ -1088,11 +1135,17 @@ exports.adminAddStudentToGroup = async (req, res) => {
             await pool.query(
                 `UPDATE users 
                  SET course_status = 'in_progress', 
-                     course_start_date = CURRENT_TIMESTAMP 
-                 WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                     course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
+                 WHERE id = $1 AND branch_id = $2 AND course_status IN ('not_started', 'stopped')`,
                 [student_id, branchId]
             );
         }
+
+        await syncMembershipSnapshotsAfterReopen({
+            studentId: student_id,
+            groupId: groupData.id,
+            branchId,
+        });
 
         console.log("✅ Student yangilandi:", updateResult.rows[0]);
 
@@ -1181,20 +1234,13 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
                 [studentId, groupId, branchId]
             );
 
-            if (activeMembership.rows.length > 0) {
-                skipped.push({
-                    student_id: studentId,
-                    student_name: `${student.name} ${student.surname}`,
-                    reason: 'already_in_group'
-                });
-                continue;
-            }
-
+        if (activeMembership.rows.length === 0) {
             await pool.query(
-                `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
-                 VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, NULL, $3)`,
-                [studentId, groupId, branchId]
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, joined_by, joined_by_name, left_at, branch_id)
+                 VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, $4, NULL, $5)`,
+                [studentId, groupId, req.user?.id || null, getRequestUserFullName(req.user), branchId]
             );
+        }
 
             await pool.query(
                 `UPDATE users
@@ -1211,10 +1257,16 @@ exports.adminBulkAddStudentsToGroup = async (req, res) => {
                     `UPDATE users
                      SET course_status = 'in_progress',
                          course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
-                     WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                     WHERE id = $1 AND branch_id = $2 AND course_status IN ('not_started', 'stopped')`,
                     [studentId, branchId]
                 );
             }
+
+            await syncMembershipSnapshotsAfterReopen({
+                studentId,
+                groupId: groupData.id,
+                branchId,
+            });
 
             added.push({
                 student_id: studentId,
@@ -1286,7 +1338,10 @@ exports.bulkRemoveStudentsFromGroup = async (req, res) => {
                 studentId,
                 groupId,
                 branchId,
-            status: 'removed',
+                status: 'removed',
+                reason,
+                leftBy: req.user?.id || null,
+                leftByName: getRequestUserFullName(req.user),
             });
 
             if (closeRes.rows.length === 0) {
@@ -1463,9 +1518,9 @@ exports.bulkChangeStudentGroup = async (req, res) => {
 
             if (targetActiveMembership.rows.length === 0) {
                 await pool.query(
-                    `INSERT INTO student_groups (student_id, group_id, status, branch_id)
-                     VALUES ($1, $2, 'active', $3)`,
-                    [studentId, newGroupId, branchId]
+                    `INSERT INTO student_groups (student_id, group_id, status, joined_by, joined_by_name, branch_id)
+                     VALUES ($1, $2, 'active', $3, $4, $5)`,
+                    [studentId, newGroupId, req.user?.id || null, getRequestUserFullName(req.user), branchId]
                 );
             }
 
@@ -1485,10 +1540,16 @@ exports.bulkChangeStudentGroup = async (req, res) => {
                     `UPDATE users
                      SET course_status = 'in_progress',
                          course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
-                     WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                     WHERE id = $1 AND branch_id = $2 AND course_status IN ('not_started', 'stopped')`,
                     [studentId, branchId]
                 );
             }
+
+            await syncMembershipSnapshotsAfterReopen({
+                studentId,
+                groupId: newGroup.id,
+                branchId,
+            });
 
             moved.push({
                 student_id: studentId,
@@ -1557,19 +1618,17 @@ exports.studentJoinByCode = async (req, res) => {
             [req.user.id, groupData.id, branchId]
         );
 
+        let result;
         if (activeMembership.rows.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Siz allaqachon ushbu guruhda faolsiz"
-            });
+            result = activeMembership;
+        } else {
+            result = await pool.query(
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, joined_by, joined_by_name, left_at, branch_id)
+                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5, NULL, $6)
+                 RETURNING *`,
+                [req.user.id, groupData.id, studentGroupStatus, req.user?.id || null, getRequestUserFullName(req.user), branchId]
+            );
         }
-
-        const result = await pool.query(
-            `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL, $4)
-             RETURNING *`,
-            [req.user.id, groupData.id, studentGroupStatus, branchId]
-        );
 
         // Users jadvalida studentning ma'lumotlarini yangilash
         await pool.query(
@@ -1587,11 +1646,17 @@ exports.studentJoinByCode = async (req, res) => {
             await pool.query(
                 `UPDATE users 
                  SET course_status = 'in_progress', 
-                     course_start_date = CURRENT_TIMESTAMP 
-                 WHERE id = $1 AND branch_id = $2 AND course_status = 'not_started'`,
+                     course_start_date = COALESCE(course_start_date, CURRENT_TIMESTAMP)
+                 WHERE id = $1 AND branch_id = $2 AND course_status IN ('not_started', 'stopped')`,
                 [req.user.id, branchId]
             );
         }
+
+        await syncMembershipSnapshotsAfterReopen({
+            studentId: req.user.id,
+            groupId: groupData.id,
+            branchId,
+        });
 
         res.status(201).json({ 
             success: true, 
@@ -2026,6 +2091,9 @@ exports.changeStudentGroup = async (req, res) => {
                 groupId: oldGroupId,
                 branchId,
                 status: 'removed',
+                reason: req.body?.reason || req.body?.unassigned_reason || req.query?.reason || req.query?.unassigned_reason,
+                leftBy: req.user?.id || null,
+                leftByName: getRequestUserFullName(req.user),
             });
             await syncMembershipSnapshotsAfterClose({
                 studentId: student_id,
@@ -2056,13 +2124,13 @@ exports.changeStudentGroup = async (req, res) => {
             [student_id, new_group_id, branchId]
         );
 
-        const newMembershipResult = targetActiveMembership.rows.length > 0
+            const newMembershipResult = targetActiveMembership.rows.length > 0
             ? targetActiveMembership
             : await pool.query(
-                `INSERT INTO student_groups (student_id, group_id, status, joined_at, left_at, branch_id)
-                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL, $4)
+                `INSERT INTO student_groups (student_id, group_id, status, joined_at, joined_by, joined_by_name, left_at, branch_id)
+                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5, NULL, $6)
                  RETURNING *`,
-                [student_id, new_group_id, studentGroupStatus, branchId]
+                [student_id, new_group_id, studentGroupStatus, req.user?.id || null, getRequestUserFullName(req.user), branchId]
             );
 
         // Users jadvalidagi ma'lumotlarni yangilash

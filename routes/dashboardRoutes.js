@@ -7,6 +7,8 @@ const {
   getAdminMonthlyStats,
   getAdminOverviewStats,
   getDebtorStudents,
+  getAdmissionsStatistics,
+  markAdmissionFollowup,
   getRemovedStudents,
   getSuperAdminStats,
   getSystemStartMonth,
@@ -93,6 +95,28 @@ router.get('/stats/overview', protect, protectAdmin, getAdminOverviewStats);
  *         description: OK
  */
 router.get('/debtors', protect, protectAdmin, getDebtorStudents);
+
+/**
+ * @swagger
+ * /api/dashboard/admissions-statistics:
+ *   get:
+ *     summary: Oylik qabul statistikasi
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema:
+ *           type: string
+ *           example: "2026-08"
+ *         description: Oy (YYYY-MM). Default joriy oy
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get('/admissions-statistics', protect, protectAdmin, getAdmissionsStatistics);
+router.post('/admissions-statistics/followup', protect, protectAdmin, markAdmissionFollowup);
 
 /**
  * @swagger
