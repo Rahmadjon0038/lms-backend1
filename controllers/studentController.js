@@ -654,9 +654,11 @@ exports.getAllStudents = async (req, res) => {
     }
 
     // Unassigned filter
+    // 'removed' a'zoliklar hisobga olinmaydi — stats.unassigned_students bilan bir xil ta'rif
+    // (guruhdan chiqarilgan, lekin boshqa faol/to'xtatilgan/bitirgan a'zoligi yo'q talaba ham guruhsiz hisoblanadi)
     if (unassigned === 'true') {
       if (!joinConditions.some(j => j.includes('student_groups'))) {
-        joinConditions.push('LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.branch_id = u.branch_id');
+        joinConditions.push("LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.branch_id = u.branch_id AND sg.status <> 'removed'");
       }
       whereConditions.push('sg.student_id IS NULL');
     }
