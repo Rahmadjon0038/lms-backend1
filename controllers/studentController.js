@@ -744,7 +744,9 @@ exports.getAllStudents = async (req, res) => {
     const enrichedStudents = studentsResult.rows.map(student => {
       const studentGroups = groupsByStudent.get(student.id) || [];
 
-      const activeOrLatestGroup = studentGroups.find(group => group.group_status === 'active') || studentGroups[0] || null;
+      const activeOrLatestGroup = studentGroups.find(group => group.group_status === 'active')
+        || studentGroups.find(group => group.group_status !== 'removed')
+        || null;
       const effectiveSubjectId = activeOrLatestGroup?.subject_id || student.registered_subject_id || null;
       const effectiveSubjectName = activeOrLatestGroup?.subject_name || student.registered_subject_name || null;
 
