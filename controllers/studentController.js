@@ -799,13 +799,13 @@ exports.getAllStudents = async (req, res) => {
          AND g.branch_id = sg.branch_id
       )
       SELECT
-        COUNT(DISTINCT student_id)::int as total_students,
-        COUNT(DISTINCT student_id) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
-        COUNT(DISTINCT student_id) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
-        COUNT(DISTINCT student_id) FILTER (WHERE membership_status = 'stopped')::int as stopped,
-        COUNT(DISTINCT student_id) FILTER (WHERE membership_status = 'finished')::int as finished,
+        COUNT(*)::int as total_students,
+        COUNT(*) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
+        COUNT(*) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
+        COUNT(*) FILTER (WHERE membership_status = 'stopped')::int as stopped,
+        COUNT(*) FILTER (WHERE membership_status = 'finished')::int as finished,
         (
-          SELECT COUNT(DISTINCT fs.id)
+          SELECT COUNT(*)
           FROM filtered_students fs
           JOIN student_groups sg
             ON sg.student_id = fs.id
