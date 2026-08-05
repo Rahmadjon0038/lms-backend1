@@ -304,7 +304,7 @@ router.post('/register-admin', protect, roleCheck(['super_admin']), registerAdmi
  *       200:
  *         description: Adminlar ro'yxati
  */
-router.get('/admins', protect, roleCheck(['super_admin']), getAdmins);
+router.get('/admins', protect, roleCheck(['admin', 'super_admin']), getAdmins);
 
 router.delete('/admins/:adminId', protect, roleCheck(['super_admin']), deleteAdmin);
 

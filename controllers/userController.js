@@ -191,9 +191,51 @@ const generateUniqueUsername = async (baseUsername, usedUsernames, branchId = 1)
     }
 };
 
+const resolveAdmissionAdmin = async ({ req, branchId, admittedBy, admittedByName }) => {
+    const requestedAdminId = Number(admittedBy);
+    if (Number.isInteger(requestedAdminId) && requestedAdminId > 0) {
+        const adminResult = await pool.query(
+            `SELECT id, name, surname
+             FROM users
+             WHERE id = $1
+               AND role = 'admin'
+               AND branch_id = $2`,
+            [requestedAdminId, branchId]
+        );
+
+        if (adminResult.rows.length === 0) {
+            return { error: 'Tanlangan admin topilmadi' };
+        }
+
+        const admin = adminResult.rows[0];
+        return {
+            admittedById: admin.id,
+            admittedByName: `${admin.name || ''} ${admin.surname || ''}`.trim() || String(admittedByName || '').trim() || null
+        };
+    }
+
+    const actorResult = await pool.query(
+        `SELECT id, name, surname
+         FROM users
+         WHERE id = $1
+           AND branch_id = $2`,
+        [req.user?.id, branchId]
+    );
+
+    if (actorResult.rows.length === 0) {
+        return { error: 'Qabul qiluvchi foydalanuvchi topilmadi' };
+    }
+
+    const actor = actorResult.rows[0];
+    return {
+        admittedById: actor.id,
+        admittedByName: `${actor.name || ''} ${actor.surname || ''}`.trim() || null
+    };
+};
+
 // 1. Student ro'yxatdan o'tishi (Yangi maydonlar bilan)
 const registerStudent = async (req, res) => {
-    const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id } = req.body;
+    const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id, admitted_by, admitted_by_name } = req.body;
     try {
         const branchId = getUserBranchId(req.user);
         const { value: normalizedAge, error: ageError } = normalizeAgeValue(age);
@@ -221,6 +263,15 @@ const registerStudent = async (req, res) => {
             return res.status(400).json({ message: "Tanlangan fan topilmadi" });
         }
         const selectedSubject = subjectResult.rows[0];
+        const admissionAdmin = await resolveAdmissionAdmin({
+            req,
+            branchId,
+            admittedBy: admitted_by,
+            admittedByName: admitted_by_name,
+        });
+        if (admissionAdmin.error) {
+            return res.status(400).json({ message: admissionAdmin.error });
+        }
 
         const finalPassword = String(password ?? '').trim() || generateSixDigitPassword();
         const { plain: passwordPlain, hashed: hashedPassword } = await hashPassword(finalPassword);
@@ -232,10 +283,11 @@ const registerStudent = async (req, res) => {
             `INSERT INTO users (
                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
                 branch_id,
+                admitted_by, admitted_by_name,
                 unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
             ) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
-             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP) 
+             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id, admitted_by, admitted_by_name`,
             [
                 name,
                 surname,
@@ -251,6 +303,8 @@ const registerStudent = async (req, res) => {
                 selectedSubject.name,
                 normalizedSubjectId,
                 branchId,
+                admissionAdmin.admittedById,
+                admissionAdmin.admittedByName,
                 "Yangi qo'shilgan",
                 recoveryKey,
                 recoveryKeyHash
@@ -292,6 +346,15 @@ const registerStudentsBulk = async (req, res) => {
               )
             : { rows: [] };
         const subjectMap = new Map(subjectsResult.rows.map((row) => [row.id, row]));
+        const admissionAdmin = await resolveAdmissionAdmin({
+            req,
+            branchId,
+            admittedBy: req.body?.admitted_by,
+            admittedByName: req.body?.admitted_by_name,
+        });
+        if (admissionAdmin.error) {
+            return res.status(400).json({ message: admissionAdmin.error });
+        }
 
         const usedUsernames = new Set();
         const created = [];
@@ -354,10 +417,11 @@ const registerStudentsBulk = async (req, res) => {
                             `INSERT INTO users (
                                 name, surname, username, password, password_plain, phone, phone2, father_name, father_phone, address, age, subject, subject_id,
                                 branch_id,
+                                admitted_by, admitted_by_name,
                                 unassigned_reason, password_reset_key_plain, password_reset_key_hash, password_reset_key_rotated_at
                             ) 
-                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP) 
-                             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id`,
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP) 
+                             RETURNING id, branch_id, name, surname, username, role, father_name, father_phone, address, age, subject_id, admitted_by, admitted_by_name`,
                             [
                                 name,
                                 surname,
@@ -373,6 +437,8 @@ const registerStudentsBulk = async (req, res) => {
                                 subject.name,
                                 subjectId,
                                 branchId,
+                                admissionAdmin.admittedById,
+                                admissionAdmin.admittedByName,
                                 "Yangi qo'shilgan",
                                 recoveryKey,
                                 recoveryKeyHash
