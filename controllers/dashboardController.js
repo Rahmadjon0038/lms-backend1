@@ -1085,9 +1085,11 @@ const getAdmissionsStatistics = async (req, res) => {
     const newReasonPattern = /(yangi|qo'shil|qabul)/i;
 
     const classifyAdmission = (row) => {
+      const recordType = String(row.record_type || '').toLowerCase();
       const reasonText = String(row.unassigned_reason || '').trim();
       const followupStatus = String(row.followup_status || '').trim();
-      const isRemovedRecord = String(row.record_type || '').toLowerCase() === 'removed';
+      const isRemovedRecord = recordType === 'removed';
+      const isGroupJoinRecord = recordType === 'group_join';
       const isGrouped = Boolean(row.active_group_id || row.active_group_name) || row.course_status === 'in_progress';
       const isRemoved = isRemovedRecord || Boolean(row.closed_group_id || row.closed_group_name) || ['removed', 'stopped', 'finished', 'dropped', 'completed'].includes(String(row.course_status || '').toLowerCase());
       const isCalled = followupStatus === 'called_unresolved' || followupStatus === 'called_resolved' || callReasonPattern.test(reasonText);
@@ -1096,7 +1098,9 @@ const getAdmissionsStatistics = async (req, res) => {
       const isNew = !isGrouped && !isRemoved && newReasonPattern.test(reasonText);
 
       let status = 'unresolved';
-      if (isRemoved) {
+      if (isGroupJoinRecord) {
+        status = 'rejoined';
+      } else if (isRemoved) {
         status = 'removed';
       } else if (isGrouped) {
         status = 'grouped';
@@ -1133,7 +1137,9 @@ const getAdmissionsStatistics = async (req, res) => {
         teacher: row.active_teacher_name || row.teacher_name || row.closed_teacher_name || null,
         is_rejoined: Boolean(row.is_rejoined),
         note:
-          status === 'grouped'
+          status === 'rejoined'
+            ? 'Qayta guruhga biriktirilgan'
+            : status === 'grouped'
             ? 'Guruhga biriktirilgan'
             : status === 'removed'
               ? 'Guruhdan chiqarilgan'
@@ -1206,15 +1212,19 @@ const getAdmissionsStatistics = async (req, res) => {
 
     const students = Array.from(mergedById.values()).map(classifyAdmission);
     const admissionsOnly = students.filter((item) => item.record_type === 'admission');
+    const rejoinedOnly = students.filter((item) => item.record_type === 'group_join');
     const summary = summarize(admissionsOnly);
+    summary.rejoined = rejoinedOnly.length;
 
     const admins = (adminsResult.rows || []).map((admin) => {
       const admittedItems = admissionsOnly.filter((student) => Number(student.admin_id) === Number(admin.id));
+      const rejoinedItems = rejoinedOnly.filter((student) => Number(student.admin_id) === Number(admin.id));
       const adminSummary = summarize(admittedItems);
       return {
         id: admin.id,
         name: admin.admin_name,
         ...adminSummary,
+        rejoinedCount: rejoinedItems.length,
       };
     });
 
