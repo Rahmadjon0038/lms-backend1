@@ -824,7 +824,21 @@ exports.getAllStudents = async (req, res) => {
         COUNT(*) FILTER (WHERE overall_status = 'stopped')::int as stopped,
         COUNT(*) FILTER (WHERE overall_status = 'finished')::int as finished,
         COUNT(*) FILTER (WHERE overall_status = 'unassigned')::int as unassigned_students,
-        COUNT(*) FILTER (WHERE overall_status <> 'unassigned')::int as students_with_groups
+        COUNT(*) FILTER (WHERE overall_status <> 'unassigned')::int as students_with_groups,
+        (
+          SELECT COUNT(*)
+          FROM filtered_students fs
+          JOIN student_groups sg
+            ON sg.student_id = fs.id
+           AND sg.branch_id = fs.branch_id
+          JOIN groups g
+            ON g.id = sg.group_id
+           AND g.branch_id = sg.branch_id
+          WHERE sg.status = 'active'
+            AND g.status IN ('active', 'blocked')
+            AND g.class_status = 'started'
+            AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= CURRENT_DATE
+        )::int as active_attendance_students
       FROM student_statuses
     `;
     const statsResult = await pool.query(statsQuery, params);
@@ -834,13 +848,15 @@ exports.getAllStudents = async (req, res) => {
     const finishedCount = parseInt(statsRow.finished || 0, 10);
     const unassignedCount = parseInt(statsRow.unassigned_students || 0, 10);
     const studentsWithGroupsCount = parseInt(statsRow.students_with_groups || 0, 10);
+    const activeAttendanceCount = parseInt(statsRow.active_attendance_students || 0, 10);
 
     const stats = {
       total_students: parseInt(statsRow.total_students || 0, 10),
       students_with_groups: studentsWithGroupsCount,
       unassigned_students: unassignedCount,
+      active_attendance_students: activeAttendanceCount,
       group_memberships: {
-        active: activeCount,
+        active: activeAttendanceCount,
         stopped: stoppedCount,
         finished: finishedCount
       }
