@@ -5,6 +5,15 @@ const MAX_VOCABULARY = 10;
 const MAX_ATTENDANCE = 5;
 const MAX_PARTICIPATION = 10;
 const MAX_TOTAL = MAX_HOMEWORK + MAX_VOCABULARY + MAX_ATTENDANCE + MAX_PARTICIPATION;
+const DEFAULT_REPORT_COLUMNS = [
+  { key: 'homework', label: 'Homework', max_value: MAX_HOMEWORK },
+  { key: 'vocabulary', label: 'Vocabulary', max_value: MAX_VOCABULARY },
+  { key: 'attendance', label: 'Attendance', max_value: MAX_ATTENDANCE },
+  { key: 'participation', label: 'Participation', max_value: MAX_PARTICIPATION },
+];
+const DEFAULT_COLUMN_BY_KEY = new Map(
+  DEFAULT_REPORT_COLUMNS.map((column) => [column.key, column])
+);
 const TEACHER_STATS_DEBUG = String(process.env.TEACHER_STATS_DEBUG || '').toLowerCase() === 'true';
 
 const debugTeacherStats = (label, payload = {}) => {
@@ -22,6 +31,108 @@ const clampScore = (value, max) => {
   if (score < 0) return 0;
   if (score > max) return max;
   return score;
+};
+
+const titleCaseFromKey = (value) =>
+  String(value || '')
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const normalizeColumnKey = (value, fallbackPrefix = 'column') => {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return raw || `${fallbackPrefix}_${Date.now()}`;
+};
+
+const cloneDefaultColumns = () =>
+  DEFAULT_REPORT_COLUMNS.map((column, index) => ({
+    key: column.key,
+    label: column.label,
+    max_value: column.max_value,
+    enabled: true,
+    order: index,
+  }));
+
+const normalizeColumns = (columns) => {
+  const source = Array.isArray(columns) && columns.length > 0 ? columns : cloneDefaultColumns();
+  const usedKeys = new Set();
+
+  const normalized = source.map((item, index) => {
+    const baseKey = normalizeColumnKey(
+      item?.key || item?.field || item?.name || item?.label || `column_${index + 1}`,
+      'column'
+    );
+    let key = baseKey;
+    let suffix = 2;
+    while (usedKeys.has(key)) {
+      key = `${baseKey}_${suffix}`;
+      suffix += 1;
+    }
+    usedKeys.add(key);
+
+    const defaultColumn = DEFAULT_COLUMN_BY_KEY.get(baseKey);
+    const label = String(item?.label || item?.title || item?.name || '').trim() ||
+      defaultColumn?.label ||
+      titleCaseFromKey(key);
+    const maxValue = clampScore(
+      item?.max_value ?? item?.maxValue ?? item?.max ?? defaultColumn?.max_value ?? 10,
+      1000
+    );
+
+    return {
+      key,
+      label,
+      max_value: maxValue,
+      enabled: item?.enabled !== false,
+      order: asInt(item?.order, index),
+    };
+  });
+
+  normalized.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    return String(a.key).localeCompare(String(b.key));
+  });
+
+  return normalized.map((column, index) => ({ ...column, order: index }));
+};
+
+const defaultRowValueForKey = (row, key) => {
+  const defaultColumn = DEFAULT_COLUMN_BY_KEY.get(key);
+  if (!defaultColumn) return undefined;
+  return row?.[key];
+};
+
+const normalizeReportRow = (row, columns = []) => {
+  const source = row && typeof row === 'object' ? row : {};
+  const valuesSource =
+    source.values && typeof source.values === 'object' && !Array.isArray(source.values)
+      ? source.values
+      : {};
+
+  const normalizedColumns = Array.isArray(columns) && columns.length > 0 ? columns : cloneDefaultColumns();
+  const values = {};
+
+  normalizedColumns.forEach((column) => {
+    const rawValue =
+      valuesSource[column.key] ??
+      source[column.key] ??
+      defaultRowValueForKey(source, column.key);
+    values[column.key] = clampScore(rawValue, column.max_value);
+  });
+
+  return {
+    student_id: asInt(source.student_id),
+    student_name: String(source.student_name || '').trim(),
+    values,
+  };
 };
 
 const normalizeFeedback = (percent) => {
@@ -101,6 +212,7 @@ const getLessonContext = async (lessonId, branchId) => {
         l.start_time AS lesson_start_time,
         l.end_time AS lesson_end_time,
         g.name AS group_name,
+        g.schedule AS group_schedule,
         g.teacher_id AS group_teacher_id,
         g.subject_id AS group_subject_id,
         g.branch_id AS group_branch_id,
@@ -122,50 +234,75 @@ const getLessonContext = async (lessonId, branchId) => {
   return result.rows[0] || null;
 };
 
-const buildReportPayload = (row) => ({
-  id: row.id,
-  lesson_id: row.lesson_id,
-  lesson_label: row.lesson_label || row.report_data?.lesson_label || '',
-  group_name: row.group_name || row.report_data?.group_name || '',
-  teacher_name: row.teacher_name || row.report_data?.teacher_name || '',
-  subject_name: row.subject_name || row.report_data?.subject_name || '',
-  report_month: row.report_month || '',
-  lesson_date: row.lesson_date || row.report_data?.lesson_date || '',
-  lesson_start_time: row.lesson_start_time || '',
-  lesson_end_time: row.lesson_end_time || '',
-  created_at: row.created_at,
-  updated_at: row.updated_at,
-  created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
-  updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
-  rows: Array.isArray(row.report_data?.rows) ? row.report_data.rows : [],
-});
-
-const normalizeRows = (rows = []) => {
+const normalizeRows = (rows = [], columns = []) => {
   if (!Array.isArray(rows)) return [];
+  const normalizedColumns = normalizeColumns(columns);
   return rows
-    .map((row) => ({
-      student_id: asInt(row.student_id),
-      student_name: String(row.student_name || '').trim(),
-      homework: clampScore(row.homework, MAX_HOMEWORK),
-      vocabulary: clampScore(row.vocabulary, MAX_VOCABULARY),
-      attendance: clampScore(row.attendance, MAX_ATTENDANCE),
-      participation: clampScore(row.participation, MAX_PARTICIPATION),
-    }))
+    .map((row) => normalizeReportRow(row, normalizedColumns))
     .filter((row) => row.student_id > 0);
 };
 
-const buildRowsWithTotals = (rows) => {
-  return rows.map((row) => {
-    const total =
-      row.homework + row.vocabulary + row.attendance + row.participation;
-    const percent = Math.round((MAX_TOTAL === 0 ? 0 : (total / MAX_TOTAL) * 100));
-    return {
-      ...row,
+const buildRowsWithTotals = (rows = [], columns = []) => {
+  const normalizedColumns = normalizeColumns(columns);
+  const enabledColumns = normalizedColumns.filter((column) => column.enabled !== false);
+  const maxTotal = enabledColumns.reduce((sum, column) => sum + column.max_value, 0);
+
+  return rows.map((item) => {
+    const total = enabledColumns.reduce(
+      (sum, column) => sum + clampScore(item.values[column.key], column.max_value),
+      0
+    );
+    const percent = Math.round(maxTotal === 0 ? 0 : (total / maxTotal) * 100);
+    const rowPayload = {
+      student_id: item.student_id,
+      student_name: item.student_name,
+      values: item.values,
       total,
       percent,
       feedback: normalizeFeedback(percent),
     };
+
+    normalizedColumns.forEach((column) => {
+      rowPayload[column.key] = clampScore(item.values[column.key], column.max_value);
+    });
+
+    return rowPayload;
   });
+};
+
+const buildReportPayload = (row) => {
+  const reportData = row.report_data && typeof row.report_data === 'object' ? row.report_data : {};
+  const columns = normalizeColumns(reportData.columns || row.columns || []);
+  const rows = normalizeRows(reportData.rows || [], columns);
+  const rowsWithTotals = buildRowsWithTotals(rows, columns);
+
+  return {
+    id: row.id,
+    lesson_id: row.lesson_id,
+    lesson_label: row.lesson_label || reportData.lesson_label || '',
+    group_name: row.group_name || reportData.group_name || '',
+    teacher_name: row.teacher_name || reportData.teacher_name || '',
+    subject_name: row.subject_name || reportData.subject_name || '',
+    report_month: row.report_month || '',
+    lesson_date: row.lesson_date || reportData.lesson_date || '',
+    lesson_start_time: row.lesson_start_time || reportData.lesson_start_time || '',
+    lesson_end_time: row.lesson_end_time || reportData.lesson_end_time || '',
+    lesson_time:
+      row.lesson_time ||
+      reportData.lesson_time ||
+      `${row.lesson_start_time || reportData.lesson_start_time || ''}${
+        row.lesson_end_time || reportData.lesson_end_time
+          ? `-${row.lesson_end_time || reportData.lesson_end_time}`
+          : ''
+      }`.trim(),
+    group_schedule: row.group_schedule || reportData.group_schedule || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
+    updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
+    columns,
+    rows: rowsWithTotals,
+  };
 };
 
 exports.saveLessonStatistics = async (req, res) => {
@@ -182,8 +319,9 @@ exports.saveLessonStatistics = async (req, res) => {
       branchId: req.user?.branch_id,
     });
 
-    const { rows = [], group_name, lesson_label } = req.body || {};
-    const normalizedRows = buildRowsWithTotals(normalizeRows(rows));
+    const { rows = [], columns = [], group_name, lesson_label } = req.body || {};
+    const normalizedColumns = normalizeColumns(columns);
+    const normalizedRows = buildRowsWithTotals(normalizeRows(rows, normalizedColumns), normalizedColumns);
     if (normalizedRows.length === 0) {
       return res.status(400).json({
         success: false,
@@ -235,23 +373,31 @@ exports.saveLessonStatistics = async (req, res) => {
         .join(' ')
         .trim(),
       subject_name: lesson.subject_name,
+      lesson_date: lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '',
+      lesson_start_time: lesson.lesson_start_time || '',
+      lesson_end_time: lesson.lesson_end_time || '',
+      group_schedule: lesson.group_schedule || null,
+      columns: normalizedColumns,
       rows: normalizedRows,
     };
 
+    const enabledColumns = normalizedColumns.filter((column) => column.enabled !== false);
+    const maxTotal = enabledColumns.reduce((sum, column) => sum + column.max_value, 0);
     const totals = normalizedRows.reduce(
       (acc, row) => {
-        acc.homework += row.homework;
-        acc.vocabulary += row.vocabulary;
-        acc.attendance += row.attendance;
-        acc.participation += row.participation;
         acc.total += row.total;
         return acc;
       },
-      { homework: 0, vocabulary: 0, attendance: 0, participation: 0, total: 0 }
+      { total: 0 }
     );
     const rowsCount = normalizedRows.length || 1;
     const averageTotal = Math.round(totals.total / rowsCount);
-    const averagePercent = Math.round((averageTotal / MAX_TOTAL) * 100);
+    const averagePercent = Math.round(maxTotal === 0 ? 0 : (averageTotal / maxTotal) * 100);
+    const reportFieldValue = (key) =>
+      Math.round(
+        normalizedRows.reduce((sum, row) => sum + clampScore(row.values?.[key], 1000), 0) /
+          rowsCount
+      );
 
     const inserted = await pool.query(
       `
@@ -310,10 +456,10 @@ exports.saveLessonStatistics = async (req, res) => {
         lesson.lesson_date,
         lesson.lesson_start_time,
         lesson.lesson_end_time,
-        Math.round(totals.homework / rowsCount),
-        Math.round(totals.vocabulary / rowsCount),
-        Math.round(totals.attendance / rowsCount),
-        Math.round(totals.participation / rowsCount),
+        reportFieldValue('homework'),
+        reportFieldValue('vocabulary'),
+        reportFieldValue('attendance'),
+        reportFieldValue('participation'),
         averageTotal,
         averagePercent,
         normalizeFeedback(averagePercent),
@@ -584,6 +730,7 @@ exports.getManagerDailyStatistics = async (req, res) => {
           r.total,
           r.percent,
           r.feedback,
+          r.report_data,
           r.created_at,
           r.updated_at,
           TO_CHAR(r.created_at, 'DD.MM.YYYY HH24:MI') AS created_at_label,
@@ -613,31 +760,29 @@ exports.getManagerDailyStatistics = async (req, res) => {
 
     return res.json({
       success: true,
-      data: result.rows.map((row) => ({
-        id: row.id,
-        lesson_id: row.lesson_id,
-        lesson_date: row.lesson_date,
-        lesson_time: `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
-        group_id: row.group_id,
-        group_name: row.group_name,
-        group_schedule: row.group_schedule,
-        teacher_id: row.teacher_id,
-        teacher_name: [row.teacher_surname, row.teacher_name]
-          .filter((part) => String(part || '').trim().length > 0)
-          .join(' ')
-          .trim(),
-        subject_name: row.group_subject_name || row.subject_name,
-        report_month: row.report_month,
-        total: row.total,
-        percent: row.percent,
-        feedback: row.feedback,
-        status: 'sent',
-        can_view: true,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
-        updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
-      })),
+      data: result.rows.map((row) => {
+        const payload = buildReportPayload({
+          ...row,
+          lesson_time: `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
+        });
+
+        return {
+          ...payload,
+          group_id: row.group_id,
+          teacher_id: row.teacher_id,
+          status: 'sent',
+          can_view: true,
+          lesson_time: payload.lesson_time || `${row.lesson_start_time || ''}${row.lesson_end_time ? `-${row.lesson_end_time}` : ''}`.trim(),
+          group_schedule: row.group_schedule || payload.group_schedule,
+          teacher_name: [row.teacher_surname, row.teacher_name]
+            .filter((part) => String(part || '').trim().length > 0)
+            .join(' ')
+            .trim(),
+          subject_name: row.group_subject_name || row.subject_name || payload.subject_name,
+          created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
+          updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
+        };
+      }),
     });
   } catch (error) {
     console.error('Manager statistikalarini olishda xatolik:', error);
