@@ -4,6 +4,33 @@ const { getScopedBranchId } = require('../utils/branch');
 const isValidMonth = (m) => /^\d{4}-\d{2}$/.test(String(m || ''));
 const isValidDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
 
+const getEnglishTeacherClause = (userAlias = 'u') => `
+  AND (
+    EXISTS (
+      SELECT 1
+      FROM teacher_subjects ts
+      JOIN subjects s ON s.id = ts.subject_id AND s.branch_id = ts.branch_id
+      WHERE ts.teacher_id = ${userAlias}.id
+        AND ts.branch_id = ${userAlias}.branch_id
+        AND (
+          LOWER(COALESCE(s.name, '')) LIKE '%english%'
+          OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
+        )
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM groups g
+      JOIN subjects gs ON gs.id = g.subject_id AND gs.branch_id = g.branch_id
+      WHERE g.teacher_id = ${userAlias}.id
+        AND g.branch_id = ${userAlias}.branch_id
+        AND (
+          LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+          OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
+        )
+    )
+  )
+`;
+
 // Tanlangan oy uchun BARCHA o'qituvchilar + ularning shu oydagi kechikish yozuvlari.
 // Kechikishi yo'q teacherlar ham ro'yxatda chiqadi (total 0 bilan).
 exports.getMonthLateByTeachers = async (req, res) => {
@@ -15,6 +42,7 @@ exports.getMonthLateByTeachers = async (req, res) => {
 
   try {
     const branchId = getScopedBranchId(req);
+    const englishOnlyClause = req.user?.role === 'english-manager' ? getEnglishTeacherClause('u') : '';
     const result = await pool.query(
       `SELECT
          u.id AS teacher_id,
@@ -45,6 +73,7 @@ exports.getMonthLateByTeachers = async (req, res) => {
        ) agg ON true
        WHERE u.role = 'teacher'
          AND u.branch_id = $2
+         ${englishOnlyClause}
        ORDER BY u.surname NULLS LAST, u.name NULLS LAST, u.id`,
       [monthName, branchId]
     );
@@ -87,8 +116,9 @@ exports.createLateRecord = async (req, res) => {
 
   try {
     const branchId = getScopedBranchId(req);
+    const englishOnlyClause = req.user?.role === 'english-manager' ? getEnglishTeacherClause('u') : '';
     const teacher = await pool.query(
-      `SELECT id FROM users WHERE id = $1 AND role = 'teacher' AND branch_id = $2`,
+      `SELECT id FROM users u WHERE id = $1 AND role = 'teacher' AND branch_id = $2 ${englishOnlyClause}`,
       [teacherId, branchId]
     );
     if (!teacher.rows.length) {
@@ -122,13 +152,26 @@ exports.deleteLateRecord = async (req, res) => {
 
   try {
     const branchId = getScopedBranchId(req);
+    const englishOnlyClause = req.user?.role === 'english-manager' ? getEnglishTeacherClause('u') : '';
+    const record = await pool.query(
+      `SELECT r.id
+       FROM teacher_late_records r
+       JOIN users u ON u.id = r.teacher_id
+       WHERE r.id = $1
+         AND r.branch_id = $2
+         AND u.role = 'teacher'
+         AND u.branch_id = $2
+         ${englishOnlyClause}`,
+      [id, branchId]
+    );
+    if (!record.rows.length) {
+      return res.status(404).json({ success: false, message: 'Yozuv topilmadi' });
+    }
+
     const del = await pool.query(
       `DELETE FROM teacher_late_records WHERE id = $1 AND branch_id = $2 RETURNING *`,
       [id, branchId]
     );
-    if (!del.rows.length) {
-      return res.status(404).json({ success: false, message: 'Yozuv topilmadi' });
-    }
     return res.json({ success: true, message: "O'chirildi", data: del.rows[0] });
   } catch (error) {
     return res.status(500).json({
