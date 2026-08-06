@@ -624,8 +624,9 @@ const writeLessonAuditLog = async ({ lessonId, changedBy, action, beforeData, af
 // ============================================================================
 exports.getTeachersAttendanceList = async (req, res) => {
   try {
-    const { date, month, shift } = req.query;
+    const { date, month, shift, subject_id } = req.query;
     const branchId = getScopedBranchId(req);
+    const subjectIdParam = subject_id ? parseInt(subject_id, 10) : null;
     const normalizedDate = date ? (isValidDate(date) ? date : null) : null;
     const normalizedMonth = normalizeMonthParam(month) || (normalizedDate ? normalizedDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
     if (!normalizedMonth) {
@@ -681,6 +682,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND g.class_status = 'started'
          AND g.status IN ('active', 'blocked')
          AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+         AND ($3::int IS NULL OR g.subject_id = $3)
        LEFT JOIN student_groups sg ON sg.group_id = g.id
          AND sg.branch_id = $2
          AND DATE(sg.joined_at) <= $1::date
@@ -691,7 +693,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
        GROUP BY u.id, u.name, u.surname
        HAVING COUNT(DISTINCT g.id) > 0
        ORDER BY u.name, u.surname`,
-      [attendanceDate, branchId]
+      [attendanceDate, branchId, subjectIdParam]
     );
 
     const groupsForSchedule = await pool.query(
@@ -701,8 +703,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
          AND g.status IN ('active', 'blocked')
          AND g.teacher_id IS NOT NULL
          AND g.branch_id = $2
-         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date`,
-      [attendanceDate, branchId]
+         AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= $1::date
+         AND ($3::int IS NULL OR g.subject_id = $3)`,
+      [attendanceDate, branchId, subjectIdParam]
     );
 
     const todayGroupsCount = new Map();
@@ -785,6 +788,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
              ELSE false
            END as attendance_completed
          FROM lessons l
+         LEFT JOIN groups g3 ON g3.id = l.group_id AND g3.branch_id = l.branch_id
          LEFT JOIN attendance a ON a.lesson_id = l.id
            AND a.branch_id = $2
            AND EXISTS (
@@ -798,6 +802,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          WHERE l.date = $1::date
            AND l.branch_id = $2
            AND COALESCE(l.is_holiday, false) = false
+           AND ($3::int IS NULL OR g3.subject_id = $3)
            ${normalizedShift === 'morning'
              ? `AND l.start_time < '13:00:00'::time`
              : normalizedShift === 'evening'
@@ -811,7 +816,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
        GROUP BY teacher_id`,
-      [attendanceDate, branchId]
+      [attendanceDate, branchId, subjectIdParam]
     );
 
     const completedMap = new Map();

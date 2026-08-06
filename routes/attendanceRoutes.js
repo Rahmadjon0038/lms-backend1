@@ -69,7 +69,7 @@ const {
 router.get('/groups', protect, roleCheck(['admin', 'teacher']), getGroupsForAttendance);
 router.get('/my-groups', protect, roleCheck(['teacher']), getGroupsForAttendance);
 router.get('/my-lessons', protect, roleCheck(['teacher']), getMyLessons);
-router.get('/teachers', protect, roleCheck(['admin', 'super_admin']), getTeachersAttendanceList);
+router.get('/teachers', protect, roleCheck(['admin', 'super_admin', 'english-manager']), getTeachersAttendanceList);
 router.get('/teachers/:teacher_id/groups', protect, roleCheck(['admin', 'super_admin']), getTeacherGroupsForAttendance);
 
 /**
