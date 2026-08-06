@@ -1561,6 +1561,7 @@ const getSuperAdminStats = async (req, res) => {
            (SELECT COUNT(*)
               FROM users u
               LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
+               AND sg.status <> 'removed'
              WHERE u.role = 'student'
                AND u.branch_id = $2)::int AS total_students,
            (SELECT COUNT(*)
@@ -1583,7 +1584,9 @@ const getSuperAdminStats = async (req, res) => {
              WHERE u.role = 'student'
                AND u.branch_id = $2
                AND NOT EXISTS (
-                 SELECT 1 FROM student_groups sg2 WHERE sg2.student_id = u.id AND sg2.branch_id = u.branch_id
+                 SELECT 1 FROM student_groups sg2
+                  WHERE sg2.student_id = u.id AND sg2.branch_id = u.branch_id
+                    AND sg2.status <> 'removed'
                ))::int AS unassigned_students,
            (SELECT COUNT(*)
               FROM monthly_snapshots ms
