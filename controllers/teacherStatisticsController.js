@@ -279,6 +279,11 @@ const buildReportPayload = (row) => {
   return {
     id: row.id,
     lesson_id: row.lesson_id,
+    total: asInt(row.total ?? reportData.total ?? 0),
+    percent: asInt(row.percent ?? reportData.percent ?? 0),
+    feedback: String(
+      row.feedback || reportData.feedback || normalizeFeedback(asInt(row.percent ?? reportData.percent ?? 0))
+    ).toUpperCase(),
     lesson_label: row.lesson_label || reportData.lesson_label || '',
     group_name: row.group_name || reportData.group_name || '',
     teacher_name: row.teacher_name || reportData.teacher_name || '',
