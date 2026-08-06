@@ -566,12 +566,34 @@ exports.getMonthlySnapshots = async (req, res) => {
 
     const summaryResult = await db.query(summaryQuery, params);
 
+    // Fan bo'yicha filtrlanganda "Jami" ni ham student_groups asosida beramiz
+    // (student-count-rule: talaba soni har doim student_groups'dan, snapshot'dan
+    // emas — chunki ba'zi faol talabalarga hali shu oy uchun snapshot yaratilmagan
+    // bo'lishi mumkin, va bu bosh sahifa/super admin bilan mos kelmay qoladi).
+    let subjectActiveStudents = null;
+    if (subject_id) {
+      const subjectActiveResult = await db.query(
+        `SELECT COUNT(*)::int as count
+           FROM student_groups sg
+           JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
+           JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
+          WHERE sg.status = 'active'
+            AND sg.branch_id = $1
+            AND g.subject_id = $2`,
+        [branchId, subject_id]
+      );
+      subjectActiveStudents = subjectActiveResult.rows[0]?.count ?? null;
+    }
+
     res.json({
       success: true,
       data: {
         month,
         students: result.rows,
-        summary: summaryResult.rows[0],
+        summary: {
+          ...summaryResult.rows[0],
+          ...(subjectActiveStudents !== null ? { subject_active_students: subjectActiveStudents } : {}),
+        },
         pagination: {
           page: pageNumber,
           limit: limitNumber,
