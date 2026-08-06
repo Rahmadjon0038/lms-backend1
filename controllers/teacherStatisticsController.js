@@ -271,7 +271,19 @@ const buildRowsWithTotals = (rows = [], columns = []) => {
 };
 
 const buildReportPayload = (row) => {
-  const reportData = row.report_data && typeof row.report_data === 'object' ? row.report_data : {};
+  let reportData = {};
+  if (row.report_data && typeof row.report_data === 'object' && !Array.isArray(row.report_data)) {
+    reportData = row.report_data;
+  } else if (typeof row.report_data === 'string' && row.report_data.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(row.report_data);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        reportData = parsed;
+      }
+    } catch {
+      reportData = {};
+    }
+  }
   const columns = normalizeColumns(reportData.columns || row.columns || []);
   const rows = normalizeRows(reportData.rows || [], columns);
   const rowsWithTotals = buildRowsWithTotals(rows, columns);
@@ -305,6 +317,7 @@ const buildReportPayload = (row) => {
     updated_at: row.updated_at,
     created_at_label: row.created_at_label || formatStoredDateTime(row.created_at),
     updated_at_label: row.updated_at_label || formatStoredDateTime(row.updated_at),
+    report_data: reportData,
     columns,
     rows: rowsWithTotals,
   };
