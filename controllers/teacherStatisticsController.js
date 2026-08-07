@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { notifyUser } = require('./notificationController');
 
 const MAX_HOMEWORK = 10;
 const MAX_VOCABULARY = 10;
@@ -495,6 +496,41 @@ exports.saveLessonStatistics = async (req, res) => {
       teacherId: inserted.rows[0]?.teacher_id,
       reportMonth,
     });
+
+    // Har bir o'quvchiga hisobot kelgani haqida push bildirishnoma —
+    // fanidan qat'iy nazar (English yoki boshqa fan), teacher hisobot
+    // yuborsa student/ota-ona tarafga xabar boradi.
+    const lessonDateLabel = lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '';
+    for (const row of normalizedRows) {
+      if (!row.student_id) continue;
+      try {
+        await notifyUser({
+          userId: row.student_id,
+          type: 'report',
+          title: 'Dars hisoboti',
+          body: `${lesson.group_name}: ${row.total} ball (${row.percent}%)`,
+          pushTitle: 'Yangi dars hisoboti',
+          pushBody: `${lesson.group_name}: ${row.total} ball (${row.percent}%)`,
+          data: {
+            route: '/notification-detail',
+            type: 'report',
+            lesson_id: String(lessonId),
+            lesson_date: lessonDateLabel,
+            report_month: reportMonth,
+            group_id: String(lesson.group_id),
+            group_name: lesson.group_name || '',
+            subject_name: lesson.subject_name || '',
+            teacher_name: reportData.teacher_name || '',
+            total: String(row.total),
+            percent: String(row.percent),
+            feedback: row.feedback || '',
+          },
+          createdBy: req.user.id,
+        });
+      } catch (notificationError) {
+        console.warn(`⚠️ Report notification yuborilmadi (student_id=${row.student_id}): ${notificationError.message}`);
+      }
+    }
 
     return res.json({
       success: true,

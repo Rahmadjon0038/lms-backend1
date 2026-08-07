@@ -36,12 +36,19 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         SELECT DISTINCT
           sg.group_id,
           sg.student_id,
-          LOWER(COALESCE(s.name, '')) AS subject_name,
           g.name AS group_name
         FROM student_groups sg
         JOIN groups g ON g.id = sg.group_id
-        JOIN subjects s ON s.id = g.subject_id
         JOIN target_groups tg ON tg.group_id = sg.group_id
+      ),
+      -- Ushbu oyda dars uchun report (statistika) topshirilgan darslar —
+      -- fanidan qat'iy nazar, report bor darsning ball hisobi report'dan olinadi,
+      -- avtomatik davomat balli bilan ikki marta hisoblanmasligi uchun.
+      report_lessons AS (
+        SELECT DISTINCT r.lesson_id, r.group_id
+        FROM teacher_lesson_statistics_reports r
+        JOIN target_groups tg ON tg.group_id = r.group_id
+        WHERE COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
       ),
       event_day_points AS (
         SELECT
@@ -53,30 +60,12 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         JOIN memberships m
           ON m.group_id = spe.group_id
          AND m.student_id = spe.student_id
-        WHERE LOWER(m.subject_name) <> 'english'
-          AND spe.month_name = $2
+        WHERE spe.month_name = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM report_lessons rl
+            WHERE rl.lesson_id = spe.lesson_id AND rl.group_id = spe.group_id
+          )
         GROUP BY spe.group_id, spe.student_id, DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
-      ),
-      event_ranked AS (
-        SELECT
-          group_id,
-          student_id,
-          point_day,
-          day_points,
-          SUM(day_points) OVER (PARTITION BY group_id, student_id) AS month_points,
-          MAX(point_day) OVER (PARTITION BY group_id, student_id) AS last_point_day,
-          ROW_NUMBER() OVER (PARTITION BY group_id, student_id ORDER BY point_day DESC) AS day_order
-        FROM event_day_points
-      ),
-      event_points AS (
-        SELECT
-          group_id,
-          student_id,
-          MAX(month_points)::int AS month_points,
-          MAX(last_point_day) AS last_point_day,
-          SUM(CASE WHEN day_order = 1 THEN day_points ELSE 0 END)::int AS last_day_points
-        FROM event_ranked
-        GROUP BY group_id, student_id
       ),
       report_day_points AS (
         SELECT
@@ -87,13 +76,17 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         FROM teacher_lesson_statistics_reports r
         JOIN memberships m
           ON m.group_id = r.group_id
-         AND LOWER(m.subject_name) = 'english'
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         WHERE COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
           AND row->>'student_id' = m.student_id::text
         GROUP BY r.group_id, m.student_id, r.lesson_date::date
       ),
-      report_ranked AS (
+      combined_day_points AS (
+        SELECT group_id, student_id, point_day, day_points FROM event_day_points
+        UNION ALL
+        SELECT group_id, student_id, point_day, day_points FROM report_day_points
+      ),
+      combined_ranked AS (
         SELECT
           group_id,
           student_id,
@@ -102,40 +95,28 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
           SUM(day_points) OVER (PARTITION BY group_id, student_id) AS month_points,
           MAX(point_day) OVER (PARTITION BY group_id, student_id) AS last_point_day,
           ROW_NUMBER() OVER (PARTITION BY group_id, student_id ORDER BY point_day DESC) AS day_order
-        FROM report_day_points
+        FROM combined_day_points
       ),
-      report_points AS (
+      combined_points AS (
         SELECT
           group_id,
           student_id,
           MAX(month_points)::int AS month_points,
           MAX(last_point_day) AS last_point_day,
           SUM(CASE WHEN day_order = 1 THEN day_points ELSE 0 END)::int AS last_day_points
-        FROM report_ranked
+        FROM combined_ranked
         GROUP BY group_id, student_id
       )
       SELECT
         m.group_id,
         m.student_id,
-        CASE
-          WHEN LOWER(m.subject_name) = 'english' THEN COALESCE(rp.month_points, 0)
-          ELSE COALESCE(ep.month_points, 0)
-        END AS month_points,
-        CASE
-          WHEN LOWER(m.subject_name) = 'english' THEN rp.last_point_day
-          ELSE ep.last_point_day
-        END AS last_point_day,
-        CASE
-          WHEN LOWER(m.subject_name) = 'english' THEN COALESCE(rp.last_day_points, 0)
-          ELSE COALESCE(ep.last_day_points, 0)
-        END AS last_day_points
+        COALESCE(cp.month_points, 0) AS month_points,
+        cp.last_point_day,
+        COALESCE(cp.last_day_points, 0) AS last_day_points
       FROM memberships m
-      LEFT JOIN report_points rp
-        ON rp.group_id = m.group_id
-       AND rp.student_id = m.student_id
-      LEFT JOIN event_points ep
-        ON ep.group_id = m.group_id
-       AND ep.student_id = m.student_id
+      LEFT JOIN combined_points cp
+        ON cp.group_id = m.group_id
+       AND cp.student_id = m.student_id
     `,
     [normalizedGroupIds, reportMonth]
   );
@@ -178,7 +159,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
 
   const result = await pool.query(
     `
-      event_entries AS (
+      WITH event_entries AS (
         SELECT
           spe.id::text AS entry_id,
           spe.student_id,
@@ -199,10 +180,12 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
         FROM student_point_events spe
         LEFT JOIN groups g ON g.id = spe.group_id
-        LEFT JOIN subjects s ON s.id = g.subject_id
         LEFT JOIN users cb ON cb.id = spe.created_by
         WHERE ${eventFilters.join(' AND ')}
-          AND (LOWER(COALESCE(s.name, '')) <> 'english' OR s.name IS NULL)
+          AND NOT EXISTS (
+            SELECT 1 FROM teacher_lesson_statistics_reports r2
+            WHERE r2.lesson_id = spe.lesson_id AND r2.group_id = spe.group_id
+          )
           ${monthKey ? `AND spe.month_name = $${monthParamIndex}` : ''}
       ),
       report_entries AS (
