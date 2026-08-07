@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { notifyUser } = require('./notificationController');
+const { getEnglishTeacherClause } = require('../utils/englishTeachers');
 
 const MAX_HOMEWORK = 10;
 const MAX_VOCABULARY = 10;
@@ -867,6 +868,7 @@ exports.getEnglishManagerTeachers = async (req, res) => {
           u.id AS teacher_id,
           u.name,
           u.surname,
+          u.phone,
           COALESCE((
             SELECT COUNT(DISTINCT g.id)
             FROM groups g
@@ -878,6 +880,19 @@ exports.getEnglishManagerTeachers = async (req, res) => {
                 OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
               )
           ), 0) AS groups_count,
+          COALESCE((
+            SELECT COUNT(DISTINCT sg.student_id)
+            FROM student_groups sg
+            JOIN groups g ON g.id = sg.group_id
+            JOIN subjects gs ON gs.id = g.subject_id
+            WHERE g.teacher_id = u.id
+              AND g.branch_id = u.branch_id
+              AND sg.status = 'active'
+              AND (
+                LOWER(COALESCE(gs.name, '')) LIKE '%english%'
+                OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
+              )
+          ), 0) AS students_count,
           COALESCE((
             SELECT COUNT(DISTINCT r.id)
             FROM teacher_lesson_statistics_reports r
@@ -917,19 +932,7 @@ exports.getEnglishManagerTeachers = async (req, res) => {
         FROM users u
         WHERE u.role = 'teacher'
           AND u.branch_id = $1
-          AND (
-            EXISTS (
-              SELECT 1
-              FROM teacher_subjects ts
-              JOIN subjects s ON s.id = ts.subject_id AND s.branch_id = ts.branch_id
-              WHERE ts.teacher_id = u.id
-                AND ts.branch_id = u.branch_id
-                AND (
-                  LOWER(COALESCE(s.name, '')) LIKE '%english%'
-                  OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
-                )
-            )
-          )
+          ${getEnglishTeacherClause('u')}
         ORDER BY u.surname ASC, u.name ASC
       `,
       [req.user.branch_id || 1, monthFilter]
@@ -949,7 +952,9 @@ exports.getEnglishManagerTeachers = async (req, res) => {
           .filter((part) => String(part || '').trim().length > 0)
           .join(' ')
           .trim(),
+        phone: row.phone || '',
         groups_count: Number(row.groups_count || 0),
+        students_count: Number(row.students_count || 0),
         reports_count: Number(row.reports_count || 0),
         last_report_at: row.last_report_at,
       })),

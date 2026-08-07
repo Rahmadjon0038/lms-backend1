@@ -1,35 +1,9 @@
 const pool = require('../config/db');
 const { getScopedBranchId } = require('../utils/branch');
+const { getEnglishTeacherClause } = require('../utils/englishTeachers');
 
 const isValidMonth = (m) => /^\d{4}-\d{2}$/.test(String(m || ''));
 const isValidDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
-
-const getEnglishTeacherClause = (userAlias = 'u') => `
-  AND (
-    EXISTS (
-      SELECT 1
-      FROM teacher_subjects ts
-      JOIN subjects s ON s.id = ts.subject_id AND s.branch_id = ts.branch_id
-      WHERE ts.teacher_id = ${userAlias}.id
-        AND ts.branch_id = ${userAlias}.branch_id
-        AND (
-          LOWER(COALESCE(s.name, '')) LIKE '%english%'
-          OR LOWER(COALESCE(s.name, '')) LIKE '%ingliz%'
-        )
-    )
-    OR EXISTS (
-      SELECT 1
-      FROM groups g
-      JOIN subjects gs ON gs.id = g.subject_id AND gs.branch_id = g.branch_id
-      WHERE g.teacher_id = ${userAlias}.id
-        AND g.branch_id = ${userAlias}.branch_id
-        AND (
-          LOWER(COALESCE(gs.name, '')) LIKE '%english%'
-          OR LOWER(COALESCE(gs.name, '')) LIKE '%ingliz%'
-        )
-    )
-  )
-`;
 
 // Tanlangan oy uchun BARCHA o'qituvchilar + ularning shu oydagi kechikish yozuvlari.
 // Kechikishi yo'q teacherlar ham ro'yxatda chiqadi (total 0 bilan).
