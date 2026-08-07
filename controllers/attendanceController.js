@@ -2296,8 +2296,10 @@ exports.getMonthlyAttendance = async (req, res) => {
     const monthEnd = `${selectedMonth}-${String(new Date(monthYear, monthNum, 0).getDate()).padStart(2, '0')}`;
 
     const lessons = await pool.query(
-      `SELECT id AS lesson_id, id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday
-       FROM lessons 
+      `SELECT id AS lesson_id, id, TO_CHAR(date, 'YYYY-MM-DD') as date, TO_CHAR(date, 'DD') as day, is_holiday,
+              TO_CHAR(start_time, 'HH24:MI') as start_time,
+              TO_CHAR(end_time, 'HH24:MI') as end_time
+       FROM lessons
        WHERE group_id = $1 AND TO_CHAR(date, 'YYYY-MM') = $2 AND branch_id = $3
          ${groupStartDate ? 'AND date >= $4::date' : ''}
        ORDER BY date`,

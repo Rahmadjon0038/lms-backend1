@@ -485,7 +485,6 @@ router.get("/:student_id/groups", protect, roleCheck(['admin']), studentControll
 router.delete("/me/account", protect, roleCheck(['student']), studentController.deleteMyAccount);
 router.get("/my-groups", protect, studentController.getMyGroups);
 router.get("/my-point-reports", protect, studentController.getMyPointReports);
-router.post("/point-events", protect, roleCheck(['teacher', 'admin', 'super_admin']), studentController.createStudentPointEvent);
 // Studentning butun o'qish davomidagi ball tarixi (month=all default, month=YYYY-MM filtri ham ishlaydi)
 router.get("/:id/point-history", protect, roleCheck(['teacher', 'admin', 'super_admin']), studentController.getStudentPointHistory);
 
