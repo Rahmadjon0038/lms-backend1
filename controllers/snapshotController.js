@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const { notifyUser } = require('./notificationController');
 const { getScopedBranchId } = require('../utils/branch');
+const googleSheetsService = require('../services/googleSheetsService');
 
 const UZBEK_MONTHS = [
   'yanvar',
@@ -253,6 +254,7 @@ exports.createMonthlySnapshot = async (req, res) => {
     const result = await db.query(createSnapshotQuery, [month, branchId]);
     
     console.log(`✅ ${result.rowCount} ta talaba uchun snapshot yaratildi`);
+    googleSheetsService.syncMonthToSheetsAsync({ month, branchId });
 
     // 0 ta yozuv bo'lsa muvaffaqiyat deb qaytarmaymiz
     if (result.rowCount === 0) {
@@ -812,6 +814,12 @@ exports.updateMonthlySnapshot = async (req, res) => {
     }
 
     console.log(`✅ Snapshot ${id} yangilandi`);
+    googleSheetsService.syncSnapshotToSheetsAsync({
+      studentId: current.student_id,
+      groupId: current.group_id,
+      month: current.month,
+      branchId,
+    });
 
     res.json({
       success: true,
@@ -1004,6 +1012,8 @@ exports.makeSnapshotPayment = async (req, res) => {
       WHERE student_id = $5 AND group_id = $6 AND month = $7
         AND branch_id = $8
     `, [newPaidAmount, newDebtAmount, newPaymentStatus, req.user.id, student_id, group_id, month, branchId]);
+
+    googleSheetsService.syncSnapshotToSheetsAsync({ studentId: student_id, groupId: group_id, month, branchId });
 
     const paymentTitle = 'To\'lov qabul qilindi';
     const monthLabel = formatMonthLabel(month);
@@ -1246,6 +1256,8 @@ exports.giveSnapshotDiscount = async (req, res) => {
       });
     }
 
+    googleSheetsService.syncSnapshotToSheetsAsync({ studentId: student_id, groupId: group_id, month, branchId });
+
     const discountTitle = 'Chegirma berildi';
     const discountReason = String(description ?? '').trim();
     const monthLabel = formatMonthLabel(month);
@@ -1417,6 +1429,8 @@ exports.resetStudentPayment = async (req, res) => {
     }
 
     const updatedSnapshot = resetSnapshot.rows[0];
+
+    googleSheetsService.syncSnapshotToSheetsAsync({ studentId: student_id, groupId: group_id, month, branchId });
 
     console.log(`✅ To'lov ma'lumotlari muvaffaqiyatli tozalandi!`);
 
@@ -2319,6 +2333,10 @@ exports.createSnapshotForNewStudents = async (req, res) => {
 
     const snapshotResults = await Promise.all(snapshotPromises);
     const affectedCount = snapshotResults.reduce((sum, result) => sum + (result.rowCount || 0), 0);
+
+    if (affectedCount > 0) {
+      googleSheetsService.syncMonthToSheetsAsync({ month, branchId });
+    }
 
     res.json({
       success: true,
