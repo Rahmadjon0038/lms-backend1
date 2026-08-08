@@ -235,10 +235,16 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           ) AS metadata,
           r.created_by,
           COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), r.report_data->>'created_by_name', '') AS created_by_name,
-          r.created_at AT TIME ZONE 'Asia/Tashkent' AS created_at_local,
-          TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
-          TO_CHAR(DATE(r.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-          TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time,
+          -- "Qachon" sifatida hisobot bazaga saqlangan payt emas, balki
+          -- darsning o'zi bo'lib o'tgan sana ishlatiladi — aks holda
+          -- kechikib (masalan bugun eski darsga) kiritilgan hisobot
+          -- noto'g'ri kunga (bugungi kunga) qo'shilib, ballar ikki marta
+          -- hisoblangandek ko'rinardi.
+          r.lesson_date + COALESCE(r.lesson_start_time, '00:00:00'::time) AS created_at_local,
+          TO_CHAR(r.lesson_date, 'YYYY-MM-DD') || ' ' ||
+            TO_CHAR(COALESCE(r.lesson_start_time, '00:00:00'::time), 'HH24:MI') AS created_at,
+          TO_CHAR(r.lesson_date, 'YYYY-MM-DD') AS day_key,
+          TO_CHAR(COALESCE(r.lesson_start_time, '00:00:00'::time), 'HH24:MI') AS created_time,
           row AS row_values,
           COALESCE(r.report_data->'columns', '[]'::jsonb) AS report_columns
         FROM teacher_lesson_statistics_reports r
