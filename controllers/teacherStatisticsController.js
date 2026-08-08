@@ -535,6 +535,12 @@ exports.saveLessonStatistics = async (req, res) => {
     // fanidan qat'iy nazar (English yoki boshqa fan), teacher hisobot
     // yuborsa student/ota-ona tarafga xabar boradi.
     const lessonDateLabel = lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '';
+    // "Ball" rejimida (grading_enabled=false) foiz/baho ma'noga ega emas —
+    // xabar matnida ham ko'rsatilmasin.
+    const reportNotificationBody = (row) =>
+      gradingEnabled
+        ? `${lesson.group_name}: ${row.total} ball (${row.percent}%)`
+        : `${lesson.group_name}: ${row.total} ball`;
     for (const row of normalizedRows) {
       if (!row.student_id) continue;
       try {
@@ -542,9 +548,9 @@ exports.saveLessonStatistics = async (req, res) => {
           userId: row.student_id,
           type: 'report',
           title: 'Dars hisoboti',
-          body: `${lesson.group_name}: ${row.total} ball (${row.percent}%)`,
+          body: reportNotificationBody(row),
           pushTitle: 'Yangi dars hisoboti',
-          pushBody: `${lesson.group_name}: ${row.total} ball (${row.percent}%)`,
+          pushBody: reportNotificationBody(row),
           data: {
             route: '/notification-detail',
             type: 'report',
@@ -558,6 +564,7 @@ exports.saveLessonStatistics = async (req, res) => {
             total: String(row.total),
             percent: String(row.percent),
             feedback: row.feedback || '',
+            grading_enabled: String(gradingEnabled),
           },
           createdBy: req.user.id,
         });
