@@ -7,12 +7,32 @@ const MAX_VOCABULARY = 10;
 const MAX_ATTENDANCE = 5;
 const MAX_PARTICIPATION = 10;
 const MAX_TOTAL = MAX_HOMEWORK + MAX_VOCABULARY + MAX_ATTENDANCE + MAX_PARTICIPATION;
-const DEFAULT_REPORT_COLUMNS = [
-  { key: 'homework', label: 'Homework', max_value: MAX_HOMEWORK },
-  { key: 'vocabulary', label: 'Vocabulary', max_value: MAX_VOCABULARY },
-  { key: 'attendance', label: 'Attendance', max_value: MAX_ATTENDANCE },
-  { key: 'participation', label: 'Participation', max_value: MAX_PARTICIPATION },
+
+// Fixed catalog of report column types teachers can pick from. Every student/parent
+// facing surface must show `label_uz` regardless of what the teacher selected/typed,
+// so the report stays understandable no matter which subject/teacher it came from.
+// Adding a new type only requires appending an entry here — no DB migration needed.
+const COLUMN_CATALOG = [
+  { key: 'homework', label_uz: 'Uy vazifasi', label_en: 'Homework', label_ru: 'Домашнее задание', default_max_value: MAX_HOMEWORK, locked: false },
+  { key: 'vocabulary', label_uz: 'So\'z boyligi', label_en: 'Vocabulary', label_ru: 'Словарный запас', default_max_value: MAX_VOCABULARY, locked: false },
+  { key: 'attendance', label_uz: 'Davomat', label_en: 'Attendance', label_ru: 'Посещаемость', default_max_value: MAX_ATTENDANCE, locked: true },
+  { key: 'participation', label_uz: 'Faollik', label_en: 'Participation', label_ru: 'Активность', default_max_value: MAX_PARTICIPATION, locked: false },
+  { key: 'word_memorization', label_uz: 'So\'z yodlash', label_en: 'Vocabulary memorization', label_ru: 'Заучивание слов', default_max_value: 10, locked: false },
+  { key: 'sentence_building', label_uz: 'Gap tuzish', label_en: 'Sentence building', label_ru: 'Составление предложений', default_max_value: 10, locked: false },
+  { key: 'listening', label_uz: 'Tinglab tushunish', label_en: 'Listening', label_ru: 'Аудирование', default_max_value: 10, locked: false },
+  { key: 'speaking', label_uz: 'Nutq', label_en: 'Speaking', label_ru: 'Устная речь', default_max_value: 10, locked: false },
+  { key: 'reading', label_uz: 'O\'qish', label_en: 'Reading', label_ru: 'Чтение', default_max_value: 10, locked: false },
+  { key: 'writing', label_uz: 'Yozish', label_en: 'Writing', label_ru: 'Письмо', default_max_value: 10, locked: false },
+  { key: 'spelling', label_uz: 'Imlo', label_en: 'Spelling', label_ru: 'Орфография', default_max_value: 10, locked: false },
+  { key: 'test', label_uz: 'Test natijasi', label_en: 'Test', label_ru: 'Тест', default_max_value: 10, locked: false },
 ];
+const COLUMN_CATALOG_BY_KEY = new Map(COLUMN_CATALOG.map((entry) => [entry.key, entry]));
+
+const DEFAULT_REPORT_COLUMN_KEYS = ['homework', 'vocabulary', 'attendance', 'participation'];
+const DEFAULT_REPORT_COLUMNS = DEFAULT_REPORT_COLUMN_KEYS.map((key) => {
+  const entry = COLUMN_CATALOG_BY_KEY.get(key);
+  return { key: entry.key, label: entry.label_uz, max_value: entry.default_max_value };
+});
 const DEFAULT_COLUMN_BY_KEY = new Map(
   DEFAULT_REPORT_COLUMNS.map((column) => [column.key, column])
 );
@@ -80,12 +100,18 @@ const normalizeColumns = (columns) => {
     }
     usedKeys.add(key);
 
+    const catalogEntry = COLUMN_CATALOG_BY_KEY.get(baseKey);
     const defaultColumn = DEFAULT_COLUMN_BY_KEY.get(baseKey);
-    const label = String(item?.label || item?.title || item?.name || '').trim() ||
-      defaultColumn?.label ||
-      titleCaseFromKey(key);
+    // Catalog keys always render in Uzbek, no matter what label the client sent —
+    // this is what guarantees parents/students understand the report regardless
+    // of the subject/language the teacher picked the column in.
+    const label = catalogEntry
+      ? catalogEntry.label_uz
+      : String(item?.label || item?.title || item?.name || '').trim() ||
+        defaultColumn?.label ||
+        titleCaseFromKey(key);
     const maxValue = clampScore(
-      item?.max_value ?? item?.maxValue ?? item?.max ?? defaultColumn?.max_value ?? 10,
+      item?.max_value ?? item?.maxValue ?? item?.max ?? defaultColumn?.max_value ?? catalogEntry?.default_max_value ?? 10,
       1000
     );
 
@@ -1012,3 +1038,12 @@ exports.getEnglishManagerAvailableMonths = async (req, res) => {
     });
   }
 };
+
+exports.getColumnCatalog = async (req, res) => {
+  res.json({ success: true, data: COLUMN_CATALOG });
+};
+
+// Reused by studentController so the parent/student-facing report response
+// gets the same Uzbek-enforced column labels and computed totals as the
+// teacher-facing one, instead of duplicating this logic.
+exports.buildReportPayload = buildReportPayload;

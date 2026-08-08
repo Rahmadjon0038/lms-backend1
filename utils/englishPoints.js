@@ -14,6 +14,23 @@ const normalizeMonthKey = (value) => {
 
 const buildMonthFilter = (month) => normalizeMonthKey(month) || new Date().toISOString().slice(0, 7);
 
+// "So'nggi yozuvlar" ro'yxatida bitta dars-hisobot yozuvi uchun tavsif matni.
+// report_data.columns saqlanayotganda allaqachon o'zbekcha labelga majburlangan
+// (teacherStatisticsController.normalizeColumns), shu bois bu yerda faqat
+// shu ustunlar tartibida "Label qiymat" juftliklarini birlashtirish kifoya —
+// teacher qo'shgan har qanday ustun (standart yoki custom) shu yerda ham chiqadi.
+const buildReportEntryDescription = (rowValues, columns) => {
+  if (!rowValues || typeof rowValues !== 'object') return '';
+  const enabledColumns = (Array.isArray(columns) ? columns : [])
+    .filter((column) => column && column.enabled !== false && column.key)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (enabledColumns.length === 0) return '';
+
+  return enabledColumns
+    .map((column) => `${column.label || column.key} ${rowValues[column.key] ?? 0}`)
+    .join(' • ');
+};
+
 const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
   const normalizedGroupIds = [...new Set(
     (Array.isArray(groupIds) ? groupIds : [groupIds])
@@ -177,7 +194,9 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           spe.created_at AT TIME ZONE 'Asia/Tashkent' AS created_at_local,
           TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
           TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-          TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
+          TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time,
+          NULL::jsonb AS row_values,
+          NULL::jsonb AS report_columns
         FROM student_point_events spe
         LEFT JOIN groups g ON g.id = spe.group_id
         LEFT JOIN users cb ON cb.id = spe.created_by
@@ -219,7 +238,9 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           r.created_at AT TIME ZONE 'Asia/Tashkent' AS created_at_local,
           TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
           TO_CHAR(DATE(r.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-          TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time
+          TO_CHAR(r.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time,
+          row AS row_values,
+          COALESCE(r.report_data->'columns', '[]'::jsonb) AS report_columns
         FROM teacher_lesson_statistics_reports r
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         LEFT JOIN groups g ON g.id = r.group_id
@@ -246,7 +267,12 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
     points: Number.parseInt(row.points, 10) || 0,
     source_type: row.source_type || '',
     title: row.title || '',
-    description: row.description || '',
+    description:
+      row.source_type === 'report'
+        ? buildReportEntryDescription(row.row_values, row.report_columns) ||
+          row.description ||
+          ''
+        : row.description || '',
     metadata: row.metadata || {},
     created_by: row.created_by == null ? null : Number.parseInt(row.created_by, 10),
     created_by_name: row.created_by_name || '',
