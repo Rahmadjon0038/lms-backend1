@@ -8,6 +8,7 @@ const teacherOrAdmin = roleCheck(['teacher', 'admin', 'super_admin']);
 const managerOrAdmin = roleCheck(['english-manager', 'admin', 'super_admin']);
 const managerViewer = roleCheck(['english-manager', 'admin', 'super_admin', 'teacher']);
 
+router.get('/column-catalog', protect, teacherOrAdmin, ctrl.getColumnCatalog);
 router.get('/manager/teachers', protect, managerOrAdmin, ctrl.getEnglishManagerTeachers);
 router.get('/manager/reports', protect, managerOrAdmin, ctrl.getManagerDailyStatistics);
 router.get('/manager/months', protect, managerOrAdmin, ctrl.getEnglishManagerAvailableMonths);

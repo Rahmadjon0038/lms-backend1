@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const crypto = require('crypto');
 const { MONTHLY_POINT_CAP } = require('../config/points');
 const { getScopedBranchId } = require('../utils/branch');
+const { buildReportPayload } = require('./teacherStatisticsController');
 const {
     loadMonthlyGroupMemberStats,
     loadStudentPointHistoryEntries,
@@ -1774,10 +1775,10 @@ exports.getMyGroupInfo = async (req, res) => {
             LEFT JOIN users t ON t.id = r.teacher_id
             LEFT JOIN subjects s ON s.id = r.subject_id
             LEFT JOIN subjects gs ON gs.id = g.subject_id
-            WHERE r.group_id = $2
-              AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $3
+            WHERE r.group_id = $1
+              AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
             ORDER BY r.lesson_date DESC, r.lesson_start_time DESC, r.id DESC
-        `, [studentId, groupId, currentMonth]);
+        `, [groupId, currentMonth]);
 
         const group = groupInfo.rows[0];
         const payment = myPayment.rows[0];
@@ -1868,36 +1869,44 @@ exports.getMyGroupInfo = async (req, res) => {
                 monthly_points: currentUserStat.month_points || 0,
                 rank_in_group: currentRank >= 0 ? currentRank + 1 : 0
             },
-            lesson_reports: lessonReports.rows.map((report) => ({
-                id: report.id,
-                lesson_id: report.lesson_id,
-                group_id: report.group_id,
-                teacher_id: report.teacher_id,
-                subject_id: report.subject_id,
-                report_month: report.report_month,
-                lesson_date: report.lesson_date,
-                lesson_start_time: report.lesson_start_time,
-                lesson_end_time: report.lesson_end_time,
-                homework: report.homework,
-                vocabulary: report.vocabulary,
-                attendance: report.attendance,
-                participation: report.participation,
-                total: report.total,
-                percent: report.percent,
-                feedback: report.feedback,
-                report_data: report.report_data,
-                created_at: report.created_at,
-                updated_at: report.updated_at,
-                created_at_label: report.created_at_label,
-                updated_at_label: report.updated_at_label,
-                teacher_name: [report.teacher_surname, report.teacher_name]
-                    .filter((part) => String(part || '').trim().length > 0)
-                    .join(' ')
-                    .trim(),
-                subject_name: report.subject_name,
-                group_name: report.group_name,
-                rows: Array.isArray(report.report_data?.rows) ? report.report_data.rows : [],
-            })),
+            lesson_reports: lessonReports.rows.map((report) => {
+                // Reuses the teacher-side payload builder so students/parents see the
+                // same Uzbek-enforced column labels and computed totals/rows, instead
+                // of raw report_data where a teacher's custom column label (and any
+                // custom columns beyond the 4 defaults) would otherwise be dropped.
+                const normalized = buildReportPayload(report);
+                return {
+                    id: report.id,
+                    lesson_id: report.lesson_id,
+                    group_id: report.group_id,
+                    teacher_id: report.teacher_id,
+                    subject_id: report.subject_id,
+                    report_month: report.report_month,
+                    lesson_date: report.lesson_date,
+                    lesson_start_time: report.lesson_start_time,
+                    lesson_end_time: report.lesson_end_time,
+                    homework: report.homework,
+                    vocabulary: report.vocabulary,
+                    attendance: report.attendance,
+                    participation: report.participation,
+                    total: report.total,
+                    percent: report.percent,
+                    feedback: report.feedback,
+                    report_data: report.report_data,
+                    created_at: report.created_at,
+                    updated_at: report.updated_at,
+                    created_at_label: report.created_at_label,
+                    updated_at_label: report.updated_at_label,
+                    teacher_name: [report.teacher_surname, report.teacher_name]
+                        .filter((part) => String(part || '').trim().length > 0)
+                        .join(' ')
+                        .trim(),
+                    subject_name: report.subject_name,
+                    group_name: report.group_name,
+                    columns: normalized.columns,
+                    rows: normalized.rows,
+                };
+            }),
             groupmates: mappedGroupmates
         };
 
