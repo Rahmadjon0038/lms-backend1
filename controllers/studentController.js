@@ -1905,6 +1905,7 @@ exports.getMyGroupInfo = async (req, res) => {
                     group_name: report.group_name,
                     columns: normalized.columns,
                     rows: normalized.rows,
+                    grading_enabled: normalized.grading_enabled,
                 };
             }),
             groupmates: mappedGroupmates
