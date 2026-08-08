@@ -348,6 +348,9 @@ const buildReportPayload = (row) => {
     report_data: reportData,
     columns,
     rows: rowsWithTotals,
+    // Eski hisobotlarda bu maydon yo'q — ularda hozirgidek foiz/baho
+    // ko'rsatiladi (true bilan bir xil xatti-harakat).
+    grading_enabled: reportData.grading_enabled !== false,
   };
 };
 
@@ -365,7 +368,8 @@ exports.saveLessonStatistics = async (req, res) => {
       branchId: req.user?.branch_id,
     });
 
-    const { rows = [], columns = [], group_name, lesson_label } = req.body || {};
+    const { rows = [], columns = [], group_name, lesson_label, grading_enabled } = req.body || {};
+    const gradingEnabled = grading_enabled !== false;
     const normalizedColumns = normalizeColumns(columns);
     const normalizedRows = buildRowsWithTotals(normalizeRows(rows, normalizedColumns), normalizedColumns);
     if (normalizedRows.length === 0) {
@@ -425,6 +429,9 @@ exports.saveLessonStatistics = async (req, res) => {
       group_schedule: lesson.group_schedule || null,
       columns: normalizedColumns,
       rows: normalizedRows,
+      // false bo'lsa — teacher "Ball" (oddiy ball) rejimini tanlagan:
+      // foiz/baho hisoblanmaydi/ko'rsatilmaydi, faqat jami ball qoladi.
+      grading_enabled: gradingEnabled,
     };
 
     const enabledColumns = normalizedColumns.filter((column) => column.enabled !== false);
