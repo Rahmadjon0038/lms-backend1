@@ -3048,12 +3048,16 @@ exports.getGroupLessons = async (req, res) => {
          CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent,
          CASE
            WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
-           WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) > 0 THEN 'marked'
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+            AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+             THEN 'marked'
            ELSE 'not_marked'
          END as attendance_state,
          CASE
            WHEN COALESCE(l.is_holiday, false) = true THEN false
-           WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) > 0 THEN true
+           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+            AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+             THEN true
            ELSE false
         END as attendance_completed
        FROM lessons l
