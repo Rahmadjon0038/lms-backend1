@@ -16,6 +16,12 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors());
+// API javoblari brauzer/oraliq proksi tomonidan keshlanmasin — aks holda
+// backend yangilangandan keyin ham eski (stale) javob ko'rsatilib qolishi mumkin.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 

@@ -783,7 +783,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
          SELECT
            l.id,
            l.group_id,
-           l.teacher_id,
+           g3.teacher_id AS current_teacher_id,
            CASE
              WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
               AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
@@ -811,14 +811,14 @@ exports.getTeachersAttendanceList = async (req, res) => {
              : normalizedShift === 'evening'
                ? `AND l.start_time >= '13:00:00'::time`
                : ''}
-         GROUP BY l.id, l.group_id, l.teacher_id
+         GROUP BY l.id, l.group_id, g3.teacher_id
        )
        SELECT
-         teacher_id,
+         current_teacher_id AS teacher_id,
          COUNT(DISTINCT group_id) as groups_with_lessons,
          COUNT(DISTINCT CASE WHEN attendance_completed THEN group_id END) as completed_groups
        FROM lesson_attendance
-       GROUP BY teacher_id`,
+       GROUP BY current_teacher_id`,
       [attendanceDate, branchId, subjectIdParam]
     );
 
@@ -1040,7 +1040,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          LEFT JOIN teacher_lesson_statistics_reports r
            ON r.lesson_id = l.id
           AND r.branch_id = $3
-         WHERE l.teacher_id = $1
+         WHERE l.group_id = ANY($1::int[])
            AND l.date = $2::date
            AND l.branch_id = $3
            AND COALESCE(l.is_holiday, false) = false
@@ -1058,7 +1058,7 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          BOOL_AND(report_sent) as all_reports_sent
        FROM lesson_stats
        GROUP BY group_id`,
-      [teacherIdNum, attendanceDate, branchId]
+      [filteredGroups.map((g) => g.group_id), attendanceDate, branchId]
     );
 
     const lessonStatsMap = new Map();
@@ -3199,7 +3199,10 @@ exports.getMyLessons = async (req, res) => {
                AND DATE(sg.joined_at) <= l.date
                AND (sg.left_at IS NULL OR DATE(sg.left_at) > l.date)
            )
-       WHERE l.teacher_id = $1
+       WHERE (
+         (l.date >= CURRENT_DATE AND g.teacher_id = $1)
+         OR (l.date < CURRENT_DATE AND l.teacher_id = $1)
+       )
          AND l.branch_id = $2
          ${filterQuery}
        GROUP BY l.id, g.name, s.name, gs.name, r.room_number, l.is_holiday
