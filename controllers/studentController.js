@@ -1474,6 +1474,10 @@ exports.getMyGroups = async (req, res) => {
     try {
         const studentId = req.user.id;
         const currentMonth = getCurrentMonthKey();
+        const requestedMonth = buildMonthFilter(req.query.month);
+        const targetMonth = requestedMonth || currentMonth;
+        const isCurrentMonth = targetMonth === currentMonth;
+        const monthStart = `${targetMonth}-01`;
 
         console.log(`🎓 Student ${studentId} o'z guruhlarini so'ramoqda`);
 
@@ -1514,6 +1518,12 @@ exports.getMyGroups = async (req, res) => {
             LEFT JOIN rooms r ON g.room_id = r.id
             
             WHERE sg.student_id = $1
+              ${
+                isCurrentMonth
+                  ? `AND sg.status = 'active'`
+                  : `AND DATE(sg.joined_at) <= (DATE($2) + INTERVAL '1 month - 1 day')
+                      AND (sg.left_at IS NULL OR DATE(sg.left_at) >= DATE($2))`
+              }
             ORDER BY 
                 CASE sg.status 
                     WHEN 'active' THEN 1
@@ -1522,7 +1532,7 @@ exports.getMyGroups = async (req, res) => {
                     ELSE 4
                 END,
                 g.name
-        `, [studentId]);
+        `, isCurrentMonth ? [studentId] : [studentId, monthStart]);
 
         const groupsData = myGroups.rows.map(group => ({
                 group_id: group.group_id,
