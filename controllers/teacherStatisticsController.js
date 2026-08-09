@@ -537,10 +537,13 @@ exports.saveLessonStatistics = async (req, res) => {
     const lessonDateLabel = lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '';
     // "Ball" rejimida (grading_enabled=false) foiz/baho ma'noga ega emas —
     // xabar matnida ham ko'rsatilmasin.
+    const reportSubjectLabel = lesson.subject_name
+      ? `${lesson.subject_name} — ${lesson.group_name}`
+      : lesson.group_name;
     const reportNotificationBody = (row) =>
       gradingEnabled
-        ? `${lesson.group_name}: ${row.total} ball (${row.percent}%)`
-        : `${lesson.group_name}: ${row.total} ball`;
+        ? `${reportSubjectLabel}: ${row.total} ball (${row.percent}%)`
+        : `${reportSubjectLabel}: ${row.total} ball`;
     for (const row of normalizedRows) {
       if (!row.student_id) continue;
       try {

@@ -325,7 +325,10 @@ const processAttendanceRecordsForLesson = async ({
       };
       const humanStatus = statusLabels[record.status] || record.status;
       const markedAtLabel = formatTashkentDateTimeLabel();
-      const pushBody = `${humanStatus}\n${markedAtLabel}`;
+      const pushSubjectName = lesson.subject_name || lesson.group_name || '';
+      const pushBody = pushSubjectName
+        ? `${pushSubjectName} — ${humanStatus}\n${markedAtLabel}`
+        : `${humanStatus}\n${markedAtLabel}`;
 
       try {
         await notifyUser({

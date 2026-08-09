@@ -1018,7 +1018,8 @@ exports.makeSnapshotPayment = async (req, res) => {
     const paymentTitle = 'To\'lov qabul qilindi';
     const monthLabel = formatMonthLabel(month);
     const amountLabel = Number(amount).toLocaleString('en-US');
-    const paymentBody = `${monthLabel} uchun ${amountLabel} so'm to'lov qabul qilindi. To'lov qabul qiluvchi: ${adminName}.`;
+    const paymentSubjectName = snapshot.subject_name || snapshot.group_name || '';
+    const paymentBody = `${paymentSubjectName ? paymentSubjectName + ' — ' : ''}${monthLabel} uchun ${amountLabel} so'm to'lov qabul qilindi. To'lov qabul qiluvchi: ${adminName}.`;
     const notificationData = {
       route: '/notification-detail',
       type: 'payment',
@@ -1262,8 +1263,9 @@ exports.giveSnapshotDiscount = async (req, res) => {
     const discountReason = String(description ?? '').trim();
     const monthLabel = formatMonthLabel(month);
     const scopeLabel = scope === 'teacher' ? 'Teacher chegirmasi' : 'Markaz chegirmasi';
+    const discountSubjectName = snapshot.subject_name || snapshot.group_name || '';
     const discountBodyParts = [
-      `${monthLabel} uchun ${scopeLabel.toLowerCase()}: ${discountAmount.toLocaleString('en-US')} so'm.`,
+      `${discountSubjectName ? discountSubjectName + ' — ' : ''}${monthLabel} uchun ${scopeLabel.toLowerCase()}: ${discountAmount.toLocaleString('en-US')} so'm.`,
     ];
     if (discountReason) {
       discountBodyParts.push(`Sabab: ${discountReason}.`);

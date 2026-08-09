@@ -1174,12 +1174,18 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
         monthlyItem.total_points += entry.points;
         monthlyItem.total_events += 1;
 
-        const teacherKey = `${entry.month_name}:${entry.created_by ?? 'null'}:${entry.created_by_name}`;
+        // Kim harakatni bajargani (masalan admin davomat belgilagan)
+        // emas, balki guruhning HAQIQIY (biriktirilgan) o'qituvchisi
+        // nomidan ko'rsatamiz — shu bilan bir guruhning davomat va
+        // hisobot ballari bitta to'g'ri o'qituvchi ostida birlashadi.
+        const attributedTeacherId = entry.group_teacher_id ?? entry.created_by;
+        const attributedTeacherName = entry.group_teacher_name || entry.created_by_name;
+        const teacherKey = `${entry.month_name}:${attributedTeacherId ?? 'null'}:${attributedTeacherName}`;
         if (!teacherMap.has(teacherKey)) {
             teacherMap.set(teacherKey, {
                 month_name: entry.month_name,
-                teacher_id: entry.created_by,
-                teacher_name: entry.created_by_name || 'Noma\'lum',
+                teacher_id: attributedTeacherId,
+                teacher_name: attributedTeacherName || 'Noma\'lum',
                 total_points: 0,
                 total_events: 0,
             });

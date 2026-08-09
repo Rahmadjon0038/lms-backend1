@@ -191,6 +191,8 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           spe.metadata,
           spe.created_by,
           COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', '') AS created_by_name,
+          g.teacher_id AS group_teacher_id,
+          NULLIF(TRIM(gt.name || ' ' || gt.surname), '') AS group_teacher_name,
           spe.created_at AT TIME ZONE 'Asia/Tashkent' AS created_at_local,
           TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
           TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
@@ -200,6 +202,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
         FROM student_point_events spe
         LEFT JOIN groups g ON g.id = spe.group_id
         LEFT JOIN users cb ON cb.id = spe.created_by
+        LEFT JOIN users gt ON gt.id = g.teacher_id
         WHERE ${eventFilters.join(' AND ')}
           AND NOT EXISTS (
             SELECT 1 FROM teacher_lesson_statistics_reports r2
@@ -235,6 +238,8 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           ) AS metadata,
           r.created_by,
           COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), r.report_data->>'created_by_name', '') AS created_by_name,
+          g.teacher_id AS group_teacher_id,
+          NULLIF(TRIM(gt.name || ' ' || gt.surname), '') AS group_teacher_name,
           -- "Qachon" sifatida hisobot bazaga saqlangan payt emas, balki
           -- darsning o'zi bo'lib o'tgan sana ishlatiladi — aks holda
           -- kechikib (masalan bugun eski darsga) kiritilgan hisobot
@@ -251,6 +256,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         LEFT JOIN groups g ON g.id = r.group_id
         LEFT JOIN users cb ON cb.id = r.created_by
+        LEFT JOIN users gt ON gt.id = g.teacher_id
         WHERE row->>'student_id' = $1::text
           ${groupParamIndex ? `AND r.group_id = $${groupParamIndex}` : ''}
           ${monthKey ? `AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $${monthParamIndex}` : ''}
@@ -282,6 +288,8 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
     metadata: row.metadata || {},
     created_by: row.created_by == null ? null : Number.parseInt(row.created_by, 10),
     created_by_name: row.created_by_name || '',
+    group_teacher_id: row.group_teacher_id == null ? null : Number.parseInt(row.group_teacher_id, 10),
+    group_teacher_name: row.group_teacher_name || '',
     created_at: row.created_at || '',
     day_key: row.day_key || '',
     created_time: row.created_time || '',
