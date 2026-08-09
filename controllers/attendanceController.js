@@ -338,6 +338,7 @@ const processAttendanceRecordsForLesson = async ({
           body: humanStatus,
           pushTitle: 'Davomat belgilandi',
           pushBody,
+          branchId: lesson.group_branch_id || lesson.branch_id || null,
           data: {
             route: '/notification-detail',
             type: 'attendance',

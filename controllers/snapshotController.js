@@ -93,6 +93,20 @@ const getDiscountTotalsForSnapshot = async (studentId, groupId, month, branchId,
   );
 };
 
+const formatNumberWithSpaces = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return String(value ?? '').trim();
+  }
+
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 2,
+    useGrouping: true,
+  })
+    .format(numeric)
+    .replace(/,/g, ' ');
+};
+
 /**
  * ===================================================================
  * MONTHLY SNAPSHOT CONTROLLER
@@ -1048,6 +1062,7 @@ exports.makeSnapshotPayment = async (req, res) => {
         body: paymentBody,
         pushTitle: 'Taraqqiyot Teaching Center',
         pushBody: paymentBody,
+        branchId,
         data: notificationData,
         createdBy: adminId,
       });
@@ -1307,6 +1322,7 @@ exports.giveSnapshotDiscount = async (req, res) => {
         body: discountBody,
         pushTitle: 'Taraqqiyot Teaching Center',
         pushBody: discountBody,
+        branchId,
         data: discountNotificationData,
         createdBy: adminId,
       });
@@ -1338,6 +1354,176 @@ exports.giveSnapshotDiscount = async (req, res) => {
       success: false,
       message: 'Chegirma berishda xatolik',
       error: error.message
+    });
+  }
+};
+
+/**
+ * 6. QARZLI TALABALARGA TO'LOV OG'OHLANTIRISHI YUBORISH
+ */
+exports.sendPaymentReminderNotifications = async (req, res) => {
+  try {
+    const { month, message } = req.body;
+    const { role, id: adminId } = req.user;
+    const branchId = getScopedBranchId(req);
+    const adminName = await getUserDisplayName(adminId);
+    const reminderText = String(message ?? '').trim();
+
+    if (role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Faqat admin ogohlantirish yubora oladi',
+      });
+    }
+
+    if (!branchId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Filial topilmadi',
+      });
+    }
+
+    if (!month || !/^\d{4}-\d{2}$/.test(String(month).trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Oy formati noto\'g\'ri. YYYY-MM ko\'rinishida yuboring',
+      });
+    }
+
+    if (!reminderText) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ogohlantirish matni kiritilmagan',
+      });
+    }
+
+    const debtResult = await db.query(
+      `
+        SELECT
+          ms.student_id,
+          ms.group_id,
+          ms.group_name,
+          ms.subject_name,
+          ms.teacher_name,
+          ms.month,
+          ms.debt_amount,
+          ms.paid_amount,
+          ms.required_amount,
+          (ms.required_amount - COALESCE(ms.discount_amount, 0)) AS effective_required,
+          ms.payment_status,
+          ms.student_name,
+          ms.student_surname
+        FROM monthly_snapshots ms
+        WHERE ms.branch_id = $1
+          AND ms.month = $2
+          AND COALESCE(ms.debt_amount, 0) > 0
+          AND COALESCE(ms.student_id, 0) > 0
+          AND COALESCE(ms.group_id, 0) > 0
+          AND ms.payment_status IN ('unpaid', 'partial')
+        ORDER BY ms.group_name ASC, ms.student_surname ASC, ms.student_name ASC
+      `,
+      [branchId, month]
+    );
+
+    if (debtResult.rows.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Qarzdor talabalar topilmadi',
+        data: {
+          month,
+          sent_count: 0,
+          failed_count: 0,
+          total_debt_students: 0,
+        },
+      });
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const row of debtResult.rows) {
+      const debtAmount = Number(row.debt_amount) || 0;
+      const effectiveRequired = Number(row.effective_required ?? row.required_amount) || 0;
+      const paidAmount = Number(row.paid_amount) || 0;
+      const studentFullName = [row.student_surname, row.student_name]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || 'Hurmatli talaba';
+      const groupName = String(row.group_name ?? '').trim();
+      const subjectName = String(row.subject_name ?? '').trim();
+      const monthLabel = formatMonthLabel(month);
+      const reminderTitle = `${subjectName || 'To\'lov'} bo\'yicha ogohlantirish`;
+      const debtText = `${formatNumberWithSpaces(debtAmount)} so'm`;
+      const detailParts = [
+        groupName ? `${groupName}` : '',
+        subjectName ? `${subjectName}` : '',
+      ].filter(Boolean);
+
+      const reminderBody = [
+        `${studentFullName}, sizda ${debtText} qarz mavjud.`,
+        detailParts.length > 0 ? `(${detailParts.join(' / ')})` : '',
+        reminderText,
+      ].filter(Boolean).join(' ');
+
+      const notificationData = {
+        route: '/notification-detail',
+        type: 'payment_reminder',
+        month,
+        month_label: monthLabel,
+        student_id: String(row.student_id),
+        group_id: String(row.group_id),
+        group_name: groupName,
+        subject_name: subjectName,
+        teacher_name: String(row.teacher_name ?? '').trim(),
+        debt_amount: String(debtAmount),
+        paid_amount: String(paidAmount),
+        required_amount: String(row.required_amount ?? ''),
+        effective_required: String(effectiveRequired),
+        payment_status: String(row.payment_status ?? ''),
+        admin_name: adminName,
+        reminder_message: reminderText,
+        title: reminderTitle,
+        body: reminderBody,
+      };
+
+      try {
+        await notifyUser({
+          userId: Number(row.student_id),
+          type: 'payment_reminder',
+          title: reminderTitle,
+          body: reminderBody,
+          pushTitle: reminderTitle,
+          pushBody: reminderBody,
+          data: notificationData,
+          createdBy: adminId,
+          branchId,
+        });
+        sentCount += 1;
+      } catch (notifyError) {
+        console.error(
+          `To'lov ogohlantiruvi yuborishda xato (student_id=${row.student_id}, group_id=${row.group_id}):`,
+          notifyError
+        );
+        failedCount += 1;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'To\'lov ogohlantirishlari yuborildi',
+      data: {
+        month,
+        total_debt_students: debtResult.rows.length,
+        sent_count: sentCount,
+        failed_count: failedCount,
+      },
+    });
+  } catch (error) {
+    console.error('To\'lov ogohlantirish endpoint xatoligi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server xatoligi',
+      error: error.message,
     });
   }
 };
@@ -2746,5 +2932,6 @@ module.exports = {
   getAvailableSnapshots: exports.getAvailableSnapshots,
   createSnapshotForNewStudents: exports.createSnapshotForNewStudents,
   getNewStudentsNotification: exports.getNewStudentsNotification,
+  sendPaymentReminderNotifications: exports.sendPaymentReminderNotifications,
   exportSnapshotsToExcel: exports.exportSnapshotsToExcel
 };

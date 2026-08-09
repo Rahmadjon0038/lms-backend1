@@ -354,6 +354,30 @@ const buildReportPayload = (row) => {
   };
 };
 
+const buildReportNotificationColumns = (row, columns = []) => {
+  return (Array.isArray(columns) ? columns : [])
+    .filter((column) => column && column.enabled !== false)
+    .map((column) => ({
+      key: column.key,
+      label: column.label,
+      value: clampScore(row?.values?.[column.key], column.max_value),
+      max_value: column.max_value,
+    }));
+};
+
+const buildReportNotificationBody = (row, columns = []) => {
+  const items = buildReportNotificationColumns(row, columns)
+    .map((column) => `${column.label} ${column.value}`)
+    .filter((part) => part.trim().length > 0);
+
+  const totalText = `Jami ${asInt(row?.total)} ball`;
+  if (items.length === 0) {
+    return totalText;
+  }
+
+  return `${items.join(' • ')} • ${totalText}`;
+};
+
 exports.saveLessonStatistics = async (req, res) => {
   try {
     const lessonId = asInt(req.params.lessonId);
@@ -540,23 +564,24 @@ exports.saveLessonStatistics = async (req, res) => {
     const reportSubjectLabel = lesson.subject_name
       ? `${lesson.subject_name} — ${lesson.group_name}`
       : lesson.group_name;
-    const reportNotificationBody = (row) =>
-      gradingEnabled
-        ? `${reportSubjectLabel}: ${row.total} ball (${row.percent}%)`
-        : `${reportSubjectLabel}: ${row.total} ball`;
     for (const row of normalizedRows) {
       if (!row.student_id) continue;
+      const reportNotificationBody = buildReportNotificationBody(row, normalizedColumns);
+      const reportNotificationColumns = buildReportNotificationColumns(row, normalizedColumns);
       try {
         await notifyUser({
           userId: row.student_id,
           type: 'report',
           title: 'Dars hisoboti',
-          body: reportNotificationBody(row),
+          body: reportNotificationBody,
           pushTitle: 'Yangi dars hisoboti',
-          pushBody: reportNotificationBody(row),
+          pushBody: reportNotificationBody,
+          branchId: reportBranchId,
           data: {
             route: '/notification-detail',
             type: 'report',
+            title: 'Dars hisoboti',
+            body: reportNotificationBody,
             lesson_id: String(lessonId),
             lesson_date: lessonDateLabel,
             report_month: reportMonth,
@@ -568,6 +593,7 @@ exports.saveLessonStatistics = async (req, res) => {
             percent: String(row.percent),
             feedback: row.feedback || '',
             grading_enabled: String(gradingEnabled),
+            report_columns: reportNotificationColumns,
           },
           createdBy: req.user.id,
         });

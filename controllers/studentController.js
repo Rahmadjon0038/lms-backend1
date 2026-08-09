@@ -1695,6 +1695,23 @@ exports.getMyGroupInfo = async (req, res) => {
 
         // Guruh a'zolari (guruh doshlari)
         const groupmates = await pool.query(`
+            WITH latest_memberships AS (
+                SELECT DISTINCT ON (sg.student_id)
+                    sg.id,
+                    sg.student_id,
+                    sg.group_id,
+                    sg.status,
+                    sg.joined_at,
+                    sg.left_at,
+                    sg.branch_id
+                FROM student_groups sg
+                WHERE sg.group_id = $1
+                ORDER BY
+                    sg.student_id,
+                    COALESCE(sg.left_at, sg.joined_at) DESC NULLS LAST,
+                    sg.joined_at DESC NULLS LAST,
+                    sg.id DESC
+            )
             SELECT 
                 u.id,
                 u.name,
@@ -1712,23 +1729,14 @@ exports.getMyGroupInfo = async (req, res) => {
                     WHEN sg.status = 'finished' THEN 'Bitirgan'
                     ELSE 'Nomaʻlum'
                 END as status_description
-            FROM student_groups sg
+            FROM latest_memberships sg
             JOIN users u ON sg.student_id = u.id
             LEFT JOIN profile_avatars pa
               ON LOWER(BTRIM(COALESCE(u.avatar_key, ''))) = LOWER(BTRIM(COALESCE(pa.avatar_key, '')))
              AND pa.branch_id = u.branch_id
-            WHERE sg.group_id = $1
-              AND sg.joined_at::date <= (TO_DATE($2, 'YYYY-MM') + INTERVAL '1 month' - INTERVAL '1 day')::date
-              AND (sg.left_at IS NULL OR sg.left_at::date >= TO_DATE($2, 'YYYY-MM')::date)
-            ORDER BY 
-                CASE sg.status 
-                    WHEN 'active' THEN 1
-                    WHEN 'stopped' THEN 2  
-                    WHEN 'finished' THEN 3
-                    ELSE 4
-                END,
-                u.surname, u.name, u.id
-        `, [groupId, currentMonth]);
+            WHERE sg.status = 'active'
+            ORDER BY u.surname, u.name, u.id
+        `, [groupId]);
 
         // Mening to'lov ma'lumotlarim
         const myPayment = await pool.query(`

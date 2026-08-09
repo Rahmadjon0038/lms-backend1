@@ -1803,6 +1803,24 @@ exports.getGroupById = async (req, res) => {
             ? requestedMonth
             : new Date().toISOString().slice(0, 7);
         const studentsResult = await pool.query(`
+            WITH latest_memberships AS (
+                SELECT DISTINCT ON (sg.student_id)
+                    sg.id,
+                    sg.student_id,
+                    sg.group_id,
+                    sg.status,
+                    sg.joined_at,
+                    sg.left_at,
+                    sg.branch_id
+                FROM student_groups sg
+                WHERE sg.group_id = $1
+                  AND sg.branch_id = $3
+                ORDER BY
+                    sg.student_id,
+                    COALESCE(sg.left_at, sg.joined_at) DESC NULLS LAST,
+                    sg.joined_at DESC NULLS LAST,
+                    sg.id DESC
+            )
             SELECT
                 u.id,
                 u.name,
@@ -1835,8 +1853,8 @@ exports.getGroupById = async (req, res) => {
                 END as group_status_description,
                 sg.joined_at,
                 sg.left_at
-            FROM users u
-            JOIN student_groups sg ON u.id = sg.student_id AND u.branch_id = sg.branch_id
+            FROM latest_memberships sg
+            JOIN users u ON u.id = sg.student_id AND u.branch_id = sg.branch_id
             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
             LEFT JOIN (
                 SELECT student_id, SUM(points) as monthly_points
@@ -1844,9 +1862,8 @@ exports.getGroupById = async (req, res) => {
                 WHERE group_id = $1 AND month_name = $2 AND branch_id = $3
                 GROUP BY student_id
             ) spe ON spe.student_id = u.id
-            WHERE sg.group_id = $1 AND sg.branch_id = $3
-              AND sg.status = 'active'
-            ORDER BY sg.status = 'active' DESC, COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name`, [id, currentMonth, branchId]);
+            WHERE sg.status = 'active'
+            ORDER BY COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name, u.id`, [id, currentMonth, branchId]);
 
         const monthlyStats = await loadMonthlyGroupMemberStats({
             groupIds: [id],
@@ -1956,12 +1973,28 @@ exports.getGroupViewForStudent = async (req, res) => {
 
         // Guruh a'zolari (faqat ism-familiya)
         const groupMembers = await pool.query(`
+            WITH latest_memberships AS (
+                SELECT DISTINCT ON (sg.student_id)
+                    sg.student_id,
+                    sg.group_id,
+                    sg.status,
+                    sg.joined_at,
+                    sg.left_at,
+                    sg.id
+                FROM student_groups sg
+                WHERE sg.group_id = $1
+                ORDER BY
+                    sg.student_id,
+                    COALESCE(sg.left_at, sg.joined_at) DESC NULLS LAST,
+                    sg.joined_at DESC NULLS LAST,
+                    sg.id DESC
+            )
             SELECT 
                 u.name,
                 u.surname
-            FROM users u
-            JOIN student_groups sg ON u.id = sg.student_id
-            WHERE sg.group_id = $1 AND sg.status = 'active'
+            FROM latest_memberships sg
+            JOIN users u ON u.id = sg.student_id
+            WHERE sg.status = 'active'
             ORDER BY u.name
         `, [groupId]);
 

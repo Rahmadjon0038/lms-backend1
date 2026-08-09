@@ -482,6 +482,43 @@ router.post('/discount', protect, snapshotController.giveSnapshotDiscount);
 
 /**
  * @swagger
+ * /api/snapshots/payment-reminder:
+ *   post:
+ *     tags: [Monthly Snapshots]
+ *     summary: Send payment reminder notifications to students with debt
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - month
+ *               - message
+ *             properties:
+ *               month:
+ *                 type: string
+ *                 format: YYYY-MM
+ *                 description: Month in YYYY-MM format
+ *                 example: "2026-08"
+ *               message:
+ *                 type: string
+ *                 description: Reminder text written by admin
+ *                 example: "Iltimos, qarzdorlikni erta to'lab qo'ying."
+ *     responses:
+ *       200:
+ *         description: Reminder notifications sent successfully
+ *       400:
+ *         description: Invalid parameters
+ *       403:
+ *         description: Forbidden
+ */
+router.post('/payment-reminder', protect, snapshotController.sendPaymentReminderNotifications);
+
+/**
+ * @swagger
  * /api/snapshots/reset-payment:
  *   post:
  *     tags: [Monthly Snapshots]
