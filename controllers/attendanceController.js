@@ -761,6 +761,7 @@ exports.getTeachersAttendanceList = async (req, res) => {
        JOIN groups g ON g.id = sg.group_id
        WHERE g.id = ANY($1::int[])
           AND DATE(sg.joined_at) <= $2::date
+          AND (sg.left_at IS NULL OR DATE(sg.left_at) > $2::date)
           AND g.branch_id = $3
           AND sg.branch_id = $3
         GROUP BY g.teacher_id`,
@@ -784,7 +785,9 @@ exports.getTeachersAttendanceList = async (req, res) => {
            l.group_id,
            l.teacher_id,
            CASE
-             WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) > 0 THEN true
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+             THEN true
              ELSE false
            END as attendance_completed
          FROM lessons l
@@ -1016,6 +1019,12 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
            l.group_id,
            COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
            COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) as marked_students_count,
+           CASE
+             WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+             THEN true
+             ELSE false
+           END as attendance_completed,
            CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent
          FROM lessons l
          LEFT JOIN attendance a ON a.lesson_id = l.id
@@ -1042,6 +1051,8 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
          COUNT(*) as lessons_today_count,
          COALESCE(SUM(active_students_count), 0) as active_students_count,
          COALESCE(SUM(marked_students_count), 0) as marked_students_count,
+         BOOL_OR(attendance_completed) as any_attendance_completed,
+         BOOL_AND(attendance_completed) as all_attendance_completed,
          COUNT(*) FILTER (WHERE report_sent) as reported_lessons_count,
          BOOL_OR(report_sent) as any_report_sent,
          BOOL_AND(report_sent) as all_reports_sent
@@ -1056,6 +1067,8 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         lessons_today_count: Number(row.lessons_today_count) || 0,
         active_students_count: Number(row.active_students_count) || 0,
         marked_students_count: Number(row.marked_students_count) || 0,
+        any_attendance_completed: Boolean(row.any_attendance_completed),
+        all_attendance_completed: Boolean(row.all_attendance_completed),
         reported_lessons_count: Number(row.reported_lessons_count) || 0,
         any_report_sent: Boolean(row.any_report_sent),
         all_reports_sent: Boolean(row.all_reports_sent)
@@ -1067,6 +1080,8 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         lessons_today_count: 0,
         active_students_count: 0,
         marked_students_count: 0,
+        any_attendance_completed: false,
+        all_attendance_completed: false,
         reported_lessons_count: 0,
         any_report_sent: false,
         all_reports_sent: false
@@ -1078,6 +1093,8 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
         today_lessons_count: stats.lessons_today_count,
         today_active_students_count: stats.active_students_count,
         today_marked_students_count: stats.marked_students_count,
+        today_attendance_completed: stats.any_attendance_completed,
+        today_attendance_fully_completed: stats.all_attendance_completed,
         today_reported_lessons_count: stats.reported_lessons_count,
         today_report_sent: stats.any_report_sent,
         today_report_fully_sent: stats.all_reports_sent
