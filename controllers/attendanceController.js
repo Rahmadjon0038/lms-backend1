@@ -274,7 +274,7 @@ const processAttendanceRecordsForLesson = async ({
     }
 
     const existingAttendance = await pool.query(
-      `SELECT id, student_id, monthly_status, status
+      `SELECT id, student_id, monthly_status, status, COALESCE(is_marked, false) as is_marked
        FROM attendance
        WHERE id = $1 AND lesson_id = $2`,
       [record.attendance_id, lesson.id]
@@ -294,7 +294,8 @@ const processAttendanceRecordsForLesson = async ({
     }
 
     const currentStatus = currentAttendance.status === '' ? null : currentAttendance.status;
-    if (currentStatus === normalizedStatus) {
+    const nextIsMarked = !isCleared;
+    if (currentStatus === normalizedStatus && Boolean(currentAttendance.is_marked) === nextIsMarked) {
       console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, status o'zgarmadi`);
       continue;
     }
@@ -789,14 +790,14 @@ exports.getTeachersAttendanceList = async (req, res) => {
     }
 
     const completedResult = await pool.query(
-      `WITH lesson_attendance AS (
+        `WITH lesson_attendance AS (
          SELECT
            l.id,
            l.group_id,
            g3.teacher_id AS current_teacher_id,
            CASE
              WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
-              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
              THEN true
              ELSE false
            END as attendance_completed
@@ -1023,15 +1024,15 @@ exports.getTeacherGroupsForAttendance = async (req, res) => {
     });
 
     const lessonStatsResult = await pool.query(
-      `WITH lesson_stats AS (
+       `WITH lesson_stats AS (
          SELECT
            l.id as lesson_id,
            l.group_id,
            COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
-           COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) as marked_students_count,
+           COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
            CASE
              WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
-              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+              AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
              THEN true
              ELSE false
            END as attendance_completed,
@@ -1279,14 +1280,14 @@ exports.getGroupsForAttendance = async (req, res) => {
     if (filteredGroups.length > 0) {
       const groupIds = filteredGroups.map((g) => g.id);
       const lessonStatsResult = await pool.query(
-        `WITH lesson_attendance AS (
+      `WITH lesson_attendance AS (
            SELECT
              l.id as lesson_id,
              l.group_id,
              COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) as active_students_count,
-             COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) as marked_students_count,
+             COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) as marked_students_count,
              CASE
-               WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END) > 0 THEN true
+               WHEN COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END) > 0 THEN true
                ELSE false
              END as attendance_completed,
              CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent
@@ -3043,12 +3044,12 @@ exports.getGroupLessons = async (req, res) => {
          l.room_id,
          s2.name as lesson_subject_name,
          r2.room_number as lesson_room_number,
-         COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END)
-           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as total_students,
-         COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END)
-           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as active_students_count,
-         COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
-           FILTER (WHERE COALESCE(l.is_holiday, false) = false) as marked_students_count,
+        COUNT(CASE WHEN a.monthly_status = 'active' OR (COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kechikdi')) THEN 1 END)
+          FILTER (WHERE COALESCE(l.is_holiday, false) = false) as total_students,
+        COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END)
+          FILTER (WHERE COALESCE(l.is_holiday, false) = false) as active_students_count,
+        COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
+          FILTER (WHERE COALESCE(l.is_holiday, false) = false) as marked_students_count,
          COUNT(CASE WHEN a.status = 'keldi' AND COALESCE(a.is_marked, false) THEN 1 END)
            FILTER (WHERE COALESCE(l.is_holiday, false) = false) as present_count,
          COUNT(CASE WHEN a.status = 'kelmadi' AND a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
@@ -3056,19 +3057,19 @@ exports.getGroupLessons = async (req, res) => {
          COUNT(CASE WHEN a.status = 'kechikdi' AND COALESCE(a.is_marked, false) THEN 1 END)
          FILTER (WHERE COALESCE(l.is_holiday, false) = false) as late_count,
          CASE WHEN r.lesson_id IS NOT NULL THEN true ELSE false END as report_sent,
-         CASE
-           WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
-           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
-            AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+        CASE
+          WHEN COALESCE(l.is_holiday, false) = true THEN 'holiday'
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+           AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
              THEN 'marked'
-           ELSE 'not_marked'
-         END as attendance_state,
-         CASE
-           WHEN COALESCE(l.is_holiday, false) = true THEN false
-           WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
-            AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) AND a.status IN ('keldi', 'kelmadi') THEN 1 END)
+          ELSE 'not_marked'
+        END as attendance_state,
+        CASE
+          WHEN COALESCE(l.is_holiday, false) = true THEN false
+          WHEN COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) > 0
+           AND COUNT(CASE WHEN a.monthly_status = 'active' THEN 1 END) = COUNT(CASE WHEN a.monthly_status = 'active' AND COALESCE(a.is_marked, false) THEN 1 END)
              THEN true
-           ELSE false
+          ELSE false
         END as attendance_completed
        FROM lessons l
        LEFT JOIN attendance a ON l.id = a.lesson_id AND a.branch_id = $3
