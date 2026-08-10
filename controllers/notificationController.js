@@ -13,6 +13,19 @@ const safeJson = (value) => {
   return value;
 };
 
+const getNotificationDedupeKey = (data) => {
+  if (!data || typeof data !== 'object') {
+    return '';
+  }
+
+  const rawKey = data.dedupe_key;
+  if (typeof rawKey !== 'string') {
+    return '';
+  }
+
+  return rawKey.trim();
+};
+
 const createNotificationRecord = async ({
   userId,
   type = 'payment',
@@ -30,18 +43,63 @@ const createNotificationRecord = async ({
     );
     resolvedBranchId = userBranch.rows[0]?.branch_id || 1;
   }
+
+  const dedupeKey = getNotificationDedupeKey(data);
+  if (dedupeKey) {
+    const existing = await db.query(
+      `
+        SELECT *
+        FROM notifications
+        WHERE user_id = $1
+          AND type = $2
+          AND data->>'dedupe_key' = $3
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [userId, type, dedupeKey],
+    );
+
+    if (existing.rows[0]) {
+      return existing.rows[0];
+    }
+  }
+
   const result = await db.query(
     `
       INSERT INTO notifications (
         user_id, type, title, body, data, created_by, branch_id
       )
       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+      ON CONFLICT DO NOTHING
       RETURNING *
     `,
     [userId, type, title, body, JSON.stringify(safeJson(data)), createdBy, resolvedBranchId],
   );
 
-  return result.rows[0];
+  if (result.rows[0]) {
+    return result.rows[0];
+  }
+
+  if (dedupeKey) {
+    const existing = await db.query(
+      `
+        SELECT *
+        FROM notifications
+        WHERE user_id = $1
+          AND type = $2
+          AND data->>'dedupe_key' = $3
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [userId, type, dedupeKey],
+    );
+
+    if (existing.rows[0]) {
+      return existing.rows[0];
+    }
+  }
+
+  return null;
 };
 
 const sendNotificationToUser = async ({

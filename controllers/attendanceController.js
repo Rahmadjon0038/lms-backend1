@@ -273,6 +273,32 @@ const processAttendanceRecordsForLesson = async ({
       throw error;
     }
 
+    const existingAttendance = await pool.query(
+      `SELECT id, student_id, monthly_status, status
+       FROM attendance
+       WHERE id = $1 AND lesson_id = $2`,
+      [record.attendance_id, lesson.id]
+    );
+
+    if (existingAttendance.rows.length === 0) {
+      const error = new Error('Attendance topilmadi');
+      error.statusCode = 404;
+      error.attendance_id = record.attendance_id;
+      throw error;
+    }
+
+    const currentAttendance = existingAttendance.rows[0];
+    if (currentAttendance.monthly_status !== 'active') {
+      console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, monthly_status=${currentAttendance.monthly_status}`);
+      continue;
+    }
+
+    const currentStatus = currentAttendance.status === '' ? null : currentAttendance.status;
+    if (currentStatus === normalizedStatus) {
+      console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, status o'zgarmadi`);
+      continue;
+    }
+
     const result = isCleared
       ? await pool.query(
           `UPDATE attendance 
@@ -291,151 +317,131 @@ const processAttendanceRecordsForLesson = async ({
            RETURNING student_id`,
           [normalizedStatus, record.attendance_id, lesson.id]
         );
+    updatedCount += result.rowCount;
 
-    if (result.rowCount === 0) {
-      const checkAttendance = await pool.query(
-        `SELECT id, student_id, monthly_status, status FROM attendance WHERE id = $1 AND lesson_id = $2`,
-        [record.attendance_id, lesson.id]
+    const updatedStudentId = result.rows[0]?.student_id;
+    if (!updatedStudentId) {
+      continue;
+    }
+
+    const statusLabels = {
+      keldi: 'Keldi',
+      kelmadi: 'Kelmadi',
+      kechikdi: 'Kechikdi'
+    };
+    const humanStatus = statusLabels[normalizedStatus] || normalizedStatus;
+    const markedAtLabel = formatTashkentDateTimeLabel();
+    const pushSubjectName = lesson.subject_name || lesson.group_name || '';
+    const pushBody = pushSubjectName
+      ? `${pushSubjectName} — ${humanStatus}\n${markedAtLabel}`
+      : `${humanStatus}\n${markedAtLabel}`;
+
+    try {
+      await notifyUser({
+        userId: updatedStudentId,
+        type: 'attendance',
+        title: 'Davomat belgilandi',
+        body: humanStatus,
+        pushTitle: 'Davomat belgilandi',
+        pushBody,
+        branchId: lesson.group_branch_id || lesson.branch_id || null,
+        data: {
+          route: '/notification-detail',
+          type: 'attendance',
+          lesson_id: String(lesson.id),
+          lesson_date: String(lesson.lesson_date),
+          lesson_month: String(lesson.lesson_month || String(lesson.lesson_date).slice(0, 7)),
+          group_id: String(lesson.group_id),
+          group_name: lesson.group_name || '',
+          teacher_name: lesson.teacher_name || '',
+          subject_name: lesson.subject_name || '',
+          attendance_status: normalizedStatus,
+          attendance_marked_at: markedAtLabel,
+          dedupe_key: `attendance:${lesson.id}:${updatedStudentId}:${normalizedStatus}`,
+        },
+        createdBy: userId,
+      });
+    } catch (notificationError) {
+      console.warn(`⚠️ Attendance notification yuborilmadi: ${notificationError.message}`);
+    }
+
+    try {
+      const attendancePoints = {
+        keldi: 3,
+        kelmadi: 0,
+      };
+      const basePoints = attendancePoints[normalizedStatus] ?? 0;
+
+      await pool.query(
+        `DELETE FROM student_point_events
+         WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
+        [updatedStudentId, lesson.id]
       );
 
-      if (checkAttendance.rows.length > 0) {
-        const att = checkAttendance.rows[0];
-        if (att.monthly_status !== 'active') {
-          console.log(`⏭️ O'tkazib yuborildi: attendance_id=${record.attendance_id}, monthly_status=${att.monthly_status}`);
-          continue;
-        }
-      } else {
-        const error = new Error('Attendance topilmadi');
-        error.statusCode = 404;
-        error.attendance_id = record.attendance_id;
-        throw error;
-      }
-    } else {
-      updatedCount += result.rowCount;
-
-      const updatedStudentId = result.rows[0]?.student_id;
-      if (!updatedStudentId) {
-        continue;
-      }
-
-      const statusLabels = {
-        keldi: 'Keldi',
-        kelmadi: 'Kelmadi',
-        kechikdi: 'Kechikdi'
-      };
-      const humanStatus = statusLabels[record.status] || record.status;
-      const markedAtLabel = formatTashkentDateTimeLabel();
-      const pushSubjectName = lesson.subject_name || lesson.group_name || '';
-      const pushBody = pushSubjectName
-        ? `${pushSubjectName} — ${humanStatus}\n${markedAtLabel}`
-        : `${humanStatus}\n${markedAtLabel}`;
-
-      try {
-        await notifyUser({
-          userId: updatedStudentId,
-          type: 'attendance',
-          title: 'Davomat belgilandi',
-          body: humanStatus,
-          pushTitle: 'Davomat belgilandi',
-          pushBody,
-          branchId: lesson.group_branch_id || lesson.branch_id || null,
-          data: {
-            route: '/notification-detail',
-            type: 'attendance',
-            lesson_id: String(lesson.id),
-            lesson_date: String(lesson.lesson_date),
-            lesson_month: String(lesson.lesson_month || String(lesson.lesson_date).slice(0, 7)),
-            group_id: String(lesson.group_id),
-            group_name: lesson.group_name || '',
-            teacher_name: lesson.teacher_name || '',
-            subject_name: lesson.subject_name || '',
-            attendance_status: record.status,
-            attendance_marked_at: markedAtLabel,
-          },
-          createdBy: userId,
-        });
-      } catch (notificationError) {
-        console.warn(`⚠️ Attendance notification yuborilmadi: ${notificationError.message}`);
-      }
-
-      try {
-        const attendancePoints = {
-          keldi: 3,
-          kelmadi: 0,
-        };
-        const basePoints = attendancePoints[record.status] ?? 0;
-
-        await pool.query(
-          `DELETE FROM student_point_events
-           WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
-          [updatedStudentId, lesson.id]
+      const eventMonthKey =
+        lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
+      let awardedPoints = basePoints;
+      if (basePoints > 0) {
+        const capResult = await pool.query(
+          `SELECT COALESCE(SUM(points), 0)::int AS month_total
+           FROM student_point_events
+           WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
+          [updatedStudentId, lesson.group_id, eventMonthKey]
         );
-
-        const eventMonthKey =
-          lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
-        let awardedPoints = basePoints;
-        if (basePoints > 0) {
-          const capResult = await pool.query(
-            `SELECT COALESCE(SUM(points), 0)::int AS month_total
-             FROM student_point_events
-             WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
-            [updatedStudentId, lesson.group_id, eventMonthKey]
-          );
-          const remaining = Math.max(
-            0,
-            MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
-          );
-          awardedPoints = Math.min(basePoints, remaining);
-        }
-
-        if (awardedPoints > 0) {
-          await pool.query(
-            `
-            INSERT INTO student_point_events (
-              student_id,
-              group_id,
-              lesson_id,
-              month_name,
-              points,
-              source_type,
-              title,
-              description,
-              metadata,
-              created_by
-            ) VALUES (
-              $1, $2, $3, $4, $5, 'attendance', $6, $7,
-              $8::jsonb || jsonb_build_object(
-                'created_by_name',
-                COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
-              ),
-              $9
-            )
-            `,
-            [
-              updatedStudentId,
-              lesson.group_id,
-              lesson.id,
-              eventMonthKey,
-              awardedPoints,
-              'Darsga qatnashdi',
-              `${humanStatus} - +${awardedPoints} ball`,
-              JSON.stringify({
-                status: record.status,
-                lesson_date: lesson.lesson_date,
-                group_name: lesson.group_name || '',
-                teacher_name: lesson.teacher_name || '',
-                subject_name: lesson.subject_name || '',
-                awarded_points: awardedPoints,
-                base_points: basePoints,
-                capped: awardedPoints < basePoints,
-              }),
-              userId,
-            ]
-          );
-        }
-      } catch (pointsError) {
-        console.warn(`⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`);
+        const remaining = Math.max(
+          0,
+          MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
+        );
+        awardedPoints = Math.min(basePoints, remaining);
       }
+
+      if (awardedPoints > 0) {
+        await pool.query(
+          `
+          INSERT INTO student_point_events (
+            student_id,
+            group_id,
+            lesson_id,
+            month_name,
+            points,
+            source_type,
+            title,
+            description,
+            metadata,
+            created_by
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'attendance', $6, $7,
+            $8::jsonb || jsonb_build_object(
+              'created_by_name',
+              COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
+            ),
+            $9
+          )
+          `,
+          [
+            updatedStudentId,
+            lesson.group_id,
+            lesson.id,
+            eventMonthKey,
+            awardedPoints,
+            'Darsga qatnashdi',
+            `${humanStatus} - +${awardedPoints} ball`,
+            JSON.stringify({
+              status: normalizedStatus,
+              lesson_date: lesson.lesson_date,
+              group_name: lesson.group_name || '',
+              teacher_name: lesson.teacher_name || '',
+              subject_name: lesson.subject_name || '',
+              awarded_points: awardedPoints,
+              base_points: basePoints,
+              capped: awardedPoints < basePoints,
+            }),
+            userId,
+          ]
+        );
+      }
+    } catch (pointsError) {
+      console.warn(`⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`);
     }
   }
 

@@ -38,6 +38,16 @@ const createNotificationTable = async () => {
       ON notifications(user_id, is_read, created_at DESC);
     `);
 
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_type_dedupe_key
+      ON notifications(
+        user_id,
+        type,
+        ((data->>'dedupe_key'))
+      )
+      WHERE data ? 'dedupe_key';
+    `);
+
     console.log("✅ notifications jadvali tayyor.");
   } catch (error) {
     console.error("❌ notifications jadvalini yaratishda xatolik:", error.message);
