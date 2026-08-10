@@ -91,7 +91,15 @@ const getAllRooms = async (filters = {}) => {
     paramCount++;
   }
 
-  query += ` ORDER BY CAST(room_number AS INTEGER)`;
+  query += `
+    ORDER BY
+      CASE
+        WHEN room_number ~ '^[0-9]+'
+          THEN substring(room_number from '^[0-9]+')::INTEGER
+        ELSE NULL
+      END NULLS LAST,
+      room_number ASC
+  `;
 
   const result = await pool.query(query, values);
   return result.rows;
