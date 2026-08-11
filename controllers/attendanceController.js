@@ -1,7 +1,6 @@
 const pool = require('../config/db');
 const XLSX = require('xlsx');
 const { notifyUser } = require('./notificationController');
-const { MONTHLY_POINT_CAP } = require('../config/points');
 const { getScopedBranchId } = require('../utils/branch');
 
 /**
@@ -366,84 +365,6 @@ const processAttendanceRecordsForLesson = async ({
       console.warn(`⚠️ Attendance notification yuborilmadi: ${notificationError.message}`);
     }
 
-    try {
-      const attendancePoints = {
-        keldi: 3,
-        kelmadi: 0,
-      };
-      const basePoints = attendancePoints[normalizedStatus] ?? 0;
-
-      await pool.query(
-        `DELETE FROM student_point_events
-         WHERE student_id = $1 AND lesson_id = $2 AND source_type = 'attendance'`,
-        [updatedStudentId, lesson.id]
-      );
-
-      const eventMonthKey =
-        lesson.lesson_month || String(lesson.lesson_date).slice(0, 7);
-      let awardedPoints = basePoints;
-      if (basePoints > 0) {
-        const capResult = await pool.query(
-          `SELECT COALESCE(SUM(points), 0)::int AS month_total
-           FROM student_point_events
-           WHERE student_id = $1 AND group_id = $2 AND month_name = $3`,
-          [updatedStudentId, lesson.group_id, eventMonthKey]
-        );
-        const remaining = Math.max(
-          0,
-          MONTHLY_POINT_CAP - (capResult.rows[0]?.month_total || 0)
-        );
-        awardedPoints = Math.min(basePoints, remaining);
-      }
-
-      if (awardedPoints > 0) {
-        await pool.query(
-          `
-          INSERT INTO student_point_events (
-            student_id,
-            group_id,
-            lesson_id,
-            month_name,
-            points,
-            source_type,
-            title,
-            description,
-            metadata,
-            created_by
-          ) VALUES (
-            $1, $2, $3, $4, $5, 'attendance', $6, $7,
-            $8::jsonb || jsonb_build_object(
-              'created_by_name',
-              COALESCE((SELECT NULLIF(TRIM(name || ' ' || surname), '') FROM users WHERE id = $9), '')
-            ),
-            $9
-          )
-          `,
-          [
-            updatedStudentId,
-            lesson.group_id,
-            lesson.id,
-            eventMonthKey,
-            awardedPoints,
-            'Darsga qatnashdi',
-            `${humanStatus} - +${awardedPoints} ball`,
-            JSON.stringify({
-              status: normalizedStatus,
-              lesson_date: lesson.lesson_date,
-              group_name: lesson.group_name || '',
-              teacher_name: lesson.teacher_name || '',
-              subject_name: lesson.subject_name || '',
-              awarded_points: awardedPoints,
-              base_points: basePoints,
-              capped: awardedPoints < basePoints,
-            }),
-            userId,
-          ]
-        );
-      }
-    } catch (pointsError) {
-      console.warn(`⚠️ Attendance point event qo'shilmagan: ${pointsError.message}`);
-    }
   }
 
   return { updatedCount };
