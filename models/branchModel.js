@@ -103,16 +103,16 @@ const createBranchTables = async () => {
     BEGIN
       IF EXISTS (
         SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'users'::regclass AND conname = 'users_username_key'
+        WHERE conrelid = 'users'::regclass AND conname = 'users_branch_username_key'
       ) THEN
-        ALTER TABLE users DROP CONSTRAINT users_username_key;
+        ALTER TABLE users DROP CONSTRAINT users_branch_username_key;
       END IF;
 
       IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'users'::regclass AND conname = 'users_branch_username_key'
+        WHERE conrelid = 'users'::regclass AND conname = 'users_username_key'
       ) THEN
-        ALTER TABLE users ADD CONSTRAINT users_branch_username_key UNIQUE (branch_id, username);
+        ALTER TABLE users ADD CONSTRAINT users_username_key UNIQUE (username);
       END IF;
     END $$;
   `);

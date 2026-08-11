@@ -175,8 +175,8 @@ const generateUniqueUsername = async (baseUsername, usedUsernames, branchId = 1)
     while (true) {
         if (!usedUsernames.has(candidate)) {
             const exists = await pool.query(
-                'SELECT 1 FROM users WHERE username = $1 AND branch_id = $2',
-                [candidate, branchId]
+                'SELECT 1 FROM users WHERE username = $1',
+                [candidate]
             );
             if (exists.rows.length === 0) {
                 usedUsernames.add(candidate);
@@ -248,8 +248,8 @@ const registerStudent = async (req, res) => {
         }
 
         const userExists = await pool.query(
-            'SELECT * FROM users WHERE username = $1 AND branch_id = $2',
-            [username, branchId]
+            'SELECT * FROM users WHERE username = $1',
+            [username]
         );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
@@ -541,8 +541,8 @@ const registerTeacher = async (req, res) => {
         const branchId = getUserBranchId(req.user);
         // Username mavjudligini tekshirish
         const userExists = await pool.query(
-            'SELECT * FROM users WHERE username = $1 AND branch_id = $2',
-            [username, branchId]
+            'SELECT * FROM users WHERE username = $1',
+            [username]
         );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
@@ -631,8 +631,8 @@ const registerAdmin = async (req, res) => {
     try {
         const branchId = getUserBranchId(req.user);
         const userExists = await pool.query(
-            'SELECT 1 FROM users WHERE username = $1 AND branch_id = $2',
-            [username, branchId]
+            'SELECT 1 FROM users WHERE username = $1',
+            [username]
         );
         if (userExists.rows.length > 0) {
             return res.status(400).json({ message: "Bu username allaqachon mavjud!" });
@@ -1114,9 +1114,8 @@ const updateProfile = async (req, res) => {
                  FROM users
                  WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
-                   AND branch_id = $3
                  LIMIT 1`,
-                [incoming.username, req.user.id, getUserBranchId(req.user)]
+                [incoming.username, req.user.id]
             );
 
             if (usernameExists.rows.length > 0) {
@@ -1326,9 +1325,8 @@ const updateStudentInfo = async (req, res) => {
                  FROM users
                  WHERE BTRIM(username) = BTRIM($1)
                    AND id <> $2
-                   AND branch_id = $3
                  LIMIT 1`,
-                [incoming.username, studentId, branchId]
+                [incoming.username, studentId]
             );
 
             if (usernameExists.rows.length > 0) {
