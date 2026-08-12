@@ -345,7 +345,7 @@ router.patch('/groups/:group_id/holiday', protect, roleCheck(['admin', 'teacher'
  *       200:
  *         description: Oylik davomat
  */
-router.get('/groups/:group_id/monthly', protect, roleCheck(['admin', 'teacher', 'english-manager']), getMonthlyAttendance);
+router.get('/groups/:group_id/monthly', protect, roleCheck(['admin', 'super_admin', 'teacher', 'english-manager']), getMonthlyAttendance);
 
 /**
  * @swagger
@@ -505,6 +505,6 @@ router.delete('/lessons/:lesson_id', protect, roleCheck(['admin', 'teacher']), d
  *       404:
  *         description: Ma'lumot topilmadi
  */
-router.get('/groups/:group_id/monthly/export', protect, roleCheck(['admin', 'teacher', 'english-manager']), exportMonthlyAttendance);
+router.get('/groups/:group_id/monthly/export', protect, roleCheck(['admin', 'super_admin', 'teacher', 'english-manager']), exportMonthlyAttendance);
 
 module.exports = router;
