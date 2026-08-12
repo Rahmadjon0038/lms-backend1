@@ -2116,17 +2116,23 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     }
 
     // Umumiy statistika.
-    // Jami/Faol/To'xtatgan — bosh sahifa (super admin dashboard) bilan AYNAN
-    // bir xil hisob (dashboardController'dagi students bloki bilan bir xil
-    // so'rovlar): jami = users LEFT JOIN student_groups (ikki guruhdagi
-    // student ikki marta, guruhsiz bir marta), faol/to'xtatgan =
-    // student_groups.status bo'yicha. Ikkala sahifada bir xil raqam chiqadi.
+    // Jami/Faol — bosh sahifa (super admin dashboard) bilan AYNAN bir xil
+    // hisob (dashboardController'dagi students bloki bilan bir xil so'rovlar):
+    // jami = users LEFT JOIN student_groups (status <> 'removed', ikki
+    // guruhdagi student ikki marta, guruhsiz bir marta), faol =
+    // student_groups.status = 'active' bo'yicha. Ikkala sahifada bir xil
+    // raqam chiqadi.
+    // To'xtatgan esa boshqa manba: bu yerda tanlangan OY uchun to'lov
+    // jadvalidagi (monthly_snapshots.monthly_status = 'stopped') holat —
+    // dashboarddagi student_groups.status = 'stopped' (oyga bog'liq emas)
+    // bilan ATAYLAB boshqacha va mos kelmasligi mumkin.
     // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
     const studentCountsQuery = `
       SELECT
         (SELECT COUNT(*)
            FROM users u
            LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
+            AND sg.status <> 'removed'
           WHERE u.role = 'student'
             AND u.branch_id = $1)::int as total_students,
         (SELECT COUNT(*)
