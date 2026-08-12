@@ -2115,20 +2115,23 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       });
     }
 
-    // Umumiy statistika — bu sahifa (davomat) tanlangan OY uchun tarixiy
-    // holatni ko'rsatishi kerak (masalan o'tgan oy nechta talaba bo'lgani),
-    // shuning uchun Jami/Faol/To'xtatgan barchasi shu oyning to'lov
-    // jadvalidan (monthly_snapshots.monthly_status) hisoblanadi — bosh
-    // sahifadagi (super admin dashboard) "Talabalar statistikasi" kartasi
-    // esa ATAYLAB joriy (real vaqtdagi) holatni ko'rsatadi va bu yerdan
-    // farq qiladi.
+    // Umumiy statistika.
+    // Jami — umumiy (joriy, oyga bog'liq bo'lmagan) talabalar soni, admin
+    // panel "students" sahifasi bilan AYNAN bir xil hisob: users LEFT JOIN
+    // student_groups (status <> 'removed', ikki guruhdagi student ikki
+    // marta, guruhsiz bir marta).
+    // Faol/To'xtatgan esa tanlangan OY uchun to'lov jadvalidan
+    // (monthly_snapshots.monthly_status) — shu oyda haqiqatda faol/
+    // to'xtagan bo'lganlar soni, oy filtri o'zgarganda o'zgaradi.
     // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
     const studentCountsQuery = `
       SELECT
         (SELECT COUNT(*)
-           FROM monthly_snapshots ms
-          WHERE ms.month = $2
-            AND ms.branch_id = $1)::int as total_students,
+           FROM users u
+           LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
+            AND sg.status <> 'removed'
+          WHERE u.role = 'student'
+            AND u.branch_id = $1)::int as total_students,
         (SELECT COUNT(*)
            FROM monthly_snapshots ms
           WHERE ms.month = $2
