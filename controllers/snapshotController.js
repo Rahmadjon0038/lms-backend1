@@ -2115,31 +2115,25 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
       });
     }
 
-    // Umumiy statistika.
-    // Jami/Faol — bosh sahifa (super admin dashboard) bilan AYNAN bir xil
-    // hisob (dashboardController'dagi students bloki bilan bir xil so'rovlar):
-    // jami = users LEFT JOIN student_groups (status <> 'removed', ikki
-    // guruhdagi student ikki marta, guruhsiz bir marta), faol =
-    // student_groups.status = 'active' bo'yicha. Ikkala sahifada bir xil
-    // raqam chiqadi.
-    // To'xtatgan esa boshqa manba: bu yerda tanlangan OY uchun to'lov
-    // jadvalidagi (monthly_snapshots.monthly_status = 'stopped') holat —
-    // dashboarddagi student_groups.status = 'stopped' (oyga bog'liq emas)
-    // bilan ATAYLAB boshqacha va mos kelmasligi mumkin.
+    // Umumiy statistika — bu sahifa (davomat) tanlangan OY uchun tarixiy
+    // holatni ko'rsatishi kerak (masalan o'tgan oy nechta talaba bo'lgani),
+    // shuning uchun Jami/Faol/To'xtatgan barchasi shu oyning to'lov
+    // jadvalidan (monthly_snapshots.monthly_status) hisoblanadi — bosh
+    // sahifadagi (super admin dashboard) "Talabalar statistikasi" kartasi
+    // esa ATAYLAB joriy (real vaqtdagi) holatni ko'rsatadi va bu yerdan
+    // farq qiladi.
     // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
     const studentCountsQuery = `
       SELECT
         (SELECT COUNT(*)
-           FROM users u
-           LEFT JOIN student_groups sg ON sg.student_id = u.id AND sg.branch_id = u.branch_id
-            AND sg.status <> 'removed'
-          WHERE u.role = 'student'
-            AND u.branch_id = $1)::int as total_students,
+           FROM monthly_snapshots ms
+          WHERE ms.month = $2
+            AND ms.branch_id = $1)::int as total_students,
         (SELECT COUNT(*)
-           FROM student_groups sg
-           JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
-          WHERE sg.status = 'active'
-            AND sg.branch_id = $1)::int as active_students,
+           FROM monthly_snapshots ms
+          WHERE ms.month = $2
+            AND ms.branch_id = $1
+            AND ms.monthly_status = 'active')::int as active_students,
         (SELECT COUNT(*)
            FROM monthly_snapshots ms
           WHERE ms.month = $2
