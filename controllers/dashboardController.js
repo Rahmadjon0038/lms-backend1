@@ -1565,20 +1565,20 @@ const getSuperAdminStats = async (req, res) => {
              WHERE u.role = 'student'
                AND u.branch_id = $2)::int AS total_students,
            (SELECT COUNT(*)
-              FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
-             WHERE sg.status = 'active'
-               AND sg.branch_id = $2)::int AS active_students,
+              FROM monthly_snapshots ms
+             WHERE ms.month = $1
+               AND ms.branch_id = $2
+               AND ms.monthly_status = 'active')::int AS active_students,
            (SELECT COUNT(*)
-              FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
-             WHERE sg.status = 'stopped'
-               AND sg.branch_id = $2)::int AS stopped_students,
+              FROM monthly_snapshots ms
+             WHERE ms.month = $1
+               AND ms.branch_id = $2
+               AND ms.monthly_status = 'stopped')::int AS stopped_students,
            (SELECT COUNT(*)
-              FROM student_groups sg
-              JOIN users u ON u.id = sg.student_id AND u.role = 'student' AND u.branch_id = sg.branch_id
-             WHERE sg.status = 'finished'
-               AND sg.branch_id = $2)::int AS finished_students,
+              FROM monthly_snapshots ms
+             WHERE ms.month = $1
+               AND ms.branch_id = $2
+               AND ms.monthly_status = 'finished')::int AS finished_students,
            (SELECT COUNT(*)
               FROM users u
              WHERE u.role = 'student'

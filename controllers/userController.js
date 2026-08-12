@@ -1445,6 +1445,13 @@ const getAllTeachers = async (req, res) => {
                 u.work_days_hours,
                 u.created_at as registration_date,
                 COUNT(DISTINCT g.id) as group_count,
+                COALESCE(
+                    (SELECT COUNT(DISTINCT sg.student_id)
+                     FROM student_groups sg
+                     JOIN groups g2 ON sg.group_id = g2.id AND g2.branch_id = u.branch_id
+                     WHERE g2.teacher_id = u.id AND sg.branch_id = u.branch_id AND sg.status = 'active'),
+                    0
+                ) as active_student_count,
                 -- Teacher-ning barcha fanlarini JSON shaklida olish
                 COALESCE(
                     (SELECT json_agg(
@@ -1498,7 +1505,8 @@ const getAllTeachers = async (req, res) => {
                 experiencePlace: teacher.experience_place || '',
                 availableTimes: teacher.available_times || '',
                 workDaysHours: teacher.work_days_hours || '',
-                groupCount: parseInt(teacher.group_count) || 0
+                groupCount: parseInt(teacher.group_count) || 0,
+                activeStudentCount: parseInt(teacher.active_student_count) || 0
             };
         });
 
