@@ -2205,19 +2205,20 @@ exports.getMonthlyAttendance = async (req, res) => {
 
     // Avval guruh va teacher ma'lumotlarini olamiz
     const groupInfo = await pool.query(
-      `SELECT 
+      `SELECT
          g.name as group_name,
          g.price as group_price,
          g.teacher_id,
          g.class_start_date,
          g.start_date,
          g.created_at,
+         g.schedule,
          s.name as subject_name,
          CONCAT(t.name, ' ', t.surname) as teacher_name,
          t.name as teacher_first_name,
          t.surname as teacher_last_name
        FROM groups g
-       JOIN subjects s ON g.subject_id = s.id  
+       JOIN subjects s ON g.subject_id = s.id
        LEFT JOIN users t ON g.teacher_id = t.id
        WHERE g.id = $1 AND g.branch_id = $2`,
       [group_id, branchId]
@@ -2435,7 +2436,8 @@ exports.getMonthlyAttendance = async (req, res) => {
           subject_name: group.subject_name,
           teacher_name: group.teacher_name,
           teacher_first_name: group.teacher_first_name,
-          teacher_last_name: group.teacher_last_name
+          teacher_last_name: group.teacher_last_name,
+          schedule: group.schedule || null
         },
         lessons: lessons.rows,
         students: studentsWithStats
