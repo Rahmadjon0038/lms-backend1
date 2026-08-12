@@ -99,6 +99,8 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
          g.teacher_id,
          ms.student_id,
          ms.group_id,
+         MAX(g.subject_id) AS subject_id,
+         MAX(subj.name) AS subject_name,
          MAX(ms.student_name) AS student_name,
          MAX(ms.student_surname) AS student_surname,
          MAX(ms.group_name) AS group_name,
@@ -128,6 +130,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
          END AS payment_state
        FROM monthly_snapshots ms
        JOIN groups g ON g.id = ms.group_id
+       LEFT JOIN subjects subj ON subj.id = g.subject_id AND subj.branch_id = g.branch_id
        LEFT JOIN users su ON su.id = ms.student_id
        LEFT JOIN active_discounts ad
          ON ad.student_id = ms.student_id
@@ -156,6 +159,8 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
                'student_id', tss.student_id,
                'group_id', tss.group_id,
                'group_name', tss.group_name,
+               'subject_id', tss.subject_id,
+               'subject_name', tss.subject_name,
                'name', tss.student_name,
                'surname', tss.student_surname,
                'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
