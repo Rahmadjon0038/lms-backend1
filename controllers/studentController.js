@@ -1497,42 +1497,50 @@ exports.getMyGroups = async (req, res) => {
                 sg.status as my_status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as my_join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as my_leave_date,
-                
+
+                -- Shu oy uchun haqiqiy holat (davomatdan to'xtatilgan bo'lsa
+                -- sg.status o'zgarmaydi, shuning uchun monthly_snapshots'dan olamiz)
+                ms.monthly_status as month_status,
+
                 -- Guruh umumiy ma'lumotlari
                 g.status as group_status,
                 g.class_status,
                 TO_CHAR(g.start_date, 'DD.MM.YYYY') as group_start_date,
                 TO_CHAR(g.created_at, 'DD.MM.YYYY') as group_created_date,
-                
+
                 -- Guruh a'zolari soni
                 (
-                    SELECT COUNT(*) 
-                    FROM student_groups sg2 
+                    SELECT COUNT(*)
+                    FROM student_groups sg2
                     WHERE sg2.group_id = g.id AND sg2.status = 'active'
                 ) as total_students
-                
+
             FROM student_groups sg
             JOIN groups g ON sg.group_id = g.id
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
             LEFT JOIN rooms r ON g.room_id = r.id
-            
+            LEFT JOIN monthly_snapshots ms
+                ON ms.student_id = sg.student_id
+               AND ms.group_id = sg.group_id
+               AND ms.month = $2
+
             WHERE sg.student_id = $1
               ${
                 isCurrentMonth
                   ? `AND sg.status = 'active'`
-                  : `AND DATE(sg.joined_at) <= (DATE($2) + INTERVAL '1 month - 1 day')
-                      AND (sg.left_at IS NULL OR DATE(sg.left_at) >= DATE($2))`
+                  : `AND DATE(sg.joined_at) <= (DATE($3) + INTERVAL '1 month - 1 day')
+                      AND (sg.left_at IS NULL OR DATE(sg.left_at) >= DATE($3))`
               }
-            ORDER BY 
-                CASE sg.status 
+            ORDER BY
+                CASE sg.status
                     WHEN 'active' THEN 1
-                    WHEN 'stopped' THEN 2  
+                    WHEN 'stopped' THEN 2
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
                 g.name
-        `, isCurrentMonth ? [studentId] : [studentId, monthStart]);
+        `, isCurrentMonth ? [studentId, targetMonth] : [studentId, targetMonth, monthStart]);
 
         const groupsData = myGroups.rows.map(group => ({
                 group_id: group.group_id,
@@ -1569,6 +1577,7 @@ exports.getMyGroups = async (req, res) => {
             },
             my_status: {
                 status: group.my_status,
+                monthly_status: group.month_status || group.my_status,
                 join_date: group.my_join_date,
                 leave_date: group.my_leave_date,
                 monthly_points: 0,
