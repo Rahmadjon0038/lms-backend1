@@ -103,6 +103,7 @@ const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const branchRoutes = require('./routes/branchRoutes');
 const teacherStatisticsRoutes = require('./routes/teacherStatisticsRoutes');
+const appVersionRoutes = require('./routes/appVersionRoutes');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
@@ -117,6 +118,7 @@ const { createProfileAvatarTable } = require('./models/profileAvatarModel');
 const { createContentTables } = require('./models/contentModel');
 const { createBranchTables } = require('./models/branchModel');
 const { createTeacherStatisticsTables } = require('./models/teacherStatisticsModel');
+const { createAppVersionTable } = require('./models/appVersionModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
 const { createMonthlySnapshotTable } = require('./scripts/createMonthlySnapshot');
@@ -144,6 +146,7 @@ app.use('/api/admin-salary', adminSalaryRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/branches', branchRoutes);
 app.use('/api/teacher-statistics', teacherStatisticsRoutes);
+app.use('/api/app', appVersionRoutes);
 
 // createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
@@ -184,7 +187,8 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['admin_salary', createAdminSalaryTables],
             ['content', createContentTables],
             ['branches', createBranchTables],
-            ['teacher_statistics', createTeacherStatisticsTables]
+            ['teacher_statistics', createTeacherStatisticsTables],
+            ['app_versions', createAppVersionTable]
         ];
 
         for (const [stepName, setupFn] of setupSteps) {

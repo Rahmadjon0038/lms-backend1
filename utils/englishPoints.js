@@ -58,32 +58,9 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         JOIN groups g ON g.id = sg.group_id
         JOIN target_groups tg ON tg.group_id = sg.group_id
       ),
-      -- Ushbu oyda dars uchun report (statistika) topshirilgan darslar —
-      -- fanidan qat'iy nazar, report bor darsning ball hisobi report'dan olinadi,
-      -- avtomatik davomat balli bilan ikki marta hisoblanmasligi uchun.
-      report_lessons AS (
-        SELECT DISTINCT r.lesson_id, r.group_id
-        FROM teacher_lesson_statistics_reports r
-        JOIN target_groups tg ON tg.group_id = r.group_id
-        WHERE COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $2
-      ),
-      event_day_points AS (
-        SELECT
-          spe.group_id,
-          spe.student_id,
-          DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent') AS point_day,
-          SUM(spe.points)::int AS day_points
-        FROM student_point_events spe
-        JOIN memberships m
-          ON m.group_id = spe.group_id
-         AND m.student_id = spe.student_id
-        WHERE spe.month_name = $2
-          AND NOT EXISTS (
-            SELECT 1 FROM report_lessons rl
-            WHERE rl.lesson_id = spe.lesson_id AND rl.group_id = spe.group_id
-          )
-        GROUP BY spe.group_id, spe.student_id, DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent')
-      ),
+      -- Ballar endi FAQAT teacher report (statistika) asosida hisoblanadi —
+      -- eski avtomatik davomat balli (student_point_events) tizimi bekor
+      -- qilingan, shuning uchun bu yerda umuman o'qilmaydi.
       report_day_points AS (
         SELECT
           r.group_id,
@@ -99,8 +76,6 @@ const loadMonthlyGroupMemberStats = async ({ groupIds = [], month }) => {
         GROUP BY r.group_id, m.student_id, r.lesson_date::date
       ),
       combined_day_points AS (
-        SELECT group_id, student_id, point_day, day_points FROM event_day_points
-        UNION ALL
         SELECT group_id, student_id, point_day, day_points FROM report_day_points
       ),
       combined_ranked AS (
@@ -161,10 +136,8 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
   const monthKey = isAllTime ? null : buildMonthFilter(month);
 
   const params = [normalizedStudentId];
-  const eventFilters = ['spe.student_id = $1'];
   if (normalizedGroupId !== null) {
     params.push(normalizedGroupId);
-    eventFilters.push(`spe.group_id = $${params.length}`);
   }
 
   if (monthKey) {
@@ -176,43 +149,9 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
 
   const result = await pool.query(
     `
-      WITH event_entries AS (
-        SELECT
-          spe.id::text AS entry_id,
-          spe.student_id,
-          spe.group_id,
-          COALESCE(g.name, spe.metadata->>'group_name', '') AS group_name,
-          COALESCE(sub.name, '') AS subject_name,
-          spe.lesson_id,
-          spe.month_name,
-          spe.points,
-          spe.source_type,
-          spe.title,
-          spe.description,
-          spe.metadata,
-          spe.created_by,
-          COALESCE(NULLIF(TRIM(cb.name || ' ' || cb.surname), ''), spe.metadata->>'created_by_name', '') AS created_by_name,
-          g.teacher_id AS group_teacher_id,
-          NULLIF(TRIM(gt.name || ' ' || gt.surname), '') AS group_teacher_name,
-          spe.created_at AT TIME ZONE 'Asia/Tashkent' AS created_at_local,
-          TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD HH24:MI') AS created_at,
-          TO_CHAR(DATE(spe.created_at AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD') AS day_key,
-          TO_CHAR(spe.created_at AT TIME ZONE 'Asia/Tashkent', 'HH24:MI') AS created_time,
-          NULL::jsonb AS row_values,
-          NULL::jsonb AS report_columns
-        FROM student_point_events spe
-        LEFT JOIN groups g ON g.id = spe.group_id
-        LEFT JOIN subjects sub ON sub.id = g.subject_id
-        LEFT JOIN users cb ON cb.id = spe.created_by
-        LEFT JOIN users gt ON gt.id = g.teacher_id
-        WHERE ${eventFilters.join(' AND ')}
-          AND NOT EXISTS (
-            SELECT 1 FROM teacher_lesson_statistics_reports r2
-            WHERE r2.lesson_id = spe.lesson_id AND r2.group_id = spe.group_id
-          )
-          ${monthKey ? `AND spe.month_name = $${monthParamIndex}` : ''}
-      ),
-      report_entries AS (
+      -- Ballar endi FAQAT teacher report asosida hisoblanadi — eski
+      -- avtomatik davomat balli (student_point_events) o'qilmaydi.
+      WITH report_entries AS (
         SELECT
           r.id::text AS entry_id,
           (row->>'student_id')::int AS student_id,
@@ -265,8 +204,6 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           ${groupParamIndex ? `AND r.group_id = $${groupParamIndex}` : ''}
           ${monthKey ? `AND COALESCE(NULLIF(r.report_month, ''), TO_CHAR(r.lesson_date::date, 'YYYY-MM')) = $${monthParamIndex}` : ''}
       )
-      SELECT * FROM event_entries
-      UNION ALL
       SELECT * FROM report_entries
       ORDER BY created_at_local DESC, entry_id DESC
     `,

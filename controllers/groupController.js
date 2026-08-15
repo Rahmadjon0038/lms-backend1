@@ -1843,7 +1843,7 @@ exports.getGroupById = async (req, res) => {
                   WHEN pa.image_path ~ '^https?://' THEN pa.image_path
                   ELSE CONCAT('${PUBLIC_BASE_URL}', pa.image_path)
                 END AS avatar_url,
-                COALESCE(spe.monthly_points, 0) as monthly_points,
+                0 as monthly_points,
                 sg.status as group_status,
                 CASE
                   WHEN sg.status = 'active' THEN 'Faol'
@@ -1856,14 +1856,8 @@ exports.getGroupById = async (req, res) => {
             FROM latest_memberships sg
             JOIN users u ON u.id = sg.student_id AND u.branch_id = sg.branch_id
             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
-            LEFT JOIN (
-                SELECT student_id, SUM(points) as monthly_points
-                FROM student_point_events
-                WHERE group_id = $1 AND month_name = $2 AND branch_id = $3
-                GROUP BY student_id
-            ) spe ON spe.student_id = u.id
             WHERE sg.status = 'active'
-            ORDER BY COALESCE(spe.monthly_points, 0) DESC, u.surname, u.name, u.id`, [id, currentMonth, branchId]);
+            ORDER BY u.surname, u.name, u.id`, [id, currentMonth, branchId]);
 
         const monthlyStats = await loadMonthlyGroupMemberStats({
             groupIds: [id],
@@ -3318,7 +3312,7 @@ exports.getTeacherGroupDetails = async (req, res) => {
                   WHEN pa.image_path ~ '^https?://' THEN pa.image_path
                   ELSE CONCAT('${PUBLIC_BASE_URL}', pa.image_path)
                 END AS avatar_url,
-                COALESCE(spe.monthly_points, 0) as monthly_points,
+                0 as monthly_points,
                 sg.status as group_status,
                 TO_CHAR(sg.joined_at, 'DD.MM.YYYY') as join_date,
                 TO_CHAR(sg.left_at, 'DD.MM.YYYY') as leave_date,
@@ -3332,12 +3326,6 @@ exports.getTeacherGroupDetails = async (req, res) => {
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
-            LEFT JOIN (
-                SELECT student_id, SUM(points) as monthly_points
-                FROM student_point_events
-                WHERE group_id = $1 AND month_name = $2
-                GROUP BY student_id
-            ) spe ON spe.student_id = u.id
             WHERE sg.group_id = $1
             ORDER BY
                 CASE sg.status
@@ -3346,7 +3334,6 @@ exports.getTeacherGroupDetails = async (req, res) => {
                     WHEN 'finished' THEN 3
                     ELSE 4
                 END,
-                COALESCE(spe.monthly_points, 0) DESC,
                 u.name, u.surname
         `, [groupId, pointsMonth]);
 
