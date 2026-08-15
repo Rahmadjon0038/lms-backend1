@@ -13,61 +13,24 @@ else
   exit 1
 fi
 
-cat > docker-compose.deploy.yml <<'YAML'
-services:
-  postgres:
-    image: postgres:16
-    container_name: lms_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: lsm123
-      POSTGRES_DB: lms
-    volumes:
-      - lms_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d lms"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+COMPOSE_FILE="docker-compose.prod.yml"
 
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: lms_backend
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PORT: 3001
-      DB_USER: postgres
-      DB_PASSWORD: lsm123
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: lms
-      JWT_SECRET: maxfiy_kalit_123@
-      REFRESH_TOKEN_SECRET: refresh_uchun_maxfiy_kalit_456!
-      FIREBASE_SERVICE_ACCOUNT_PATH: /app/taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json
-      FIREBASE_PROJECT_ID: taraqqiyot-teaching-center
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./uploads:/app/uploads
-      - ./private_uploads:/app/private_uploads
-      - ./taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:/app/taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:ro
+# Eski, qo'lda ishga tushirilgan "test" backend konteyneri 3001-portni
+# band qilib turishi mumkin (masalan avvalgi deploy usulidan qolgan).
+# U hozirgi compose loyihasiga tegishli emas, shuning uchun avtomatik
+# to'xtatilmaydi — faqat aynan shu nom bilan mavjud bo'lsa, portni
+# bo'shatish uchun to'xtatiladi (o'chirilmaydi, kerak bo'lsa qayta
+# ishga tushirish mumkin: docker start lms_backend_test).
+if docker ps --format '{{.Names}}' | grep -qx 'lms_backend_test'; then
+  echo "Eski 'lms_backend_test' konteyneri 3001-portni band qilgan, to'xtatilmoqda..."
+  docker stop lms_backend_test >/dev/null
+fi
 
-volumes:
-  lms_pgdata:
-YAML
-
-echo "Docker compose orqali postgres + backend ishga tushirilmoqda..."
-"${COMPOSE_CMD[@]}" -f docker-compose.deploy.yml up -d --build
+echo "Docker compose orqali postgres (postgres16, mavjud ma'lumotlar bilan) + backend ishga tushirilmoqda..."
+"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" up -d --build
 
 echo ""
 echo "Tayyor:"
 echo "  Backend:  http://localhost:3001"
 echo "  Swagger:  http://localhost:3001/api-docs"
-echo "  Postgres: docker ichida lms_postgres:5432 (host port ochilmagan)"
+echo "  Postgres: docker ichida postgres16:5432 (host port ochilmagan, ma'lumotlar 'pgdata' volume'da saqlanadi)"

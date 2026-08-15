@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: lsm123
+      POSTGRES_DB: lms
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lms"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lms_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 3001
+      DB_USER: postgres
+      DB_PASSWORD: lsm123
+      DB_HOST: postgres16
+      DB_PORT: 5432
+      DB_NAME: lms
+      JWT_SECRET: "maxfiy_kalit_123@"
+      REFRESH_TOKEN_SECRET: "refresh_uchun_maxfiy_kalit_456!"
+      FIREBASE_SERVICE_ACCOUNT_PATH: ./taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json
+      FIREBASE_PROJECT_ID: taraqqiyot-teaching-center
+      GOOGLE_SHEETS_KEY_PATH: ./config/golden-ripsaw-504704-k8-baabc0eefae1.json
+      GOOGLE_SHEETS_SPREADSHEET_ID: 1jft7b86PqlDU5HW0mwrCBzxC0N0HCIQyHwGUSgC_Pu4
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./private_uploads:/app/private_uploads
+      - ./taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:/app/taraqqiyot-teaching-center-firebase-adminsdk-fbsvc-f6b225122b.json:ro
+
+# "pgdata" nomi ataylab saqlanmoqda — production serverda bu volume allaqachon
+# haqiqiy ma'lumotlar bilan mavjud (lms-backend1_pgdata). Nom o'zgarsa, Docker
+# uni butunlay YANGI (bo'sh) volume deb hisoblab, eski ma'lumotlarga ulanmay qoladi.
+volumes:
+  pgdata:

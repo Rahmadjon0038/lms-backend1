@@ -1132,6 +1132,7 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
     };
 
     const breakdownMap = new Map();
+    const subjectMap = new Map();
     const monthlyMap = new Map();
     const teacherMap = new Map();
     const dailyMap = new Map();
@@ -1155,6 +1156,7 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
             breakdownMap.set(breakdownKey, {
                 group_id: entry.group_id,
                 group_name: entry.group_name || 'Guruh',
+                subject_name: entry.subject_name || '',
                 total_points: 0,
                 total_events: 0,
             });
@@ -1162,6 +1164,20 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
         const breakdownItem = breakdownMap.get(breakdownKey);
         breakdownItem.total_points += entry.points;
         breakdownItem.total_events += 1;
+
+        // Guruhlardagi ballar aralashib qolmasligi uchun fan (subject)
+        // kesimida ham alohida yig'iladi.
+        const subjectName = entry.subject_name || 'Boshqa';
+        if (!subjectMap.has(subjectName)) {
+            subjectMap.set(subjectName, {
+                subject_name: subjectName,
+                total_points: 0,
+                total_events: 0,
+            });
+        }
+        const subjectItem = subjectMap.get(subjectName);
+        subjectItem.total_points += entry.points;
+        subjectItem.total_events += 1;
 
         if (!monthlyMap.has(entry.month_name)) {
             monthlyMap.set(entry.month_name, {
@@ -1180,10 +1196,11 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
         // hisobot ballari bitta to'g'ri o'qituvchi ostida birlashadi.
         const attributedTeacherId = entry.group_teacher_id ?? entry.created_by;
         const attributedTeacherName = entry.group_teacher_name || entry.created_by_name;
-        const teacherKey = `${entry.month_name}:${attributedTeacherId ?? 'null'}:${attributedTeacherName}`;
+        const teacherKey = `${entry.month_name}:${subjectName}:${attributedTeacherId ?? 'null'}:${attributedTeacherName}`;
         if (!teacherMap.has(teacherKey)) {
             teacherMap.set(teacherKey, {
                 month_name: entry.month_name,
+                subject_name: entry.subject_name || '',
                 teacher_id: attributedTeacherId,
                 teacher_name: attributedTeacherName || 'Noma\'lum',
                 total_points: 0,
@@ -1214,6 +1231,9 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
     const breakdown = [...breakdownMap.values()].sort(
         (a, b) => b.total_points - a.total_points || a.group_name.localeCompare(b.group_name)
     );
+    const subjectBreakdown = [...subjectMap.values()].sort(
+        (a, b) => b.total_points - a.total_points || a.subject_name.localeCompare(b.subject_name)
+    );
     const monthlyBreakdown = [...monthlyMap.values()].sort(
         (a, b) => b.month_name.localeCompare(a.month_name)
     );
@@ -1231,6 +1251,7 @@ const buildStudentPointHistory = async (studentId, { month, groupId } = {}) => {
         },
         summary,
         breakdown,
+        subject_breakdown: subjectBreakdown,
         monthly_breakdown: monthlyBreakdown,
         teacher_breakdown: teacherBreakdown,
         daily_breakdown: dailyBreakdown,
@@ -1373,7 +1394,7 @@ exports.getMyMonthlyPayments = async (req, res) => {
                 ms.group_name,
                 ms.subject_name,
                 COALESCE(ms.teacher_name, 'Biriktirilmagan') as teacher_name,
-                ms.monthly_status as student_group_status,
+                ms.monthly_status,
                 COALESCE(ms.required_amount, g.price, 0) as required_amount,
                 COALESCE(ms.paid_amount, 0) as paid_amount,
                 COALESCE(ms.discount_amount, 0) as discount_amount,

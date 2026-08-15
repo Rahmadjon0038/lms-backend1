@@ -182,6 +182,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           spe.student_id,
           spe.group_id,
           COALESCE(g.name, spe.metadata->>'group_name', '') AS group_name,
+          COALESCE(sub.name, '') AS subject_name,
           spe.lesson_id,
           spe.month_name,
           spe.points,
@@ -201,6 +202,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           NULL::jsonb AS report_columns
         FROM student_point_events spe
         LEFT JOIN groups g ON g.id = spe.group_id
+        LEFT JOIN subjects sub ON sub.id = g.subject_id
         LEFT JOIN users cb ON cb.id = spe.created_by
         LEFT JOIN users gt ON gt.id = g.teacher_id
         WHERE ${eventFilters.join(' AND ')}
@@ -216,6 +218,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
           (row->>'student_id')::int AS student_id,
           r.group_id,
           COALESCE(g.name, r.report_data->>'group_name', '') AS group_name,
+          COALESCE(sub.name, '') AS subject_name,
           r.lesson_id,
           r.report_month AS month_name,
           COALESCE((row->>'total')::int, 0) AS points,
@@ -255,6 +258,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
         FROM teacher_lesson_statistics_reports r
         JOIN LATERAL jsonb_array_elements(COALESCE(r.report_data->'rows', '[]'::jsonb)) row ON TRUE
         LEFT JOIN groups g ON g.id = r.group_id
+        LEFT JOIN subjects sub ON sub.id = g.subject_id
         LEFT JOIN users cb ON cb.id = r.created_by
         LEFT JOIN users gt ON gt.id = g.teacher_id
         WHERE row->>'student_id' = $1::text
@@ -274,6 +278,7 @@ const loadStudentPointHistoryEntries = async ({ studentId, month, groupId = null
     student_id: Number.parseInt(row.student_id, 10),
     group_id: Number.parseInt(row.group_id, 10),
     group_name: row.group_name || '',
+    subject_name: row.subject_name || '',
     lesson_id: row.lesson_id == null ? null : Number.parseInt(row.lesson_id, 10),
     month_name: row.month_name || '',
     points: Number.parseInt(row.points, 10) || 0,
