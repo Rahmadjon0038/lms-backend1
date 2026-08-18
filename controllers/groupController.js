@@ -1814,7 +1814,7 @@ exports.getGroupById = async (req, res) => {
                     sg.branch_id
                 FROM student_groups sg
                 WHERE sg.group_id = $1
-                  AND sg.branch_id = $3
+                  AND sg.branch_id = $2
                 ORDER BY
                     sg.student_id,
                     COALESCE(sg.left_at, sg.joined_at) DESC NULLS LAST,
@@ -1857,7 +1857,7 @@ exports.getGroupById = async (req, res) => {
             JOIN users u ON u.id = sg.student_id AND u.branch_id = sg.branch_id
             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
             WHERE sg.status = 'active'
-            ORDER BY u.surname, u.name, u.id`, [id, currentMonth, branchId]);
+            ORDER BY u.surname, u.name, u.id`, [id, branchId]);
 
         const monthlyStats = await loadMonthlyGroupMemberStats({
             groupIds: [id],
