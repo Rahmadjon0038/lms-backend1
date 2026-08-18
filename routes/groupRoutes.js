@@ -1008,6 +1008,12 @@ router.get('/teacher/my-groups', protect, roleCheck(['teacher']), groupCtrl.getT
  *                             type: integer
  *                           address:
  *                             type: string
+ *                           username:
+ *                             type: string
+ *                             description: Talabaning tizimga kirish login nomi
+ *                           password:
+ *                             type: string
+ *                             description: Talabaning tizimga kirish paroli (teacher studentga yetkazib berishi uchun)
  *                           group_status:
  *                             type: string
  *                             enum: [active, stopped, finished]

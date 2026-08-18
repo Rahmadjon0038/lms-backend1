@@ -1,6 +1,6 @@
 const express = require('express');
 const { protect } = require('../middlewares/authMiddleware');
-const { protectSuperAdmin } = require('../middlewares/roleMiddleware');
+const { roleCheck } = require('../middlewares/roleMiddleware');
 const {
   checkVersion,
   listVersions,
@@ -34,8 +34,8 @@ const router = express.Router();
  */
 router.get('/version-check', checkVersion);
 
-// Faqat super admin: versiya sozlamalarini boshqarish
-router.get('/versions', protect, protectSuperAdmin, listVersions);
-router.patch('/versions/:platform', protect, protectSuperAdmin, updateVersion);
+// Admin va super admin versiya sozlamalarini boshqarishi mumkin.
+router.get('/versions', protect, roleCheck(['admin', 'super_admin']), listVersions);
+router.patch('/versions/:platform', protect, roleCheck(['admin', 'super_admin']), updateVersion);
 
 module.exports = router;

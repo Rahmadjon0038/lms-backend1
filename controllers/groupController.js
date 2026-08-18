@@ -3307,6 +3307,8 @@ exports.getTeacherGroupDetails = async (req, res) => {
                 u.father_name,
                 u.father_phone,
                 u.avatar_key,
+                u.username,
+                u.password_plain,
                 CASE
                   WHEN pa.image_path IS NULL THEN NULL
                   WHEN pa.image_path ~ '^https?://' THEN pa.image_path
@@ -3335,7 +3337,7 @@ exports.getTeacherGroupDetails = async (req, res) => {
                     ELSE 4
                 END,
                 u.name, u.surname
-        `, [groupId, pointsMonth]);
+        `, [groupId]);
 
         const monthlyStats = await loadMonthlyGroupMemberStats({
             groupIds: [groupId],
@@ -3369,6 +3371,8 @@ exports.getTeacherGroupDetails = async (req, res) => {
                     father_phone: student.father_phone || null,
                     avatar_key: student.avatar_key || null,
                     avatar_url: student.avatar_url || null,
+                    username: student.username || null,
+                    password: student.password_plain || null,
                     monthly_points: monthlyPoints,
                     group_status: student.group_status,
                     status_description: student.status_description,
