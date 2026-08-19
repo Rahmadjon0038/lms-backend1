@@ -412,52 +412,13 @@ exports.getStudentGroups = async (req, res) => {
     }
 };
 
-// 2. Studentni butunlay o'chirish - ADMIN yoki TEACHER
-// Student o'z akkauntini butunlay o'chiradi (mobil ilova sozlamalaridagi
-// "Delete account"). Parol yuborilsa tekshiriladi, ammo majburiy emas;
-// users qatori o'chganda bog'liq yozuvlar (guruh a'zoliklari, to'lovlar,
-// davomat, ballar) CASCADE orqali birga o'chadi.
+// Student akkauntini o'chirish backendda vaqtincha o'chirib qo'yilgan.
+// Endpoint mavjud bo'lib qoladi, lekin hech qanday ma'lumot o'chirilmaydi.
 exports.deleteMyAccount = async (req, res) => {
     try {
-        const { id: userId, role } = req.user;
-        const password = String(req.body?.password ?? '').trim();
-
-        if (role !== 'student') {
-            return res.status(403).json({
-                success: false,
-                message: 'Bu amal faqat studentlar uchun'
-            });
-        }
-        const userResult = await pool.query(
-            `SELECT id, password FROM users WHERE id = $1 AND role = 'student'`,
-            [userId]
-        );
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Akkaunt topilmadi'
-            });
-        }
-
-        if (password) {
-            const bcrypt = require('bcryptjs');
-            const passwordMatches = await bcrypt.compare(
-                password,
-                userResult.rows[0].password || ''
-            );
-            if (!passwordMatches) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Parol noto\'g\'ri'
-                });
-            }
-        }
-
-        await pool.query(`DELETE FROM users WHERE id = $1 AND role = 'student'`, [userId]);
-
-        res.json({
-            success: true,
-            message: 'Akkaunt va unga bog\'liq barcha ma\'lumotlar o\'chirildi'
+        return res.status(410).json({
+            success: false,
+            message: "Akkaunt o'chirish backendda o'chirib qo'yilgan"
         });
     } catch (error) {
         console.error('❌ Student akkauntini o\'chirishda xato:', error);

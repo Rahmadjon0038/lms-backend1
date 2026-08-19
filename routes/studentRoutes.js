@@ -481,7 +481,7 @@ router.get("/:student_id/groups", protect, roleCheck(['admin']), studentControll
  *       401:
  *         description: Ruxsat berilmadi (token kerak)
  */
-// Student o'z akkauntini o'chirishi (parol ixtiyoriy)
+// Student akkauntini o'chirish endpointi backendda vaqtincha bloklangan
 router.delete("/me/account", protect, roleCheck(['student']), studentController.deleteMyAccount);
 router.get("/my-groups", protect, studentController.getMyGroups);
 router.get("/my-point-reports", protect, studentController.getMyPointReports);
