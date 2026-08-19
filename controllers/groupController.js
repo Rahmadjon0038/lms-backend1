@@ -3328,7 +3328,7 @@ exports.getTeacherGroupDetails = async (req, res) => {
             FROM student_groups sg
             JOIN users u ON sg.student_id = u.id
             LEFT JOIN profile_avatars pa ON BTRIM(u.avatar_key) = BTRIM(pa.avatar_key) AND pa.branch_id = sg.branch_id
-            WHERE sg.group_id = $1
+            WHERE sg.group_id = $1 AND sg.status <> 'removed'
             ORDER BY
                 CASE sg.status
                     WHEN 'active' THEN 1
