@@ -135,8 +135,44 @@ const uploadProfileAvatar = async (req, res) => {
   }
 };
 
+const deleteProfileAvatar = async (req, res) => {
+  try {
+    const avatarId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(avatarId)) {
+      return res.status(400).json({ success: false, message: 'Noto\'g\'ri avatar id' });
+    }
+
+    const branchId = getScopedBranchId(req);
+    const result = await pool.query(
+      `DELETE FROM profile_avatars WHERE id = $1 AND branch_id = $2 RETURNING id, image_path`,
+      [avatarId, branchId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Avatar topilmadi' });
+    }
+
+    const { image_path: imagePath } = result.rows[0];
+    if (imagePath) {
+      const absolutePath = path.join(__dirname, '..', imagePath.replace(/^\//, ''));
+      if (fs.existsSync(absolutePath)) {
+        fs.unlinkSync(absolutePath);
+      }
+    }
+
+    return res.json({ success: true, message: 'Avatar o\'chirildi', id: avatarId });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Avatarni o\'chirishda xatolik',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   uploadAvatarImage,
   getProfileAvatars,
   uploadProfileAvatar,
+  deleteProfileAvatar,
 };

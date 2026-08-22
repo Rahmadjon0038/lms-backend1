@@ -34,4 +34,6 @@ router.post(
   profileAvatarController.uploadProfileAvatar
 );
 
+router.delete('/:id', roleCheck(['admin', 'super_admin']), profileAvatarController.deleteProfileAvatar);
+
 module.exports = router;
