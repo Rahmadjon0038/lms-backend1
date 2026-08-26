@@ -198,14 +198,36 @@ const createUserTable = async () => {
       
       // Agar required_amount ustuni mavjud bo'lsa, uni o'chiramiz
       await pool.query(`
-        DO $$ 
-        BEGIN 
+        DO $$
+        BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='required_amount') THEN
             ALTER TABLE users DROP COLUMN required_amount;
             RAISE NOTICE 'required_amount ustuni o''chirildi';
           END IF;
         END $$;
       `);
+
+      // username har doim bo'shliqsiz saqlanishi uchun trigger (admin panelda
+      // yoki boshqa joyda chetiga bo'shliq kiritilsa ham, bazada tozalanadi)
+      await pool.query(`
+        CREATE OR REPLACE FUNCTION trim_users_username() RETURNS trigger AS $fn$
+        BEGIN
+          IF NEW.username IS NOT NULL THEN
+            NEW.username := BTRIM(NEW.username);
+          END IF;
+          RETURN NEW;
+        END;
+        $fn$ LANGUAGE plpgsql;
+      `);
+      await pool.query(`
+        DROP TRIGGER IF EXISTS trg_trim_users_username ON users;
+      `);
+      await pool.query(`
+        CREATE TRIGGER trg_trim_users_username
+        BEFORE INSERT OR UPDATE OF username ON users
+        FOR EACH ROW EXECUTE FUNCTION trim_users_username();
+      `);
+      console.log("✅ 'users' username trim trigger o'rnatildi.");
     } catch (alterErr) {
       console.log("⚠️ Ustunlar allaqachon mavjud yoki qo'shishda xato:", alterErr.message);
     }

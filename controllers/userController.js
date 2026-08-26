@@ -175,7 +175,7 @@ const generateUniqueUsername = async (baseUsername, usedUsernames, branchId = 1)
     while (true) {
         if (!usedUsernames.has(candidate)) {
             const exists = await pool.query(
-                'SELECT 1 FROM users WHERE username = $1',
+                'SELECT 1 FROM users WHERE BTRIM(username) = BTRIM($1)',
                 [candidate]
             );
             if (exists.rows.length === 0) {
@@ -235,7 +235,8 @@ const resolveAdmissionAdmin = async ({ req, branchId, admittedBy, admittedByName
 
 // 1. Student ro'yxatdan o'tishi (Yangi maydonlar bilan)
 const registerStudent = async (req, res) => {
-    const { name, surname, username, password, phone, phone2, father_name, father_phone, address, age, subject_id, admitted_by, admitted_by_name } = req.body;
+    const { name, surname, password, phone, phone2, father_name, father_phone, address, age, subject_id, admitted_by, admitted_by_name } = req.body;
+    const username = normalizeUsername(req.body?.username);
     try {
         const branchId = getUserBranchId(req.user);
         const { value: normalizedAge, error: ageError } = normalizeAgeValue(age);
@@ -248,7 +249,7 @@ const registerStudent = async (req, res) => {
         }
 
         const userExists = await pool.query(
-            'SELECT * FROM users WHERE username = $1',
+            'SELECT 1 FROM users WHERE BTRIM(username) = BTRIM($1)',
             [username]
         );
         if (userExists.rows.length > 0) {
@@ -531,17 +532,18 @@ const changePassword = async (req, res) => {
 
 // 1.1. Teacher yaratish (Faqat adminlar uchun) - Ko'p fanlar bilan (primary fan yo'q)
 const registerTeacher = async (req, res) => {
-    const { 
-        name, surname, username, password, phone, phone2, subject_ids, startDate,
-        certificate, age, has_experience, experience_years, experience_place, 
+    const {
+        name, surname, password, phone, phone2, subject_ids, startDate,
+        certificate, age, has_experience, experience_years, experience_place,
         available_times, work_days_hours
     } = req.body;
-    
+    const username = normalizeUsername(req.body?.username);
+
     try {
         const branchId = getUserBranchId(req.user);
         // Username mavjudligini tekshirish
         const userExists = await pool.query(
-            'SELECT * FROM users WHERE username = $1',
+            'SELECT 1 FROM users WHERE BTRIM(username) = BTRIM($1)',
             [username]
         );
         if (userExists.rows.length > 0) {
@@ -622,7 +624,8 @@ const registerTeacher = async (req, res) => {
 
 // 1.2. Admin yaratish (Faqat super adminlar uchun)
 const registerAdmin = async (req, res) => {
-    const { name, surname, username, password, phone, phone2 } = req.body;
+    const { name, surname, password, phone, phone2 } = req.body;
+    const username = normalizeUsername(req.body?.username);
 
     if (!name || !surname || !username || !password) {
         return res.status(400).json({ message: "name, surname, username va password majburiy" });
@@ -631,7 +634,7 @@ const registerAdmin = async (req, res) => {
     try {
         const branchId = getUserBranchId(req.user);
         const userExists = await pool.query(
-            'SELECT 1 FROM users WHERE username = $1',
+            'SELECT 1 FROM users WHERE BTRIM(username) = BTRIM($1)',
             [username]
         );
         if (userExists.rows.length > 0) {
