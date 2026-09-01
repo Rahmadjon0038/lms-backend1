@@ -853,6 +853,7 @@ const getAdmissionsStatistics = async (req, res) => {
         WITH group_joins AS (
           SELECT DISTINCT ON (sg.student_id, sg.group_id)
             CONCAT(sg.student_id, '-join-', sg.group_id, '-', TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYYMMDDHH24MI')) AS id,
+            sg.student_id AS student_id,
             u.name,
             u.surname,
             u.phone,
@@ -910,10 +911,24 @@ const getAdmissionsStatistics = async (req, res) => {
             AND sg.joined_at IS NOT NULL
             AND TO_CHAR(sg.joined_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
             AND u.created_at < $3::date
+            -- Agar shu talaba SHU OY ICHIDA (kunidan qat'iy nazar) BOSHQA
+            -- guruhdan chiqarilgan bo'lsa, demak u shu oyga "guruhsiz" holda
+            -- kirmagan - bu holat "qayta biriktirilgan" (uzoq vaqt guruhsiz
+            -- yurgandan keyin qaytarilgan) emas, oddiy ichki guruh almashtirish.
+            AND NOT EXISTS (
+              SELECT 1
+              FROM student_groups sg_same_month_close
+              WHERE sg_same_month_close.student_id = sg.student_id
+                AND sg_same_month_close.branch_id = sg.branch_id
+                AND sg_same_month_close.group_id != sg.group_id
+                AND sg_same_month_close.left_at IS NOT NULL
+                AND TO_CHAR(sg_same_month_close.left_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM') = $2
+            )
           ORDER BY sg.student_id, sg.group_id, sg.joined_at DESC NULLS LAST, sg.id DESC
         )
         SELECT
           g.id,
+          g.student_id,
           g.name,
           g.surname,
           g.phone,
@@ -981,6 +996,7 @@ const getAdmissionsStatistics = async (req, res) => {
             COALESCE(NULLIF(BTRIM(sg.left_reason), ''), NULLIF(BTRIM(u.unassigned_reason), ''), 'Sabab ko''rsatilmagan') AS unassigned_reason,
             sg.group_id,
             g.name AS group_name,
+            g.schedule->>'time' AS group_time_range,
             COALESCE(s.name, '') AS subject_name,
             g.teacher_id,
             CONCAT_WS(' ', t.name, t.surname) AS teacher_name,
@@ -1041,6 +1057,7 @@ const getAdmissionsStatistics = async (req, res) => {
           r.unassigned_reason,
           r.group_id,
           r.group_name,
+          r.group_time_range,
           r.subject_name,
           r.teacher_id,
           r.teacher_name,
@@ -1084,6 +1101,16 @@ const getAdmissionsStatistics = async (req, res) => {
     const resolvedReasonPattern = /(hal bo'ldi|hal qilindi|qabul qilindi|o'qiydi|o'qimoqda|guruhga biriktir|biriktirilgan|qo'shil|qo'shildi|davom etadi|qoladi)/i;
     const newReasonPattern = /(yangi|qo'shil|qabul)/i;
 
+    // Guruhning boshlanish soatiga qarab "kunduzgi" (17:00gacha) yoki "kechki"
+    // (17:00dan keyin) smenaga ajratamiz - to'kilgan talabalarni mas'ul
+    // adminlarga smena bo'yicha bo'lib ko'rsatish uchun.
+    const getTimeShift = (timeRange) => {
+      const startPart = String(timeRange || '').trim().split('-')[0]?.trim();
+      const hour = parseInt(startPart?.split(':')[0], 10);
+      if (!Number.isFinite(hour)) return null;
+      return hour < 17 ? 'day' : 'evening';
+    };
+
     const classifyAdmission = (row) => {
       const recordType = String(row.record_type || '').toLowerCase();
       const reasonText = String(row.unassigned_reason || '').trim();
@@ -1091,7 +1118,13 @@ const getAdmissionsStatistics = async (req, res) => {
       const isRemovedRecord = recordType === 'removed';
       const isGroupJoinRecord = recordType === 'group_join';
       const isGrouped = Boolean(row.active_group_id || row.active_group_name) || row.course_status === 'in_progress';
-      const isRemoved = isRemovedRecord || Boolean(row.closed_group_id || row.closed_group_name) || ['removed', 'stopped', 'finished', 'dropped', 'completed'].includes(String(row.course_status || '').toLowerCase());
+      // isRemovedRecord (removedQuery'dan kelgan) SQL darajasida allaqachon
+      // "boshqa guruhga qayta kirmaganini" tekshirgan - shuning uchun so'zsiz
+      // ishoniladi. Boshqa hollarda (masalan yangi qabul + shu oy ichida
+      // ko'chirilgan) closed_group_id borligi hali "chiqib ketgan" demasligi
+      // mumkin - agar hozir boshqa guruhda faol bo'lsa (isGrouped), "chiqarilgan"
+      // hisoblanmasligi kerak.
+      const isRemoved = isRemovedRecord || (!isGrouped && (Boolean(row.closed_group_id || row.closed_group_name) || ['removed', 'stopped', 'finished', 'dropped', 'completed'].includes(String(row.course_status || '').toLowerCase())));
       const isCalled = followupStatus === 'called_unresolved' || followupStatus === 'called_resolved' || callReasonPattern.test(reasonText);
       const isCalledResolved = isCalled && resolvedReasonPattern.test(reasonText);
       const isCalledUnresolved = followupStatus === 'called_unresolved' || (isCalled && !resolvedReasonPattern.test(reasonText));
@@ -1114,6 +1147,8 @@ const getAdmissionsStatistics = async (req, res) => {
 
         return {
         id: row.id,
+        student_id: row.student_id || row.id,
+        time_shift: isRemoved ? getTimeShift(row.group_time_range || row.closed_group_time_range) : null,
         name: `${row.name} ${row.surname}`.trim(),
         phone: row.phone || '',
         date: row.admission_date,
