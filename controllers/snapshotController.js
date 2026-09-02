@@ -2120,10 +2120,15 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     // panel "students" sahifasi bilan AYNAN bir xil hisob: users LEFT JOIN
     // student_groups (status <> 'removed', ikki guruhdagi student ikki
     // marta, guruhsiz bir marta).
-    // Faol/To'xtatgan esa tanlangan OY uchun to'lov jadvalidan
-    // (monthly_snapshots.monthly_status) — shu oyda haqiqatda faol/
-    // to'xtagan bo'lganlar soni, oy filtri o'zgarganda o'zgaradi.
-    // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi.
+    // Faol/To'xtatgan — agar shu OY uchun to'lov jadvali (monthly_snapshots)
+    // allaqachon yaratilgan bo'lsa, o'sha muzlatilgan holatdan olinadi (oy
+    // tarixi to'g'ri saqlanishi uchun — masalan o'tgan oyni ko'rayotganda).
+    // Agar hali yaratilmagan bo'lsa (masalan yangi oy boshi, admin "Oylik
+    // jadval yaratish"ni bosmagan), 0/0 ko'rsatish o'rniga student_groups
+    // dagi joriy holatga tushib qolamiz — chunki davomat kabi sahifalar
+    // to'lov jadvali borligiga bog'liq bo'lmasligi kerak.
+    // Pul summalari esa to'lov jadvalining to'liq hisobi — filtrlanmaydi
+    // (jadval yaratilmagan bo'lsa pul bo'yicha ko'rsatadigan narsa yo'q).
     const studentCountsQuery = `
       SELECT
         (SELECT COUNT(*)
@@ -2132,16 +2137,32 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
             AND sg.status <> 'removed'
           WHERE u.role = 'student'
             AND u.branch_id = $1)::int as total_students,
-        (SELECT COUNT(*)
-           FROM monthly_snapshots ms
-          WHERE ms.month = $2
-            AND ms.branch_id = $1
-            AND ms.monthly_status = 'active')::int as active_students,
-        (SELECT COUNT(*)
-           FROM monthly_snapshots ms
-          WHERE ms.month = $2
-            AND ms.branch_id = $1
-            AND ms.monthly_status = 'stopped')::int as stopped_students
+        (CASE WHEN EXISTS (
+            SELECT 1 FROM monthly_snapshots ms WHERE ms.month = $2 AND ms.branch_id = $1
+          )
+          THEN (SELECT COUNT(*)
+                  FROM monthly_snapshots ms
+                 WHERE ms.month = $2
+                   AND ms.branch_id = $1
+                   AND ms.monthly_status = 'active')
+          ELSE (SELECT COUNT(*)
+                  FROM student_groups sg
+                 WHERE sg.branch_id = $1
+                   AND sg.status = 'active')
+        END)::int as active_students,
+        (CASE WHEN EXISTS (
+            SELECT 1 FROM monthly_snapshots ms WHERE ms.month = $2 AND ms.branch_id = $1
+          )
+          THEN (SELECT COUNT(*)
+                  FROM monthly_snapshots ms
+                 WHERE ms.month = $2
+                   AND ms.branch_id = $1
+                   AND ms.monthly_status = 'stopped')
+          ELSE (SELECT COUNT(*)
+                  FROM student_groups sg
+                 WHERE sg.branch_id = $1
+                   AND sg.status = 'stopped')
+        END)::int as stopped_students
     `;
 
     const summaryQuery = `
