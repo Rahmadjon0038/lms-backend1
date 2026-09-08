@@ -1,3 +1,14 @@
+# ⚠️ DIQQAT: bu fayl HOZIRGI production serveri uchun EMAS.
+# Production'da `postgres16` nomli, `pgdata` volume'li konteyner ishlatiladi —
+# bu fayl esa boshqa nom (`lms_postgres`, `lms_pgdata`) va boshqa DB_HOST
+# (`postgres`, prod'da esa `postgres16`) ishlatadi. Bu ikkalasi `lms_backend`
+# nomini bo'lishadi, shuning uchun bu faylni `up`/`up --build` bilan ishga
+# tushirish production'dagi `lms_backend`ni QAYTA YARATIB, uni BO'SH bazaga
+# ulab qo'yadi (2026-08-26 da aynan shu sabab bilan production uzilib qolgan edi).
+#
+# Production serverda HAR DOIM faqat `docker-compose.prod.yml` ishlating:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
 services:
   postgres:
     image: postgres:16

@@ -1031,6 +1031,21 @@ const updateProfile = async (req, res) => {
     ];
 
     const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+
+    // Studentlar mobil ilova orqali faqat username'ni o'zgartira oladi. Ism/familiya/telefonni
+    // student o'zi o'zgartirsa, bu adminlar tizimidagi ma'lumotlarni ham o'zgartirib yuborib,
+    // haqiqiy hujjatlar bilan mos kelmay qolishi mumkin. Mobil ilova hozircha bu maydonlarni
+    // baribir yuboraveradi (yangilab bo'lmaydi), shuning uchun ularni xato qaytarmasdan
+    // jimgina e'tiborsiz qoldiramiz — faqat username o'zgaradi.
+    if (req.user?.role === 'student') {
+        const studentAllowedFields = ['username'];
+        for (const key of Object.keys(incoming)) {
+            if (!studentAllowedFields.includes(key)) {
+                delete incoming[key];
+            }
+        }
+    }
+
     const incomingKeys = Object.keys(incoming);
 
     if (incomingKeys.length === 0) {
