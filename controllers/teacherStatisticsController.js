@@ -1,6 +1,22 @@
+const multer = require('multer');
 const pool = require('../config/db');
 const { notifyUser } = require('./notificationController');
 const { getEnglishTeacherClause } = require('../utils/englishTeachers');
+const telegramBotService = require('../services/telegramBotService');
+
+// Statistika skrinshotini Telegramga forward qilish uchun — rasm hech qachon
+// diskka yozilmaydi (memoryStorage), faqat req.file.buffer sifatida keladi.
+exports.uploadReportScreenshotMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      cb(new Error('Faqat rasm fayli yuborish mumkin'));
+      return;
+    }
+    cb(null, true);
+  },
+}).single('screenshot');
 
 const MAX_HOMEWORK = 10;
 const MAX_VOCABULARY = 10;
@@ -190,6 +206,23 @@ const formatStoredDateTime = (value) => {
   }).format(date);
 };
 
+// Postgres DATE ustuni node-pg orqali Node serverining LOKAL vaqt zonasida
+// "yarim tunda" turgan JS Date obyekti sifatida qaytadi. Buni `.toISOString()`
+// bilan formatlasak (UTC'ga o'tkazadi), server vaqt zonasi UTC'dan oldinda
+// bo'lganda (masalan Asia/Tashkent, +5) sana BIR KUNGA ORQAGA surilib qoladi.
+// Shuning uchun UTC emas, obyektning LOKAL yil/oy/kun komponentlaridan
+// foydalanamiz — ular bazadagi haqiqiy sanaga mos keladi.
+const formatDateOnly = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value.slice(0, 10);
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const formatMonthKey = (value) => {
   if (!value) return '';
   const parsed = new Date(value);
@@ -259,7 +292,12 @@ const getLessonContext = async (lessonId, branchId) => {
     [lessonId, branchId]
   );
 
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  if (!row) return null;
+  // lesson_date'ni shu yerdayoq "YYYY-MM-DD" satriga aylantiramiz — pastda
+  // uni ham ko'rsatish (label), ham SQL parametri sifatida ishlatamiz;
+  // Date obyekti holida qolsa ikkala joyda ham vaqt zonasi xatosi xavfi bor.
+  return { ...row, lesson_date: formatDateOnly(row.lesson_date) };
 };
 
 const normalizeRows = (rows = [], columns = []) => {
@@ -329,7 +367,7 @@ const buildReportPayload = (row) => {
     teacher_name: row.teacher_name || reportData.teacher_name || '',
     subject_name: row.subject_name || reportData.subject_name || '',
     report_month: row.report_month || '',
-    lesson_date: row.lesson_date || reportData.lesson_date || '',
+    lesson_date: formatDateOnly(row.lesson_date) || reportData.lesson_date || '',
     lesson_start_time: row.lesson_start_time || reportData.lesson_start_time || '',
     lesson_end_time: row.lesson_end_time || reportData.lesson_end_time || '',
     lesson_time:
@@ -440,14 +478,14 @@ exports.saveLessonStatistics = async (req, res) => {
       lesson_id: lessonId,
       lesson_label:
         lesson_label ||
-        `${lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date} • ${lesson.group_name}`,
+        `${formatDateOnly(lesson.lesson_date)} • ${lesson.group_name}`,
       group_name: group_name || lesson.group_name,
       teacher_name: [lesson.teacher_surname, lesson.teacher_name]
         .filter((part) => String(part || '').trim().length > 0)
         .join(' ')
         .trim(),
       subject_name: lesson.subject_name,
-      lesson_date: lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '',
+      lesson_date: formatDateOnly(lesson.lesson_date),
       lesson_start_time: lesson.lesson_start_time || '',
       lesson_end_time: lesson.lesson_end_time || '',
       group_schedule: lesson.group_schedule || null,
@@ -558,7 +596,7 @@ exports.saveLessonStatistics = async (req, res) => {
     // Har bir o'quvchiga hisobot kelgani haqida push bildirishnoma —
     // fanidan qat'iy nazar (English yoki boshqa fan), teacher hisobot
     // yuborsa student/ota-ona tarafga xabar boradi.
-    const lessonDateLabel = lesson.lesson_date?.toISOString?.().slice(0, 10) || lesson.lesson_date || '';
+    const lessonDateLabel = formatDateOnly(lesson.lesson_date);
     // "Ball" rejimida (grading_enabled=false) foiz/baho ma'noga ega emas —
     // xabar matnida ham ko'rsatilmasin.
     const reportSubjectLabel = lesson.subject_name
@@ -1084,6 +1122,70 @@ exports.getEnglishManagerAvailableMonths = async (req, res) => {
 
 exports.getColumnCatalog = async (req, res) => {
   res.json({ success: true, data: COLUMN_CATALOG });
+};
+
+// Mobil ilova statistikani saqlagandan so'ng jadval skrinshotini (PNG) shu
+// endpointga yuboradi — rasm serverda hech qachon diskka yozilmaydi (multer
+// memoryStorage), faqat xotiradagi buffer sifatida Telegram guruhga
+// darhol forward qilinadi va yo'q qilinadi.
+exports.uploadReportScreenshot = async (req, res) => {
+  try {
+    const lessonId = asInt(req.params.lessonId);
+    if (!lessonId) {
+      return res.status(400).json({ success: false, message: 'lessonId noto\'g\'ri' });
+    }
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ success: false, message: 'Rasm topilmadi' });
+    }
+
+    const lesson = await getLessonContext(lessonId, req.user.branch_id || 1);
+    if (!lesson) {
+      return res.status(404).json({ success: false, message: 'Dars topilmadi' });
+    }
+
+    const effectiveTeacherId = lesson.lesson_teacher_id || lesson.group_teacher_id;
+    const branchId = lesson.group_branch_id || lesson.branch_id || req.user.branch_id || 1;
+    const reportMonth = formatMonthKey(lesson.lesson_date);
+    const teacherName = [lesson.teacher_surname, lesson.teacher_name]
+      .filter((part) => String(part || '').trim().length > 0)
+      .join(' ')
+      .trim();
+
+    const total = req.body?.total ? `Jami ball: ${req.body.total}` : '';
+    const percent = req.body?.percent ? `${req.body.percent}%` : '';
+    const feedback = req.body?.feedback ? String(req.body.feedback).toUpperCase() : '';
+
+    const caption = [
+      '📊 Statistika hisoboti',
+      `👨‍🏫 ${teacherName || "Noma'lum"}`,
+      `📚 ${lesson.group_name}${lesson.subject_name ? ` • ${lesson.subject_name}` : ''}`,
+      `📅 ${formatDateOnly(lesson.lesson_date)}`,
+      [total, percent, feedback].filter(Boolean).join(' • '),
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      await telegramBotService.sendReportScreenshot({
+        teacherId: effectiveTeacherId,
+        teacherName,
+        groupId: lesson.group_id,
+        groupName: lesson.group_name || '',
+        lessonId,
+        branchId,
+        imageBuffer: req.file.buffer,
+        caption,
+        reportMonth,
+      });
+    } catch (telegramError) {
+      console.warn(`⚠️ Telegramga statistika rasmi yuborilmadi: ${telegramError.message}`);
+    }
+
+    return res.json({ success: true, message: 'Yuborildi' });
+  } catch (error) {
+    console.error('Statistika screenshotini Telegramga yuborishda xatolik:', error);
+    return res.status(500).json({ success: false, message: 'Yuborilmadi', error: error.message });
+  }
 };
 
 // Reused by studentController so the parent/student-facing report response

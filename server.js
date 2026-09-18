@@ -103,7 +103,11 @@ const adminSalaryRoutes = require('./routes/adminSalaryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const branchRoutes = require('./routes/branchRoutes');
 const teacherStatisticsRoutes = require('./routes/teacherStatisticsRoutes');
+const homeworkRoutes = require('./routes/homeworkRoutes');
+const teacherReminderRoutes = require('./routes/teacherReminderRoutes');
 const appVersionRoutes = require('./routes/appVersionRoutes');
+const cron = require('node-cron');
+const { runDailyTeacherReminders } = require('./services/teacherReminderService');
 const { createGroupTables } = require('./models/groupModel');
 const { createStudentAdditionalTables } = require('./models/studentModel');
 const { createTeacherSubjectTables } = require('./models/teacherSubjectModel');
@@ -118,6 +122,9 @@ const { createProfileAvatarTable } = require('./models/profileAvatarModel');
 const { createContentTables } = require('./models/contentModel');
 const { createBranchTables } = require('./models/branchModel');
 const { createTeacherStatisticsTables } = require('./models/teacherStatisticsModel');
+const { createHomeworkTable } = require('./models/homeworkModel');
+const { createTelegramBotTable } = require('./models/telegramBotModel');
+const telegramBotService = require('./services/telegramBotService');
 const { createAppVersionTable } = require('./models/appVersionModel');
 const { createPaymentTables } = require('./scripts/createPaymentTables');
 const createGroupMonthlySettingsTable = require('./scripts/createGroupMonthlySettingsTable');
@@ -146,7 +153,23 @@ app.use('/api/admin-salary', adminSalaryRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/branches', branchRoutes);
 app.use('/api/teacher-statistics', teacherStatisticsRoutes);
+app.use('/api/homework', homeworkRoutes);
+app.use('/api/teacher-reminders', teacherReminderRoutes);
 app.use('/api/app', appVersionRoutes);
+
+// Har kuni soat 19:00 (Asia/Tashkent) da — o'sha kuni darsi tugagan, lekin
+// hisobot va/yoki uyga vazifa yubormagan ustozlarga eslatma push
+// bildirishnoma yuboradi. Hech narsa yuborilmagan bo'lsa (hammasi allaqachon
+// yuborilgan), hech kimga bildirishnoma bormaydi.
+cron.schedule(
+  '0 19 * * *',
+  () => {
+    runDailyTeacherReminders().catch((error) => {
+      console.error('❌ Teacher daily reminder cron xatolik:', error);
+    });
+  },
+  { timezone: 'Asia/Tashkent' }
+);
 
 // createGroupTables ichiga vaqtincha qo'shib qo'ysang bo'ladi
 // Serverni portga ulash va jadvalni yaratish
@@ -188,6 +211,8 @@ app.listen(PORT, '0.0.0.0', async () => {
             ['content', createContentTables],
             ['branches', createBranchTables],
             ['teacher_statistics', createTeacherStatisticsTables],
+            ['lesson_homework', createHomeworkTable],
+            ['telegram_bot_messages', createTelegramBotTable],
             ['app_versions', createAppVersionTable]
         ];
 
@@ -296,6 +321,11 @@ app.listen(PORT, '0.0.0.0', async () => {
         }
 
         console.log("✅ Dastlabki DB sozlash bosqichlari muvaffaqiyatli yakunlandi.");
+        console.log(
+            telegramBotService.isEnabled()
+                ? "✅ Telegram bot yoqilgan (polling rejimida ishlamoqda)."
+                : "⚠️ Telegram bot o'chirilgan (TELEGRAM_BOT_TOKEN sozlanmagan)."
+        );
 
         // Default admin va super admin yaratish, login/parolni terminalda ko'rsatish
         await seedDefaultAdmin();

@@ -18,4 +18,14 @@ router.put('/lessons/:lessonId', protect, teacherOrAdmin, ctrl.saveLessonStatist
 router.get('/lessons/:lessonId', protect, managerViewer, ctrl.getLessonStatistics);
 router.delete('/lessons/:lessonId', protect, teacherOrAdmin, ctrl.deleteLessonStatistics);
 
+// Mobil ilova statistikani saqlagach, jadval skrinshotini shu orqali
+// Telegram guruhga forward qilish uchun yuboradi (ixtiyoriy, qo'shimcha oqim).
+router.post(
+  '/lessons/:lessonId/telegram-screenshot',
+  protect,
+  teacherOrAdmin,
+  ctrl.uploadReportScreenshotMiddleware,
+  ctrl.uploadReportScreenshot
+);
+
 module.exports = router;
