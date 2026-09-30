@@ -52,7 +52,92 @@ const getTeacherWithPercent = async (client, teacherId, branchId) => {
 
 const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, branchId) => {
   const res = await client.query(
-    `WITH active_discounts AS (
+    `WITH teacher_groups AS (
+       -- Bu teacher HOZIR biriktirilgan guruhlar + shu oyda kamida bitta
+       -- dars bergan (lessons.teacher_id) guruhlar - guruh o'rtada boshqa
+       -- teacherga o'tkazilgan bo'lsa ham, eski teacher o'sha guruhni va
+       -- talabalarini shu oy uchun ko'rishda davom etadi.
+       SELECT g.id AS group_id
+       FROM groups g
+       WHERE g.teacher_id = $1 AND g.branch_id = $3
+       UNION
+       SELECT DISTINCT l.group_id
+       FROM lessons l
+       WHERE l.teacher_id = $1
+         AND l.branch_id = $3
+         AND TO_CHAR(l.date, 'YYYY-MM') = $2
+         AND COALESCE(l.is_holiday, false) = false
+       UNION
+       -- Admin shu teacher uchun qo'lda dars sonini kiritgan bo'lsa (hatto
+       -- lessons jadvalida hali yozuv bo'lmasa ham) - guruh ko'rinishda qoladi.
+       SELECT tgml.group_id
+       FROM teacher_group_month_lessons tgml
+       WHERE tgml.teacher_id = $1 AND tgml.branch_id = $3 AND tgml.month = $2
+     ),
+     auto_lesson_counts AS (
+       SELECT l.group_id, l.teacher_id, COUNT(*)::numeric AS lesson_count
+       FROM lessons l
+       WHERE l.branch_id = $3
+         AND TO_CHAR(l.date, 'YYYY-MM') = $2
+         AND COALESCE(l.is_holiday, false) = false
+         AND l.group_id IN (SELECT group_id FROM teacher_groups)
+       GROUP BY l.group_id, l.teacher_id
+     ),
+     group_teacher_pairs AS (
+       -- Avtomatik dars yozuvi bor VA/YOKI qo'lda kiritilgan qiymati bor
+       -- har bir (guruh, teacher) juftligi.
+       SELECT group_id, teacher_id FROM auto_lesson_counts
+       UNION
+       SELECT group_id, teacher_id FROM teacher_group_month_lessons
+       WHERE month = $2 AND branch_id = $3
+     ),
+     group_lesson_counts AS (
+       -- Qo'lda kiritilgan qiymat bo'lsa - o'sha ustun turadi (admin
+       -- to'g'rilagan), bo'lmasa lessons jadvalidagi avtomatik sanoq.
+       SELECT
+         gtp.group_id,
+         gtp.teacher_id,
+         COALESCE(tgml.lesson_count, alc.lesson_count, 0)::numeric AS lesson_count
+       FROM group_teacher_pairs gtp
+       LEFT JOIN auto_lesson_counts alc ON alc.group_id = gtp.group_id AND alc.teacher_id = gtp.teacher_id
+       LEFT JOIN teacher_group_month_lessons tgml
+         ON tgml.group_id = gtp.group_id AND tgml.teacher_id = gtp.teacher_id
+        AND tgml.month = $2 AND tgml.branch_id = $3
+       WHERE gtp.group_id IN (SELECT group_id FROM teacher_groups)
+     ),
+     group_lesson_totals AS (
+       SELECT group_id, SUM(lesson_count) AS total_lessons
+       FROM group_lesson_counts
+       GROUP BY group_id
+     ),
+     group_teacher_share AS (
+       -- Shu teacher o'sha guruhda oy davomida bergan darslarning ulushi
+       -- (0..1). Agar hech qanday dars yozuvi bo'lmasa (masalan darslar
+       -- hali generatsiya qilinmagan), eski xatti-harakat saqlanadi: 100%.
+       SELECT tg.group_id,
+         CASE
+           WHEN COALESCE(glt.total_lessons, 0) = 0 THEN 1
+           ELSE COALESCE(glc.lesson_count, 0) / glt.total_lessons
+         END AS share,
+         COALESCE(glc.lesson_count, 0) AS my_lesson_count,
+         COALESCE(glt.total_lessons, 0) AS total_lesson_count,
+         (tgml.id IS NOT NULL) AS is_manual
+       FROM teacher_groups tg
+       LEFT JOIN group_lesson_totals glt ON glt.group_id = tg.group_id
+       LEFT JOIN group_lesson_counts glc ON glc.group_id = tg.group_id AND glc.teacher_id = $1
+       LEFT JOIN teacher_group_month_lessons tgml
+         ON tgml.group_id = tg.group_id AND tgml.teacher_id = $1 AND tgml.month = $2 AND tgml.branch_id = $3
+     ),
+     group_other_teacher AS (
+       -- Shu guruhda $1 dan BOSHQA eng ko'p dars bergan teacher - "oldingi
+       -- teacher" sifatida ko'rsatish uchun (ulush 100% dan kam bo'lsa).
+       SELECT DISTINCT ON (glc.group_id)
+         glc.group_id, glc.teacher_id, glc.lesson_count
+       FROM group_lesson_counts glc
+       WHERE glc.teacher_id IS DISTINCT FROM $1
+       ORDER BY glc.group_id, glc.lesson_count DESC
+     ),
+     active_discounts AS (
        SELECT
          sd.student_id,
          sd.group_id,
@@ -135,7 +220,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
        LEFT JOIN active_discounts ad
          ON ad.student_id = ms.student_id
         AND ad.group_id = ms.group_id
-       WHERE g.teacher_id = $1
+       WHERE g.id IN (SELECT group_id FROM teacher_groups)
          AND ms.month = $2
          AND ms.branch_id = $3
          AND g.branch_id = $3
@@ -144,7 +229,6 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
      ),
      teacher_students_agg AS (
        SELECT
-         tss.teacher_id,
          COUNT(*)::int AS total_students,
          COUNT(*) FILTER (WHERE tss.payment_state = 'paid')::int AS paid_students_count,
          COUNT(*) FILTER (WHERE tss.payment_state = 'partial')::int AS partial_students_count,
@@ -185,14 +269,83 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
            '[]'::json
          ) AS students
        FROM teacher_student_status tss
-       GROUP BY tss.teacher_id
+     ),
+     teacher_group_totals AS (
+       -- Har bir guruh bo'yicha jami (100%) yig'ilgan pul - hali ulush
+       -- (share) qo'llanilmagan, guruhda qatnashgan barcha talabalar puli.
+       -- current_teacher_id - guruhning HOZIRGI (jonli) teacheri, agar bu
+       -- $1 dan farq qilsa - demak guruh boshqa teacherga o'tkazilgan.
+       SELECT
+         group_id,
+         MAX(group_name) AS group_name,
+         MAX(subject_name) AS subject_name,
+         MAX(teacher_id) AS current_teacher_id,
+         COALESCE(SUM(total_paid_amount), 0)::numeric AS actual_collected
+       FROM teacher_student_status
+       GROUP BY group_id
+     ),
+     teacher_group_agg AS (
+       SELECT
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'group_id', g.group_id,
+               'group_name', g.group_name,
+               'subject_name', g.subject_name,
+               -- Shu teacherga tegishli ulush qo'llanilgan summa (masalan
+               -- guruh oy davomida boshqa teacherga o'tgan bo'lsa, faqat
+               -- shu teacher bergan darslar nisbatidagi qismi)
+               'actual_collected', ROUND(g.actual_collected * COALESCE(gts.share, 1), 2),
+               'lesson_share_percent', ROUND(COALESCE(gts.share, 1) * 100, 1),
+               'salary_percentage', COALESCE(tgs.salary_percentage, 40)::numeric,
+               'expected_salary', ROUND((g.actual_collected * COALESCE(gts.share, 1) * COALESCE(tgs.salary_percentage, 40) / 100)::numeric, 2),
+               'is_transferred', (g.current_teacher_id IS DISTINCT FROM $1::int),
+               'current_teacher_id', g.current_teacher_id,
+               'current_teacher_name', CASE
+                 WHEN g.current_teacher_id IS DISTINCT FROM $1::int
+                 THEN CONCAT(ct.name, ' ', ct.surname)
+                 ELSE NULL
+               END,
+               -- $1 hozirgi (joriy) teacher bo'lsa-yu, ulush 100% dan kam
+               -- bo'lsa - demak qolgan qismini boshqa (oldingi) teacher
+               -- o'qitgan, uning ismini ko'rsatamiz.
+               'received_from_name', CASE
+                 WHEN g.current_teacher_id = $1::int AND COALESCE(gts.share, 1) < 0.995
+                 THEN CONCAT(ot.name, ' ', ot.surname)
+                 ELSE NULL
+               END,
+               'my_lesson_count', COALESCE(gts.my_lesson_count, 0),
+               'total_lesson_count', COALESCE(gts.total_lesson_count, 0),
+               'is_lesson_count_manual', COALESCE(gts.is_manual, false)
+             )
+             ORDER BY g.group_name
+           ),
+           '[]'::json
+         ) AS groups,
+         COALESCE(
+           SUM(ROUND((g.actual_collected * COALESCE(gts.share, 1) * COALESCE(tgs.salary_percentage, 40) / 100)::numeric, 2)),
+           0
+         )::numeric AS expected_gross_by_groups
+       FROM teacher_group_totals g
+       LEFT JOIN group_teacher_share gts ON gts.group_id = g.group_id
+       LEFT JOIN teacher_group_salary_settings tgs
+         ON tgs.teacher_id = $1 AND tgs.group_id = g.group_id AND tgs.branch_id = $3
+       LEFT JOIN group_other_teacher got ON got.group_id = g.group_id
+       LEFT JOIN users ot ON ot.id = got.teacher_id AND ot.branch_id = $3
+       LEFT JOIN users ct ON ct.id = g.current_teacher_id AND ct.branch_id = $3
      )
-     SELECT * FROM teacher_students_agg`,
+     SELECT
+       tsa.*,
+       tga.groups,
+       tga.expected_gross_by_groups
+     FROM teacher_students_agg tsa
+     CROSS JOIN teacher_group_agg tga`,
     [teacherId, monthName, branchId]
   );
 
   const row = res.rows[0] || {};
   const students = Array.isArray(row.students) ? row.students : [];
+  const groups = Array.isArray(row.groups) ? row.groups : [];
   return {
     total_students: toNum(row.total_students),
     paid_students_count: toNum(row.paid_students_count),
@@ -203,6 +356,8 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
     center_discount_total: toNum(row.center_discount_total),
     teacher_discount_total: toNum(row.teacher_discount_total),
     students,
+    groups,
+    expected_gross_by_groups: toNum(row.expected_gross_by_groups),
   };
 };
 
@@ -242,8 +397,14 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
   const teacherDiscountTotal = toNum(studentSummary.teacher_discount_total);
   const totalAdvances = toNum(advancesRes.rows[0]?.total_advances);
   const totalGiven = toNum(payoutsRes.rows[0]?.total_given);
-  const salaryPercentage = toNum(teacher.salary_percentage);
-  const expectedGross = round2((actualCollected * salaryPercentage) / 100);
+  // Oylik endi HAR BIR GURUH o'zining foizi bilan hisoblanadi (teacher_group_salary_settings,
+  // default 40%) va yig'indisi olinadi - eski yagona teacher-darajasidagi foiz (teacher.salary_percentage)
+  // faqat guruhsiz/eski ma'lumotlar uchun zaxira sifatida qoladi.
+  const expectedGross = round2(toNum(studentSummary.expected_gross_by_groups));
+  // Ko'rsatish uchun - guruhlar bo'yicha o'rtacha (og'irliklangan) foiz
+  const salaryPercentage = actualCollected > 0
+    ? round2((expectedGross / actualCollected) * 100)
+    : toNum(teacher.salary_percentage);
   const expectedNet = round2(expectedGross - teacherDiscountTotal - totalAdvances);
   const finalSalary = round2(expectedGross - teacherDiscountTotal - totalAdvances - totalGiven);
 
@@ -347,6 +508,7 @@ const buildOpenMonthSummary = async (client, teacherId, monthName, branchId) => 
     post_close_available: 0,
     post_close_can_give: false,
     students: studentSummary.students,
+    groups: studentSummary.groups,
   };
 };
 
@@ -450,6 +612,49 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
     post_close_available: postCloseAvailable,
     post_close_can_give: postCloseAvailable > 0,
     students: studentSummary.students,
+    groups: studentSummary.groups,
+  };
+};
+
+// Berilgan (o'tgan) oy yopilgan bo'lsa-yu, keyinchalik yana pul tushgan
+// bo'lsa (post-close), shu oy uchun qancha berilishi kerak (expected),
+// qancha allaqachon berilgan (given) va qancha qarz qolgan (available)
+// ekanini qaytaradi. Joriy oyni ko'rib turganda "o'tgan oydan qarz bor"
+// yoki "o'tgan oydan berildi" deb eslatish uchun ishlatiladi
+// (getAllTeachersMonthSummary'da).
+const getPostCloseAvailableForMonth = async (client, teacherId, monthName, branchId) => {
+  const monthly = await client.query(
+    `SELECT salary_percentage, close_revenue, is_closed
+     FROM teacher_monthly_salaries
+     WHERE teacher_id = $1 AND month_name = $2 AND branch_id = $3`,
+    [teacherId, monthName, branchId]
+  );
+  const row = monthly.rows[0];
+  if (!row || !row.is_closed) return { expected: 0, given: 0, available: 0 };
+
+  const [studentSummary, payoutsPostCloseRes] = await Promise.all([
+    getTeacherMonthlyStudentSummary(client, teacherId, monthName, branchId),
+    client.query(
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS post_close_given
+       FROM teacher_salary_payouts
+       WHERE teacher_id = $1
+         AND month_name = $2
+         AND branch_id = $3
+         AND COALESCE(payout_type, '${PAYOUT_TYPE_POST_CLOSE}') = '${PAYOUT_TYPE_POST_CLOSE}'`,
+      [teacherId, monthName, branchId]
+    ),
+  ]);
+
+  const salaryPercentage = toNum(row.salary_percentage);
+  const closeRevenue = toNum(row.close_revenue);
+  const liveCollected = toNum(studentSummary.total_collected);
+  const postCloseCollectedRevenue = round2(Math.max(liveCollected - closeRevenue, 0));
+  const postCloseExpectedGross = round2((postCloseCollectedRevenue * salaryPercentage) / 100);
+  const postCloseGiven = toNum(payoutsPostCloseRes.rows[0]?.post_close_given);
+  return {
+    expected: postCloseExpectedGross,
+    given: postCloseGiven,
+    available: round2(postCloseExpectedGross - postCloseGiven),
   };
 };
 
@@ -494,6 +699,114 @@ exports.upsertTeacherSalarySettings = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Teacher foizini saqlashda xatolik',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+// Guruh darajasidagi oylik foizi - har bir o'qituvchi+guruh uchun alohida
+// (masalan bitta o'qituvchining bir guruhi 40%, boshqasi 60% bo'lishi mumkin).
+exports.upsertTeacherGroupSalarySettings = async (req, res) => {
+  const teacherId = Number(req.params.teacher_id);
+  const groupId = Number(req.params.group_id);
+  const percentage = Number(req.body.salary_percentage);
+  const branchId = getScopedBranchId(req);
+
+  if (!teacherId || Number.isNaN(teacherId) || !groupId || Number.isNaN(groupId)) {
+    return res.status(400).json({ success: false, message: 'teacher_id/group_id noto\'g\'ri' });
+  }
+
+  if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
+    return res.status(400).json({
+      success: false,
+      message: 'salary_percentage 0 dan 100 gacha bo\'lishi kerak',
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    const group = await client.query(
+      `SELECT id FROM groups WHERE id = $1 AND teacher_id = $2 AND branch_id = $3`,
+      [groupId, teacherId, branchId]
+    );
+
+    if (!group.rows.length) {
+      return res.status(404).json({ success: false, message: "Guruh topilmadi (bu o'qituvchiga tegishli emas)" });
+    }
+
+    const result = await client.query(
+      `INSERT INTO teacher_group_salary_settings (teacher_id, group_id, salary_percentage, updated_at, branch_id)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
+       ON CONFLICT (teacher_id, group_id)
+       DO UPDATE SET salary_percentage = EXCLUDED.salary_percentage, updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [teacherId, groupId, percentage, branchId]
+    );
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Guruh foizini saqlashda xatolik',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+// Guruh boshqa teacherga o'tkazilganda, admin har bir teacher uchun shu
+// oy/guruhdagi dars sonini qo'lda to'g'rilay oladi (avtomatik lessons
+// sanog'i noto'g'ri/eskirgan bo'lsa - masalan admin darslarni qayta
+// belgilashni unutgan bo'lsa). null/bo'sh yuborilsa - avtomatik sanoqqa qaytadi.
+exports.upsertTeacherGroupMonthLessons = async (req, res) => {
+  const teacherId = Number(req.params.teacher_id);
+  const groupId = Number(req.params.group_id);
+  const monthName = String(req.body.month || '').trim();
+  const branchId = getScopedBranchId(req);
+
+  if (!teacherId || Number.isNaN(teacherId) || !groupId || Number.isNaN(groupId)) {
+    return res.status(400).json({ success: false, message: 'teacher_id/group_id noto\'g\'ri' });
+  }
+  if (!isValidMonth(monthName)) {
+    return res.status(400).json({ success: false, message: 'month YYYY-MM formatda bo\'lishi kerak' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const clearRaw = req.body.lesson_count;
+    const shouldClear = clearRaw === null || clearRaw === undefined || clearRaw === '';
+
+    if (shouldClear) {
+      await client.query(
+        `DELETE FROM teacher_group_month_lessons
+         WHERE teacher_id = $1 AND group_id = $2 AND month = $3 AND branch_id = $4`,
+        [teacherId, groupId, monthName, branchId]
+      );
+      return res.json({ success: true, data: { cleared: true } });
+    }
+
+    const lessonCount = Number(clearRaw);
+    if (!Number.isFinite(lessonCount) || lessonCount < 0) {
+      return res.status(400).json({ success: false, message: 'lesson_count manfiy bo\'lmagan son bo\'lishi kerak' });
+    }
+
+    const result = await client.query(
+      `INSERT INTO teacher_group_month_lessons (teacher_id, group_id, month, lesson_count, branch_id, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+       ON CONFLICT (teacher_id, group_id, month)
+       DO UPDATE SET lesson_count = EXCLUDED.lesson_count, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [teacherId, groupId, monthName, lessonCount, branchId, req.user?.id || null]
+    );
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Dars sonini saqlashda xatolik',
       error: error.message,
     });
   } finally {
@@ -985,7 +1298,38 @@ exports.getAllTeachersMonthSummary = async (req, res) => {
       const studentCount = Array.isArray(summary.students) ? summary.students.length : 0;
       if (studentCount <= 0) continue;
 
-      items.push(summary);
+      // O'tgan (joriy tanlangan oydan oldingi) yopilgan oylarda hali
+      // to'liq berilmagan qarz bor-yo'qligini tekshiramiz - bo'lsa, joriy
+      // oy sahifasida ham eslatib turish uchun.
+      const priorMonthsRes = await client.query(
+        `SELECT month_name FROM teacher_monthly_salaries
+         WHERE teacher_id = $1 AND branch_id = $2 AND is_closed = true AND month_name < $3
+         ORDER BY month_name DESC`,
+        [t.id, branchId, monthName]
+      );
+      let priorDebtTotal = 0;
+      let priorGivenTotal = 0;
+      const priorDebtMonths = [];
+      const priorGivenMonths = [];
+      for (const pm of priorMonthsRes.rows) {
+        const { given, available } = await getPostCloseAvailableForMonth(client, t.id, pm.month_name, branchId);
+        if (available > 0.009) {
+          priorDebtTotal = round2(priorDebtTotal + available);
+          priorDebtMonths.push({ month_name: pm.month_name, amount: available });
+        }
+        if (given > 0.009) {
+          priorGivenTotal = round2(priorGivenTotal + given);
+          priorGivenMonths.push({ month_name: pm.month_name, amount: given });
+        }
+      }
+
+      items.push({
+        ...summary,
+        prior_debt_total: priorDebtTotal,
+        prior_debt_months: priorDebtMonths,
+        prior_given_total: priorGivenTotal,
+        prior_given_months: priorGivenMonths,
+      });
     }
 
     return res.json({

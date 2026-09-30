@@ -7,6 +7,12 @@ const { protect, protectAdmin } = require('../middlewares/authMiddleware');
 router.put('/settings/:teacher_id', protectAdmin, ctrl.upsertTeacherSalarySettings);
 router.get('/settings/:teacher_id', protect, ctrl.getTeacherSalarySettings);
 
+// Guruh darajasidagi oylik foizi
+router.put('/group-settings/:teacher_id/:group_id', protectAdmin, ctrl.upsertTeacherGroupSalarySettings);
+
+// Guruh boshqa teacherga o'tkazilganda, dars sonini qo'lda to'g'rilash
+router.put('/group-lessons/:teacher_id/:group_id', protectAdmin, ctrl.upsertTeacherGroupMonthLessons);
+
 // Avans
 router.post('/advances', protectAdmin, ctrl.createTeacherAdvance);
 router.get('/advances', protect, ctrl.getTeacherAdvances);

@@ -198,6 +198,52 @@ const createTeacherSalaryTables = async () => {
       ADD COLUMN IF NOT EXISTS recalculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     `);
 
+    // Guruh darajasidagi oylik foizi - har bir o'qituvchi+guruh juftligi
+    // uchun alohida foiz (teacher_salary_settings o'qituvchi darajasida
+    // qoladi, bu esa uni guruh bo'yicha ustidan yozadi/kengaytiradi).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS teacher_group_salary_settings (
+        id SERIAL PRIMARY KEY,
+        teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        salary_percentage DECIMAL(5,2) DEFAULT 40.00,
+        branch_id INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(teacher_id, group_id)
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_teacher_group_salary_settings_teacher
+      ON teacher_group_salary_settings(teacher_id);
+    `);
+
+    // Guruh bir oy ichida boshqa teacherga o'tkazilganda, avtomatik dars
+    // sanog'i (lessons jadvalidan) xato/eskirgan bo'lishi mumkin (masalan
+    // admin darslarni qayta belgilashni unutgan bo'lsa). Shu jadval orqali
+    // admin har bir teacher uchun shu oy/guruhdagi dars sonini qo'lda
+    // to'g'rilay oladi - bu qiymat avtomatik sanoqdan ustun turadi.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS teacher_group_month_lessons (
+        id SERIAL PRIMARY KEY,
+        teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+        month VARCHAR(7) NOT NULL,
+        lesson_count NUMERIC(6,2) NOT NULL DEFAULT 0,
+        branch_id INTEGER DEFAULT 1,
+        updated_by INTEGER REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(teacher_id, group_id, month)
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_teacher_group_month_lessons_group_month
+      ON teacher_group_month_lessons(group_id, month);
+    `);
+
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_teacher_advances_teacher_month
       ON teacher_advances(teacher_id, month_name);

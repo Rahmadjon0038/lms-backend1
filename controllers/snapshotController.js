@@ -469,7 +469,10 @@ exports.getMonthlySnapshots = async (req, res) => {
         ms.group_name,
         ms.group_price,
         ms.subject_name,
-        ms.teacher_name,
+        -- Snapshot yaratilgandagi (muzlatilgan) emas, GURUHNING HOZIRGI
+        -- teacheri ko'rsatiladi - guruh boshqa teacherga o'tkazilgan bo'lsa,
+        -- admin adashmasligi uchun (to'lov tarixi o'zgarmaydi, faqat ism).
+        COALESCE(CONCAT(gt.name, ' ', gt.surname), ms.teacher_name) as teacher_name,
         ms.monthly_status,
         ms.payment_status,
         ms.required_amount,
@@ -520,6 +523,8 @@ exports.getMonthlySnapshots = async (req, res) => {
         AND sd.is_active = true
       LEFT JOIN users u ON ms.payment_made_by = u.id AND u.branch_id = ms.branch_id
       LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
+      LEFT JOIN groups g ON g.id = ms.group_id AND g.branch_id = ms.branch_id
+      LEFT JOIN users gt ON gt.id = g.teacher_id AND gt.branch_id = ms.branch_id
       LEFT JOIN (
         SELECT
           a.student_id,
@@ -601,6 +606,81 @@ exports.getMonthlySnapshots = async (req, res) => {
       subjectActiveStudents = subjectActiveResult.rows[0]?.count ?? null;
     }
 
+    // Holat x to'lov matritsasi (Faol/To'xtatgan har biri uchun
+    // To'liq/Qisman/To'lamagan soni) - joriy status/payment_status
+    // filtridan QAT'IY NAZAR, faqat oy/filial/teacher/fan/qidiruv
+    // doirasida. Admin panelda "Faol+to'lamagan" kabi kombinatsiyalarni
+    // bitta aniq tugma bilan ko'rsatish uchun kerak.
+    let breakdownConditions = [`ms.month = $1`, `ms.branch_id = $2`];
+    let breakdownParams = [month, branchId];
+    let bIdx = 3;
+
+    if (userRole === 'teacher') {
+      breakdownConditions.push(`ms.group_id IN (
+        SELECT DISTINCT ms2.group_id
+        FROM monthly_snapshots ms2
+        JOIN groups g ON ms2.group_id = g.id AND g.branch_id = ms2.branch_id
+        WHERE g.teacher_id = $${bIdx} AND ms2.month = $1 AND ms2.branch_id = $2
+      )`);
+      breakdownParams.push(userId);
+      bIdx++;
+    }
+    if (group_id) {
+      breakdownConditions.push(`ms.group_id = $${bIdx}`);
+      breakdownParams.push(group_id);
+      bIdx++;
+    }
+    if (teacher_id) {
+      breakdownConditions.push(`ms.group_id IN (
+        SELECT DISTINCT g.id FROM groups g WHERE g.teacher_id = $${bIdx} AND g.branch_id = $2
+      )`);
+      breakdownParams.push(teacher_id);
+      bIdx++;
+    }
+    if (subject_id) {
+      breakdownConditions.push(`ms.group_id IN (
+        SELECT DISTINCT g.id FROM groups g WHERE g.subject_id = $${bIdx} AND g.branch_id = $2
+      )`);
+      breakdownParams.push(subject_id);
+      bIdx++;
+    }
+    if (search && String(search).trim().length > 0) {
+      const searchValue = `%${String(search).trim()}%`;
+      breakdownConditions.push(`(
+        ms.student_name ILIKE $${bIdx}
+        OR ms.student_surname ILIKE $${bIdx}
+        OR (ms.student_name || ' ' || ms.student_surname) ILIKE $${bIdx}
+        OR (ms.student_surname || ' ' || ms.student_name) ILIKE $${bIdx}
+        OR ms.student_phone ILIKE $${bIdx}
+        OR ms.student_father_name ILIKE $${bIdx}
+        OR ms.student_father_phone ILIKE $${bIdx}
+        OR su.name ILIKE $${bIdx}
+        OR su.surname ILIKE $${bIdx}
+        OR (su.name || ' ' || su.surname) ILIKE $${bIdx}
+        OR (su.surname || ' ' || su.name) ILIKE $${bIdx}
+        OR su.phone ILIKE $${bIdx}
+      )`);
+      breakdownParams.push(searchValue);
+      bIdx++;
+    }
+
+    const breakdownQuery = `
+      SELECT
+        COUNT(*) AS total_students,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'active') AS active_total,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'paid') AS active_paid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'partial') AS active_partial,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'unpaid') AS active_unpaid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped') AS stopped_total,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'paid') AS stopped_paid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'partial') AS stopped_partial,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'unpaid') AS stopped_unpaid
+      FROM monthly_snapshots ms
+      LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
+      WHERE ${breakdownConditions.join(' AND ')}
+    `;
+    const breakdownResult = await db.query(breakdownQuery, breakdownParams);
+
     res.json({
       success: true,
       data: {
@@ -610,6 +690,7 @@ exports.getMonthlySnapshots = async (req, res) => {
           ...summaryResult.rows[0],
           ...(subjectActiveStudents !== null ? { subject_active_students: subjectActiveStudents } : {}),
         },
+        status_breakdown: breakdownResult.rows[0],
         pagination: {
           page: pageNumber,
           limit: limitNumber,
@@ -2833,7 +2914,7 @@ exports.exportSnapshotsToExcel = async (req, res) => {
         ms.student_father_phone as "Otasining telefoni",
         ms.group_name as "Guruh nomi",
         ms.subject_name as "Fan",
-        ms.teacher_name as "O'qituvchi",
+        COALESCE(CONCAT(gt.name, ' ', gt.surname), ms.teacher_name) as "O'qituvchi",
         ms.group_price as "Guruh narxi (so'm)",
         CASE 
           WHEN ms.monthly_status = 'active' THEN 'Faol'
@@ -2879,6 +2960,8 @@ exports.exportSnapshotsToExcel = async (req, res) => {
         AND sd.end_month >= ms.month
         AND sd.is_active = true
       LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
+      LEFT JOIN groups g ON g.id = ms.group_id AND g.branch_id = ms.branch_id
+      LEFT JOIN users gt ON gt.id = g.teacher_id AND gt.branch_id = ms.branch_id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ms.group_name, ms.student_name
     `;
