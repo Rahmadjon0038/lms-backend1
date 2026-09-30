@@ -11,16 +11,16 @@ const {
 } = require('../models/teacherSubjectModel');
 const { getScopedBranchId, getUserBranchId } = require('../utils/branch');
 
-// Yordamchi funksiya: Access Token yaratish (15 minutlik)
+// Yordamchi funksiya: Access Token yaratish (30 kunlik)
 const generateAccessToken = (user) => {
     return jwt.sign(
         { id: user.id, role: user.role, branch_id: user.branch_id || 1 },
         process.env.JWT_SECRET,
-        { expiresIn: '1d' }
+        { expiresIn: '30d' }
     );
 };
 
-// Yordamchi funksiya: Refresh Token yaratish (7 kunlik)
+// Yordamchi funksiya: Refresh Token yaratish (30 kunlik)
 const generateRefreshToken = (user) => {
     return jwt.sign(
         { id: user.id },

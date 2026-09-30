@@ -247,7 +247,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
                'subject_name', tss.subject_name,
                'name', tss.student_name,
                'surname', tss.student_surname,
-               'full_name', CONCAT(COALESCE(tss.student_name, ''), ' ', COALESCE(tss.student_surname, '')),
+               'full_name', CONCAT(COALESCE(tss.student_surname, ''), ' ', COALESCE(tss.student_name, '')),
                'phone', tss.student_phone,
                'phone2', tss.student_phone2,
                'father_name', tss.student_father_name,
@@ -303,7 +303,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
                'current_teacher_id', g.current_teacher_id,
                'current_teacher_name', CASE
                  WHEN g.current_teacher_id IS DISTINCT FROM $1::int
-                 THEN CONCAT(ct.name, ' ', ct.surname)
+                 THEN CONCAT(ct.surname, ' ', ct.name)
                  ELSE NULL
                END,
                -- $1 hozirgi (joriy) teacher bo'lsa-yu, ulush 100% dan kam
@@ -311,7 +311,7 @@ const getTeacherMonthlyStudentSummary = async (client, teacherId, monthName, bra
                -- o'qitgan, uning ismini ko'rsatamiz.
                'received_from_name', CASE
                  WHEN g.current_teacher_id = $1::int AND COALESCE(gts.share, 1) < 0.995
-                 THEN CONCAT(ot.name, ' ', ot.surname)
+                 THEN CONCAT(ot.surname, ' ', ot.name)
                  ELSE NULL
                END,
                'my_lesson_count', COALESCE(gts.my_lesson_count, 0),

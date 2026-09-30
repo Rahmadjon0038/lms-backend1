@@ -7,10 +7,16 @@ const { notifyUser } = require('../controllers/notificationController');
 // ro'yxati bitta xabarda), aks holda hech narsa yuborilmaydi.
 const findIncompleteLessonsByTeacher = async () => {
   const result = await pool.query(`
-    SELECT DISTINCT
+    SELECT
       COALESCE(l.teacher_id, g.teacher_id) AS teacher_id,
       l.branch_id,
-      g.name AS group_name
+      g.name AS group_name,
+      BOOL_OR(NOT EXISTS (
+        SELECT 1 FROM teacher_lesson_statistics_reports r WHERE r.lesson_id = l.id
+      )) AS missing_report,
+      BOOL_OR(NOT EXISTS (
+        SELECT 1 FROM lesson_homework_assignments h WHERE h.lesson_id = l.id
+      )) AS missing_homework
     FROM lessons l
     JOIN groups g ON g.id = l.group_id
     WHERE l.date = CURRENT_DATE
@@ -18,14 +24,12 @@ const findIncompleteLessonsByTeacher = async () => {
       AND l.end_time IS NOT NULL
       AND l.end_time <= CURRENT_TIME
       AND COALESCE(l.teacher_id, g.teacher_id) IS NOT NULL
-      AND (
-        NOT EXISTS (
-          SELECT 1 FROM teacher_lesson_statistics_reports r WHERE r.lesson_id = l.id
-        )
-        OR NOT EXISTS (
-          SELECT 1 FROM lesson_homework_assignments h WHERE h.lesson_id = l.id
-        )
-      )
+    GROUP BY COALESCE(l.teacher_id, g.teacher_id), l.branch_id, g.name
+    HAVING BOOL_OR(NOT EXISTS (
+        SELECT 1 FROM teacher_lesson_statistics_reports r WHERE r.lesson_id = l.id
+      )) OR BOOL_OR(NOT EXISTS (
+        SELECT 1 FROM lesson_homework_assignments h WHERE h.lesson_id = l.id
+      ))
     ORDER BY g.name
   `);
 
@@ -33,12 +37,34 @@ const findIncompleteLessonsByTeacher = async () => {
   for (const row of result.rows) {
     const teacherId = row.teacher_id;
     if (!byTeacher.has(teacherId)) {
-      byTeacher.set(teacherId, { branchId: row.branch_id, groupNames: new Set() });
+      byTeacher.set(teacherId, { branchId: row.branch_id, groups: [] });
     }
-    byTeacher.get(teacherId).groupNames.add(row.group_name);
+    byTeacher.get(teacherId).groups.push({
+      name: row.group_name,
+      missingReport: row.missing_report,
+      missingHomework: row.missing_homework,
+    });
   }
 
   return byTeacher;
+};
+
+// Har bir guruh uchun aynan NIMA yuborilmaganini ko'rsatadi — hisobot
+// yuborilib, faqat uyga vazifa yuborilmagan bo'lsa, xabarda ham faqat
+// shu aytilishi kerak (aks holda o'qituvchi ikkalasi ham so'ralyapti deb
+// chalkashib qoladi).
+const describeMissingGroups = (groups) => {
+  return groups
+    .map(({ name, missingReport, missingHomework }) => {
+      if (missingReport && missingHomework) {
+        return `${name} (hisobot va uyga vazifa)`;
+      }
+      if (missingReport) {
+        return `${name} (hisobot)`;
+      }
+      return `${name} (uyga vazifa)`;
+    })
+    .join(', ');
 };
 
 // Bugungi kun uchun bitta marta yuborilishini kafolatlash uchun (agar
@@ -59,12 +85,11 @@ const runDailyTeacherReminders = async () => {
   const errors = [];
 
   for (const [teacherId, info] of byTeacher.entries()) {
-    const groupNames = Array.from(info.groupNames);
-    if (groupNames.length === 0) continue;
+    if (info.groups.length === 0) continue;
 
-    const groupList = groupNames.join(', ');
+    const groupList = describeMissingGroups(info.groups);
     const title = 'Hisobot va uyga vazifa yuborilmagan';
-    const body = `${groupList} guruhlariga hisobot va uyga vazifa yuborilmagan. Iltimos, hisobot va uyga vazifani yuboring.`;
+    const body = `${groupList} guruhlariga yuborilmagan. Iltimos, yuboring.`;
 
     try {
       await notifyUser({
