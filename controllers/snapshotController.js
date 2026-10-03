@@ -344,6 +344,11 @@ exports.createMonthlySnapshot = async (req, res) => {
 /**
  * 2. SNAPSHOT RO'YXATI
  */
+// "To'lamagan": to'liq ham, qisman ham to'lamagan hamma qator. Eski "holatni o'zgartirish"
+// oynasi to'xtatilgan/bitirgan talabalarga 'inactive' yozgan — ular ham to'lamagan
+// hisoblanadi, aks holda To'liq + Qisman + To'lamagan yig'indisi Jami ga yetmaydi.
+const UNPAID_SQL = `COALESCE(ms.payment_status, 'unpaid') NOT IN ('paid', 'partial')`;
+
 // Darsi hali boshlanmagan (draft / not_started) guruh talabalari to'lov va davomat
 // hisobiga kirmaydi — ular uchun (eskirgan) snapshot qatori bo'lsa ham ko'rsatilmaydi.
 const EXCLUDE_NOT_STARTED_GROUPS_SQL = `NOT EXISTS (
@@ -405,7 +410,9 @@ exports.getMonthlySnapshots = async (req, res) => {
       paramIndex++;
     }
 
-    if (payment_status) {
+    if (payment_status === 'unpaid') {
+      whereConditions.push(UNPAID_SQL);
+    } else if (payment_status) {
       whereConditions.push(`ms.payment_status = $${paramIndex}`);
       params.push(payment_status);
       paramIndex++;
@@ -577,7 +584,7 @@ exports.getMonthlySnapshots = async (req, res) => {
         COUNT(CASE WHEN ms.monthly_status = 'stopped' THEN 1 END) as stopped_students,
         COUNT(CASE WHEN ms.payment_status = 'paid' THEN 1 END) as paid_students,
         COUNT(CASE WHEN ms.payment_status = 'partial' THEN 1 END) as partial_students,
-        COUNT(CASE WHEN ms.payment_status = 'unpaid' THEN 1 END) as unpaid_students,
+        COUNT(CASE WHEN COALESCE(ms.payment_status, 'unpaid') NOT IN ('paid', 'partial') THEN 1 END) as unpaid_students,
         SUM(ms.required_amount) as total_required,
         SUM(ms.paid_amount) as total_paid,
         SUM(ms.debt_amount) as total_debt,
@@ -681,15 +688,15 @@ exports.getMonthlySnapshots = async (req, res) => {
         COUNT(*) FILTER (WHERE ms.monthly_status = 'active') AS active_total,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'paid') AS active_paid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'partial') AS active_partial,
-        COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND ms.payment_status = 'unpaid') AS active_unpaid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'active' AND COALESCE(ms.payment_status, 'unpaid') NOT IN ('paid', 'partial')) AS active_unpaid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped') AS stopped_total,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'paid') AS stopped_paid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'partial') AS stopped_partial,
-        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'unpaid') AS stopped_unpaid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND COALESCE(ms.payment_status, 'unpaid') NOT IN ('paid', 'partial')) AS stopped_unpaid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'finished') AS finished_total,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'paid') AS finished_paid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'partial') AS finished_partial,
-        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'unpaid') AS finished_unpaid
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND COALESCE(ms.payment_status, 'unpaid') NOT IN ('paid', 'partial')) AS finished_unpaid
       FROM monthly_snapshots ms
       LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       WHERE ${breakdownConditions.join(' AND ')}
