@@ -344,6 +344,14 @@ exports.createMonthlySnapshot = async (req, res) => {
 /**
  * 2. SNAPSHOT RO'YXATI
  */
+// Darsi hali boshlanmagan (draft / not_started) guruh talabalari to'lov va davomat
+// hisobiga kirmaydi — ular uchun (eskirgan) snapshot qatori bo'lsa ham ko'rsatilmaydi.
+const EXCLUDE_NOT_STARTED_GROUPS_SQL = `NOT EXISTS (
+  SELECT 1 FROM groups gns
+  WHERE gns.id = ms.group_id AND gns.branch_id = ms.branch_id
+    AND (gns.status = 'draft' OR gns.class_status = 'not_started')
+)`;
+
 exports.getMonthlySnapshots = async (req, res) => {
   try {
     const { month, group_id, status, payment_status, teacher_id, subject_id, page, limit, search } = req.query;
@@ -369,6 +377,7 @@ exports.getMonthlySnapshots = async (req, res) => {
     whereConditions.push(`ms.branch_id = $${paramIndex}`);
     params.push(branchId);
     paramIndex++;
+    whereConditions.push(EXCLUDE_NOT_STARTED_GROUPS_SQL);
 
     // Teacher faqat o'z guruhlarini ko'radi
     if (userRole === 'teacher') {
@@ -600,6 +609,8 @@ exports.getMonthlySnapshots = async (req, res) => {
            JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
           WHERE sg.status = 'active'
             AND sg.branch_id = $1
+            AND g.status = 'active'
+            AND g.class_status = 'started'
             AND g.subject_id = $2`,
         [branchId, subject_id]
       );
@@ -611,7 +622,7 @@ exports.getMonthlySnapshots = async (req, res) => {
     // filtridan QAT'IY NAZAR, faqat oy/filial/teacher/fan/qidiruv
     // doirasida. Admin panelda "Faol+to'lamagan" kabi kombinatsiyalarni
     // bitta aniq tugma bilan ko'rsatish uchun kerak.
-    let breakdownConditions = [`ms.month = $1`, `ms.branch_id = $2`];
+    let breakdownConditions = [`ms.month = $1`, `ms.branch_id = $2`, EXCLUDE_NOT_STARTED_GROUPS_SQL];
     let breakdownParams = [month, branchId];
     let bIdx = 3;
 
@@ -674,7 +685,11 @@ exports.getMonthlySnapshots = async (req, res) => {
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped') AS stopped_total,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'paid') AS stopped_paid,
         COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'partial') AS stopped_partial,
-        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'unpaid') AS stopped_unpaid
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'stopped' AND ms.payment_status = 'unpaid') AS stopped_unpaid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished') AS finished_total,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'paid') AS finished_paid,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'partial') AS finished_partial,
+        COUNT(*) FILTER (WHERE ms.monthly_status = 'finished' AND ms.payment_status = 'unpaid') AS finished_unpaid
       FROM monthly_snapshots ms
       LEFT JOIN users su ON ms.student_id = su.id AND su.branch_id = ms.branch_id
       WHERE ${breakdownConditions.join(' AND ')}
@@ -2225,10 +2240,14 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
                   FROM monthly_snapshots ms
                  WHERE ms.month = $2
                    AND ms.branch_id = $1
-                   AND ms.monthly_status = 'active')
+                   AND ms.monthly_status = 'active'
+                   AND ${EXCLUDE_NOT_STARTED_GROUPS_SQL})
           ELSE (SELECT COUNT(*)
                   FROM student_groups sg
+                  JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
                  WHERE sg.branch_id = $1
+                   AND g.status = 'active'
+                   AND g.class_status = 'started'
                    AND sg.status = 'active')
         END)::int as active_students,
         (CASE WHEN EXISTS (
@@ -2238,10 +2257,14 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
                   FROM monthly_snapshots ms
                  WHERE ms.month = $2
                    AND ms.branch_id = $1
-                   AND ms.monthly_status = 'stopped')
+                   AND ms.monthly_status = 'stopped'
+                   AND ${EXCLUDE_NOT_STARTED_GROUPS_SQL})
           ELSE (SELECT COUNT(*)
                   FROM student_groups sg
+                  JOIN groups g ON g.id = sg.group_id AND g.branch_id = sg.branch_id
                  WHERE sg.branch_id = $1
+                   AND g.status = 'active'
+                   AND g.class_status = 'started'
                    AND sg.status = 'stopped')
         END)::int as stopped_students
     `;
@@ -2257,6 +2280,7 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
         SUM(CASE WHEN monthly_status = 'active' THEN debt_amount ELSE 0 END) as active_debt
       FROM monthly_snapshots ms
       WHERE ms.month = $1 AND ms.branch_id = $2
+        AND ${EXCLUDE_NOT_STARTED_GROUPS_SQL}
     `;
 
     const [studentCountsResult, summaryResult] = await Promise.all([
@@ -2267,16 +2291,17 @@ exports.getMonthlySnapshotSummary = async (req, res) => {
     // Guruh bo'yicha breakdown
     const groupBreakdownQuery = `
       SELECT 
-        group_name,
+        ms.group_name,
         COUNT(*) as students_count,
-        SUM(required_amount) as group_required,
-        SUM(paid_amount) as group_paid,
-        SUM(debt_amount) as group_debt,
-        COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_count,
-        COUNT(CASE WHEN monthly_status = 'active' THEN 1 END) as active_count
-      FROM monthly_snapshots 
-      WHERE month = $1 AND branch_id = $2
-      GROUP BY group_id, group_name
+        SUM(ms.required_amount) as group_required,
+        SUM(ms.paid_amount) as group_paid,
+        SUM(ms.debt_amount) as group_debt,
+        COUNT(CASE WHEN ms.payment_status = 'paid' THEN 1 END) as paid_count,
+        COUNT(CASE WHEN ms.monthly_status = 'active' THEN 1 END) as active_count
+      FROM monthly_snapshots ms
+      WHERE ms.month = $1 AND ms.branch_id = $2
+        AND ${EXCLUDE_NOT_STARTED_GROUPS_SQL}
+      GROUP BY ms.group_id, ms.group_name
       ORDER BY group_name
     `;
 
@@ -2432,8 +2457,10 @@ exports.createSnapshotForNewStudents = async (req, res) => {
         LEFT JOIN users t ON g.teacher_id = t.id AND t.branch_id = sg.branch_id
         WHERE sg.status = 'active'
           AND sg.branch_id = $2
+          -- Darsi hali boshlanmagan (draft) guruh talabalari to'lov/davomat hisobiga kirmaydi
           AND COALESCE(g.is_active, true) = true
-          AND COALESCE(g.status, 'draft') <> 'blocked'
+          AND g.status = 'active'
+          AND g.class_status = 'started'
           AND u.role = 'student'
           AND COALESCE(DATE(sg.joined_at), ($1 || '-01')::date) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
           AND (sg.left_at IS NULL OR DATE(sg.left_at) > ($1 || '-01')::date)
@@ -2745,8 +2772,10 @@ exports.getNewStudentsNotification = async (req, res) => {
       
       WHERE sg.status = 'active'
         AND sg.branch_id = $2
+        -- Darsi hali boshlanmagan (draft) guruh talabalari to'lov/davomat hisobiga kirmaydi
         AND COALESCE(g.is_active, true) = true
-        AND COALESCE(g.status, 'draft') <> 'blocked'
+        AND g.status = 'active'
+        AND g.class_status = 'started'
         AND u.role = 'student'
         AND COALESCE(DATE(sg.joined_at), ($1 || '-01')::date) <= (($1 || '-01')::date + INTERVAL '1 month - 1 day')::date
         AND (sg.left_at IS NULL OR DATE(sg.left_at) > ($1 || '-01')::date)

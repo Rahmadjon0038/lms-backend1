@@ -499,7 +499,11 @@ exports.getAllStudents = async (req, res) => {
     const branchId = getScopedBranchId(req);
     const hasPasswordPlainColumn = await hasUsersColumn('password_plain');
 
-    const unassignedOnly = unassigned === 'true';
+    // unassigned: 'true' — hozir guruhi yo'qlarning hammasi; 'new' — hech qachon
+    // guruhga qo'shilmagan (yangi, guruh kutayotgan); 'left' — guruhdan
+    // chiqarilgan/o'tkazilgan va hozir hech qaysi guruhda yo'q (ketganlar).
+    const unassignedMode = ['true', 'new', 'left'].includes(String(unassigned)) ? String(unassigned) : null;
+    const unassignedOnly = Boolean(unassignedMode);
 
     let baseQuery = `
       SELECT DISTINCT
@@ -620,11 +624,18 @@ exports.getAllStudents = async (req, res) => {
     // Unassigned filter
     // 'removed' a'zoliklar hisobga olinmaydi — stats.unassigned_students bilan bir xil ta'rif
     // (guruhdan chiqarilgan, lekin boshqa faol/to'xtatilgan/bitirgan a'zoligi yo'q talaba ham guruhsiz hisoblanadi)
-    if (unassigned === 'true') {
+    if (unassignedMode) {
       if (!joinConditions.some(j => j.includes('student_groups'))) {
         joinConditions.push("LEFT JOIN student_groups sg ON u.id = sg.student_id AND sg.branch_id = u.branch_id AND sg.status <> 'removed'");
       }
       whereConditions.push('sg.student_id IS NULL');
+
+      const removedHistory = `EXISTS (
+        SELECT 1 FROM student_groups rsg
+        WHERE rsg.student_id = u.id AND rsg.branch_id = u.branch_id AND rsg.status = 'removed'
+      )`;
+      if (unassignedMode === 'new') whereConditions.push(`NOT ${removedHistory}`);
+      if (unassignedMode === 'left') whereConditions.push(removedHistory);
     }
 
     // Pagination
@@ -752,6 +763,10 @@ exports.getAllStudents = async (req, res) => {
           fs.id AS student_id,
           sg.id AS membership_id,
           sg.status AS membership_status,
+          EXISTS (
+            SELECT 1 FROM student_groups rsg
+            WHERE rsg.student_id = fs.id AND rsg.branch_id = fs.branch_id AND rsg.status = 'removed'
+          ) AS has_removed,
           g.status AS group_admin_status,
           g.class_status AS group_class_status,
           COALESCE(g.class_start_date, g.start_date, g.created_at::date) AS group_started_on
@@ -768,6 +783,10 @@ exports.getAllStudents = async (req, res) => {
         COUNT(*)::int as total_students,
         COUNT(*) FILTER (WHERE membership_id IS NOT NULL)::int as students_with_groups,
         COUNT(*) FILTER (WHERE membership_id IS NULL)::int as unassigned_students,
+        COUNT(*) FILTER (WHERE membership_id IS NULL AND NOT has_removed)::int as never_assigned_students,
+        COUNT(*) FILTER (WHERE membership_id IS NULL AND has_removed)::int as left_students,
+        COUNT(DISTINCT student_id) FILTER (WHERE membership_status = 'active')::int as studying_students,
+        COUNT(DISTINCT student_id)::int as unique_students,
         COUNT(*) FILTER (WHERE membership_status = 'stopped')::int as stopped,
         COUNT(*) FILTER (WHERE membership_status = 'finished')::int as finished,
         (
@@ -783,7 +802,23 @@ exports.getAllStudents = async (req, res) => {
             AND g.status IN ('active', 'blocked')
             AND g.class_status = 'started'
             AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= CURRENT_DATE
-        )::int as active_attendance_students
+        )::int as active_attendance_students,
+        (
+          SELECT COUNT(*)
+          FROM filtered_students fs
+          JOIN student_groups sg
+            ON sg.student_id = fs.id
+           AND sg.branch_id = fs.branch_id
+          JOIN groups g
+            ON g.id = sg.group_id
+           AND g.branch_id = sg.branch_id
+          WHERE sg.status = 'active'
+            AND NOT (
+              g.status IN ('active', 'blocked')
+              AND g.class_status = 'started'
+              AND COALESCE(g.class_start_date, g.start_date, g.created_at::date) <= CURRENT_DATE
+            )
+        )::int as waiting_start_students
       FROM student_memberships
     `;
     const statsResult = await pool.query(statsQuery, params);
@@ -798,7 +833,12 @@ exports.getAllStudents = async (req, res) => {
       total_students: parseInt(statsRow.total_students || 0, 10),
       students_with_groups: studentsWithGroupsCount,
       unassigned_students: unassignedCount,
+      never_assigned_students: parseInt(statsRow.never_assigned_students || 0, 10),
+      left_students: parseInt(statsRow.left_students || 0, 10),
+      studying_students: parseInt(statsRow.studying_students || 0, 10),
+      unique_students: parseInt(statsRow.unique_students || 0, 10),
       active_attendance_students: activeAttendanceCount,
+      waiting_start_students: parseInt(statsRow.waiting_start_students || 0, 10),
       group_memberships: {
         active: activeAttendanceCount,
         stopped: stoppedCount,

@@ -1272,3 +1272,7 @@ exports.uploadReportScreenshot = async (req, res) => {
 // gets the same Uzbek-enforced column labels and computed totals as the
 // teacher-facing one, instead of duplicating this logic.
 exports.buildReportPayload = buildReportPayload;
+exports.normalizeColumns = normalizeColumns;
+exports.normalizeRows = normalizeRows;
+exports.buildRowsWithTotals = buildRowsWithTotals;
+exports.normalizeFeedback = normalizeFeedback;
