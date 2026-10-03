@@ -16,6 +16,8 @@ const createContentTables = async () => {
       );
     `);
 
+    await pool.query('ALTER TABLE stories ADD COLUMN IF NOT EXISTS poster_path TEXT');
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS news (
         id SERIAL PRIMARY KEY,

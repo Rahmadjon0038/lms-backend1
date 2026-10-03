@@ -363,6 +363,43 @@ const createGuideTables = async () => {
       END $$;
     `);
 
+    // Qo'llanma barcha filiallar uchun umumiy: boshqa filiallarda yuklangan
+    // materiallar ham asosiy filial (1) ostiga ko'chiriladi (idempotent).
+    await pool.query(`
+      DO $$
+      DECLARE
+        t text;
+      BEGIN
+        FOREACH t IN ARRAY ARRAY[
+          'guide_levels', 'guide_lessons', 'guide_level_main_pdfs',
+          'guide_lesson_notes', 'guide_lesson_pdfs', 'guide_lesson_videos',
+          'guide_lesson_assignments', 'guide_lesson_vocabularies',
+          'guide_lesson_vocabulary_images', 'guide_lesson_vocabulary_markdowns',
+          'guide_lesson_vocabulary_pdfs'
+        ] LOOP
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = t AND column_name = 'branch_id'
+          ) THEN
+            EXECUTE format('UPDATE %I SET branch_id = 1 WHERE branch_id IS DISTINCT FROM 1', t);
+          END IF;
+        END LOOP;
+
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'guide_user_speech_settings' AND column_name = 'branch_id'
+        ) THEN
+          UPDATE guide_user_speech_settings s
+          SET branch_id = 1
+          WHERE s.branch_id IS DISTINCT FROM 1
+            AND NOT EXISTS (
+              SELECT 1 FROM guide_user_speech_settings s2
+              WHERE s2.user_id = s.user_id AND s2.branch_id = 1
+            );
+        END IF;
+      END $$;
+    `);
+
     console.log("✅ guide jadvallari tayyor");
   } catch (err) {
     console.error("❌ guide jadvallarini yaratishda xatolik:", err.message);

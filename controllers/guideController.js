@@ -2,7 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const pool = require('../config/db');
-const { getScopedBranchId } = require('../utils/branch');
+// Qo'llanma materiallari barcha filiallar uchun UMUMIY: istalgan filialda
+// yuklangan material hamma filialda ko'rinadi. Shuning uchun kontent doim bitta
+// asosiy filial (1) ostida saqlanadi va o'qiladi.
+const SHARED_GUIDE_BRANCH_ID = 1;
+const getScopedBranchId = () => SHARED_GUIDE_BRANCH_ID;
 
 const MAX_PDF_SIZE = 20 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;

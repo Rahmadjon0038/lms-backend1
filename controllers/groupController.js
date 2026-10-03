@@ -1838,6 +1838,8 @@ exports.getGroupById = async (req, res) => {
                 u.created_at as registration_date,
                 u.role,
                 u.avatar_key,
+                u.username,
+                u.password_plain,
                 CASE
                   WHEN pa.image_path IS NULL THEN NULL
                   WHEN pa.image_path ~ '^https?://' THEN pa.image_path
@@ -1866,6 +1868,13 @@ exports.getGroupById = async (req, res) => {
         const statsByStudentId = new Map(
             monthlyStats.map((stat) => [stat.student_id, stat])
         );
+        // Talabaning login/paroli faqat adminlarga va shu guruhning o'z
+        // o'qituvchisiga ko'rsatiladi (teacher talabaga yetkazib berishi uchun).
+        const canSeeCredentials =
+            req.user?.role === 'admin' ||
+            req.user?.role === 'super_admin' ||
+            (req.user?.role === 'teacher' && group.rows[0].teacher_id === req.user.id);
+
         const students = studentsResult.rows
             .map((student) => ({
                 id: student.id,
@@ -1886,6 +1895,9 @@ exports.getGroupById = async (req, res) => {
                 role: student.role,
                 avatar_key: student.avatar_key || null,
                 avatar_url: student.avatar_url || null,
+                ...(canSeeCredentials
+                    ? { username: student.username || null, password: student.password_plain || null }
+                    : {}),
                 monthly_points: (
                     statsByStudentId.get(student.id)?.month_points ??
                     (parseInt(student.monthly_points, 10) || 0)

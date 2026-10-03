@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const pool = require('../config/db');
 const { getScopedBranchId } = require('../utils/branch');
+const { isFfmpegAvailable, optimizeVideo, createPoster, enqueue } = require('../utils/videoOptimizer');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
 const storyUploadDir = path.join(__dirname, '..', 'uploads', 'stories');
@@ -53,11 +54,77 @@ const removeFileQuietly = (relativePath) => {
 
 const isAdmin = (role) => role === 'admin' || role === 'super_admin';
 
+const toAbsolute = (relativePath) => path.join(__dirname, '..', relativePath.replace(/^\//, ''));
+
+// Yuklangan storis videosini orqa fonda siqadi (720p, faststart) va rasm (poster)
+// yaratadi. Tayyor bo'lgach bazadagi yo'l almashtiriladi, asl fayl o'chiriladi.
+// ffmpeg bo'lmasa yoki xato bo'lsa — asl video o'zgarishsiz ishlayveradi.
+const processStoryMedia = (storyId, relativePath) =>
+  enqueue(async () => {
+    if (!isFfmpegAvailable() || !relativePath) return;
+    const inputAbs = toAbsolute(relativePath);
+    if (!fs.existsSync(inputAbs)) return;
+
+    const dir = path.dirname(inputAbs);
+    const relDir = path.posix.dirname(relativePath);
+    const stem = path.basename(inputAbs, path.extname(inputAbs)).replace(/\.opt$/, '');
+    const optimizedAbs = path.join(dir, `${stem}.opt.mp4`);
+    const posterAbs = path.join(dir, `${stem}.poster.jpg`);
+
+    let nextVideoRelative = relativePath;
+    let posterRelative = null;
+
+    try {
+      await createPoster(inputAbs, posterAbs);
+      posterRelative = `${relDir}/${stem}.poster.jpg`;
+    } catch (error) {
+      console.warn(`⚠️ Storis ${storyId}: poster yaratilmadi — ${error.message}`);
+    }
+
+    if (!relativePath.endsWith('.opt.mp4')) {
+      try {
+        await optimizeVideo(inputAbs, optimizedAbs);
+        const originalSize = fs.statSync(inputAbs).size;
+        const optimizedSize = fs.statSync(optimizedAbs).size;
+        if (optimizedSize > 0 && optimizedSize < originalSize * 1.2) {
+          nextVideoRelative = `${relDir}/${stem}.opt.mp4`;
+          console.log(`🎞️ Storis ${storyId}: ${(originalSize / 1048576).toFixed(1)}MB → ${(optimizedSize / 1048576).toFixed(1)}MB`);
+        } else if (fs.existsSync(optimizedAbs)) {
+          fs.unlinkSync(optimizedAbs);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Storis ${storyId}: video siqilmadi — ${error.message}`);
+        if (fs.existsSync(optimizedAbs)) fs.unlinkSync(optimizedAbs);
+      }
+    }
+
+    if (nextVideoRelative === relativePath && !posterRelative) return;
+
+    const updated = await pool.query(
+      `UPDATE stories
+       SET video_path = $1, poster_path = COALESCE($2, poster_path), updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND video_path = $4`,
+      [nextVideoRelative, posterRelative, storyId, relativePath]
+    );
+
+    if (updated.rowCount === 0) {
+      // Storis o'chirilgan yoki videosi almashtirilgan — yangi fayllarni tashlab yuboramiz
+      if (nextVideoRelative !== relativePath) removeFileQuietly(nextVideoRelative);
+      removeFileQuietly(posterRelative);
+      return;
+    }
+    if (nextVideoRelative !== relativePath) removeFileQuietly(relativePath);
+  }).catch((error) => console.warn(`⚠️ Storis media xatosi: ${error.message}`));
+
+exports.processStoryMedia = processStoryMedia;
+
 const mapStory = (row) => ({
   id: row.id,
   title: row.title,
   video_path: row.video_path,
   video_url: buildFileUrl(row.video_path),
+  poster_path: row.poster_path || null,
+  poster_url: buildFileUrl(row.poster_path),
   order_index: row.order_index,
   is_active: row.is_active,
   created_at: row.created_at,
@@ -69,15 +136,13 @@ const mapStory = (row) => ({
 // Admin ?all=1 bersa nofaollarni ham ko'radi (boshqaruv paneli uchun).
 exports.getStories = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
+    // Storislar barcha filiallar uchun umumiy — filial bo'yicha filtrlanmaydi.
     const showAll = isAdmin(req.user.role) && String(req.query.all || '') === '1';
     const result = await pool.query(
-      `SELECT id, title, video_path, order_index, is_active, created_at
+      `SELECT id, title, video_path, poster_path, order_index, is_active, created_at
        FROM stories
-       WHERE branch_id = $1
-       ${showAll ? '' : 'AND is_active = TRUE'}
-       ORDER BY order_index ASC, created_at DESC`,
-      [branchId]
+       ${showAll ? '' : 'WHERE is_active = TRUE'}
+       ORDER BY order_index ASC, created_at DESC`
     );
     res.json({ success: true, data: result.rows.map(mapStory) });
   } catch (error) {
@@ -105,6 +170,8 @@ exports.createStory = async (req, res) => {
       [title, videoPath, orderIndex, req.user.id, branchId]
     );
 
+    processStoryMedia(result.rows[0].id, videoPath);
+
     res.status(201).json({
       success: true,
       message: 'Storis qo\'shildi',
@@ -119,9 +186,8 @@ exports.createStory = async (req, res) => {
 // PATCH /api/content/stories/:id — title/order/is_active, ixtiyoriy yangi video
 exports.updateStory = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const existing = await pool.query('SELECT * FROM stories WHERE id = $1 AND branch_id = $2', [id, branchId]);
+    const existing = await pool.query('SELECT * FROM stories WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
       if (req.file) removeFileQuietly(`/uploads/stories/${req.file.filename}`);
       return res.status(404).json({ success: false, message: 'Storis topilmadi' });
@@ -144,11 +210,15 @@ exports.updateStory = async (req, res) => {
 
     const result = await pool.query(
       `UPDATE stories
-       SET title = $1, order_index = $2, is_active = $3, video_path = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5 AND branch_id = $6
-       RETURNING id, title, video_path, order_index, is_active, created_at`,
-      [title, orderIndex, isActive, videoPath, id, branchId]
+       SET title = $1, order_index = $2, is_active = $3, video_path = $4,
+           poster_path = CASE WHEN $6::boolean THEN NULL ELSE poster_path END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5
+       RETURNING id, title, video_path, poster_path, order_index, is_active, created_at`,
+      [title, orderIndex, isActive, videoPath, id, Boolean(req.file)]
     );
+
+    if (req.file) processStoryMedia(id, videoPath);
 
     res.json({
       success: true,
@@ -164,16 +234,16 @@ exports.updateStory = async (req, res) => {
 // DELETE /api/content/stories/:id
 exports.deleteStory = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
     const result = await pool.query(
-      'DELETE FROM stories WHERE id = $1 AND branch_id = $2 RETURNING video_path',
-      [id, branchId]
+      'DELETE FROM stories WHERE id = $1 RETURNING video_path, poster_path',
+      [id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Storis topilmadi' });
     }
     removeFileQuietly(result.rows[0].video_path);
+    removeFileQuietly(result.rows[0].poster_path);
     res.json({ success: true, message: 'Storis o\'chirildi' });
   } catch (error) {
     console.error('Storis o\'chirishda xatolik:', error);
@@ -186,15 +256,13 @@ exports.deleteStory = async (req, res) => {
 // GET /api/content/news — hamma rollar (faqat faollar); admin ?all=1
 exports.getNews = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
+    // Yangiliklar barcha filiallar uchun umumiy — filial bo'yicha filtrlanmaydi.
     const showAll = isAdmin(req.user.role) && String(req.query.all || '') === '1';
     const result = await pool.query(
       `SELECT id, tag, title, subtitle, body, order_index, is_active, created_at
        FROM news
-       WHERE branch_id = $1
-       ${showAll ? '' : 'AND is_active = TRUE'}
-       ORDER BY order_index ASC, created_at DESC`,
-      [branchId]
+       ${showAll ? '' : 'WHERE is_active = TRUE'}
+       ORDER BY order_index ASC, created_at DESC`
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -241,9 +309,8 @@ exports.createNews = async (req, res) => {
 // PATCH /api/content/news/:id
 exports.updateNews = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const existing = await pool.query('SELECT * FROM news WHERE id = $1 AND branch_id = $2', [id, branchId]);
+    const existing = await pool.query('SELECT * FROM news WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Yangilik topilmadi' });
     }
@@ -269,9 +336,9 @@ exports.updateNews = async (req, res) => {
     const result = await pool.query(
       `UPDATE news
        SET tag = $1, title = $2, subtitle = $3, body = $4, order_index = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7 AND branch_id = $8
+       WHERE id = $7
        RETURNING id, tag, title, subtitle, body, order_index, is_active, created_at`,
-      [next.tag, next.title, next.subtitle, next.body, next.order_index, next.is_active, id, branchId]
+      [next.tag, next.title, next.subtitle, next.body, next.order_index, next.is_active, id]
     );
 
     res.json({
@@ -288,9 +355,8 @@ exports.updateNews = async (req, res) => {
 // DELETE /api/content/news/:id
 exports.deleteNews = async (req, res) => {
   try {
-    const branchId = getScopedBranchId(req);
     const id = parseInt(req.params.id);
-    const result = await pool.query('DELETE FROM news WHERE id = $1 AND branch_id = $2 RETURNING id', [id, branchId]);
+    const result = await pool.query('DELETE FROM news WHERE id = $1 RETURNING id', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Yangilik topilmadi' });
     }

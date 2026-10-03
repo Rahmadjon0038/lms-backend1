@@ -22,6 +22,8 @@ app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
+// Storis fayllari nomi noyob (timestamp+uuid) — brauzer/ilova uzoq keshlashi mumkin
+app.use('/uploads/stories', express.static(path.join(__dirname, 'uploads', 'stories'), { maxAge: '30d', immutable: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
