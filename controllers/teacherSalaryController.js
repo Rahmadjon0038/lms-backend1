@@ -563,10 +563,14 @@ const getClosedSummary = async (client, teacherId, monthName, branchId) => {
     ),
   ]);
 
-  const salaryPercentage = toNum(teacher.salary_percentage);
+  // Yopilgandan keyingi tushum — yopish paytidagi haqiqiy TO'LANGAN summa bilan
+  // hozirgi haqiqiy to'langan summa farqi. (Oldin hozirgi "kerakli" summa bilan
+  // solishtirilgan edi, shuning uchun to'lamagan talaba puli soxta "yangi tushum"
+  // bo'lib chiqardi.) Foiz — yopish paytida saqlangan (guruhlar bo'yicha o'rtacha).
+  const salaryPercentage = toNum(row.salary_percentage ?? teacher.salary_percentage);
   const closeExpected = toNum(row.close_expected_salary);
   const closeRevenue = toNum(row.close_revenue);
-  const liveCollected = toNum(studentSummary.total_collected);
+  const liveCollected = toNum(studentSummary.actual_collected);
   const teacherDiscountTotal = toNum(studentSummary.teacher_discount_total);
   const postCloseCollectedRevenue = round2(Math.max(liveCollected - closeRevenue, 0));
   const postCloseExpectedGross = round2((postCloseCollectedRevenue * salaryPercentage) / 100);
@@ -647,7 +651,7 @@ const getPostCloseAvailableForMonth = async (client, teacherId, monthName, branc
 
   const salaryPercentage = toNum(row.salary_percentage);
   const closeRevenue = toNum(row.close_revenue);
-  const liveCollected = toNum(studentSummary.total_collected);
+  const liveCollected = toNum(studentSummary.actual_collected);
   const postCloseCollectedRevenue = round2(Math.max(liveCollected - closeRevenue, 0));
   const postCloseExpectedGross = round2((postCloseCollectedRevenue * salaryPercentage) / 100);
   const postCloseGiven = toNum(payoutsPostCloseRes.rows[0]?.post_close_given);
