@@ -13,6 +13,7 @@ router.get('/manager/teachers', protect, managerOrAdmin, ctrl.getEnglishManagerT
 router.get('/manager/reports', protect, managerOrAdmin, ctrl.getManagerDailyStatistics);
 router.get('/manager/months', protect, managerOrAdmin, ctrl.getEnglishManagerAvailableMonths);
 router.get('/groups/:groupId/reports', protect, teacherOrAdmin, ctrl.getGroupStatisticsReports);
+router.get('/groups/:groupId/column-preset', protect, teacherOrAdmin, ctrl.getGroupColumnPreset);
 router.post('/lessons/:lessonId', protect, teacherOrAdmin, ctrl.saveLessonStatistics);
 router.put('/lessons/:lessonId', protect, teacherOrAdmin, ctrl.saveLessonStatistics);
 router.get('/lessons/:lessonId', protect, managerViewer, ctrl.getLessonStatistics);

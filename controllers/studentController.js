@@ -1460,8 +1460,52 @@ exports.getMyGroups = async (req, res) => {
         const targetMonth = requestedMonth || currentMonth;
         const isCurrentMonth = targetMonth === currentMonth;
         const monthStart = `${targetMonth}-01`;
+        // include_history=true (yangi mobil ilova): talaba boshqa guruhga o'tkazilgan
+        // yoki guruhdan chiqarilgan bo'lsa ham eski guruhlari tarixi ko'rinadi.
+        // Eski ilovalar bu parametrni yubormaydi — ularning javobi o'zgarmaydi.
+        const includeHistory = String(req.query.include_history || '').toLowerCase() === 'true';
+        const wantsAllHistory = includeHistory && !req.query.month;
 
         console.log(`🎓 Student ${studentId} o'z guruhlarini so'ramoqda`);
+
+        // all-history: har bir guruh bo'yicha BITTA umumlashtirilgan a'zolik
+        // (eng birinchi qo'shilgan sana, hozir faol bo'lsa left=null) — shunda
+        // tarixdagi barcha oylar (availableMonths) hisoblanadi.
+        const membershipSource = wantsAllHistory
+            ? `(
+                SELECT
+                    sgh.student_id,
+                    sgh.group_id,
+                    (ARRAY_AGG(
+                        sgh.status
+                        ORDER BY (sgh.status = 'active') DESC,
+                                 COALESCE(sgh.left_at, sgh.joined_at) DESC NULLS LAST,
+                                 sgh.id DESC
+                    ))[1] AS status,
+                    MIN(sgh.joined_at) AS joined_at,
+                    CASE WHEN BOOL_OR(sgh.status = 'active') THEN NULL ELSE MAX(sgh.left_at) END AS left_at
+                FROM student_groups sgh
+                WHERE sgh.student_id = $1
+                GROUP BY sgh.student_id, sgh.group_id
+              ) sg`
+            : 'student_groups sg';
+
+        const pastMonthFilter = `AND DATE(sg.joined_at) <= (DATE($3) + INTERVAL '1 month - 1 day')
+                      AND (sg.left_at IS NULL OR DATE(sg.left_at) >= DATE($3))`;
+        // Joriy oyda ham, shu oyda guruhdan chiqarilgan (masalan oy o'rtasida
+        // boshqa guruhga o'tkazilgan) guruh o'sha oygacha ko'rinib turadi.
+        const currentMonthHistoryFilter = `AND DATE(sg.joined_at) <= (DATE($3) + INTERVAL '1 month - 1 day')
+                      AND (sg.status = 'active' OR (sg.left_at IS NOT NULL AND DATE(sg.left_at) >= DATE($3)))`;
+
+        let membershipWhere;
+        if (wantsAllHistory) {
+            membershipWhere = '';
+        } else if (isCurrentMonth) {
+            membershipWhere = includeHistory ? currentMonthHistoryFilter : `AND sg.status = 'active'`;
+        } else {
+            membershipWhere = pastMonthFilter;
+        }
+        const needsMonthStartParam = !wantsAllHistory && (includeHistory || !isCurrentMonth);
 
         const myGroups = await pool.query(`
             SELECT
@@ -1497,7 +1541,7 @@ exports.getMyGroups = async (req, res) => {
                     WHERE sg2.group_id = g.id AND sg2.status = 'active'
                 ) as total_students
 
-            FROM student_groups sg
+            FROM ${membershipSource}
             JOIN groups g ON sg.group_id = g.id
             JOIN subjects s ON g.subject_id = s.id
             LEFT JOIN users u ON g.teacher_id = u.id
@@ -1508,12 +1552,7 @@ exports.getMyGroups = async (req, res) => {
                AND ms.month = $2
 
             WHERE sg.student_id = $1
-              ${
-                isCurrentMonth
-                  ? `AND sg.status = 'active'`
-                  : `AND DATE(sg.joined_at) <= (DATE($3) + INTERVAL '1 month - 1 day')
-                      AND (sg.left_at IS NULL OR DATE(sg.left_at) >= DATE($3))`
-              }
+              ${membershipWhere}
             ORDER BY
                 CASE sg.status
                     WHEN 'active' THEN 1
@@ -1522,7 +1561,7 @@ exports.getMyGroups = async (req, res) => {
                     ELSE 4
                 END,
                 g.name
-        `, isCurrentMonth ? [studentId, targetMonth] : [studentId, targetMonth, monthStart]);
+        `, needsMonthStartParam ? [studentId, targetMonth, monthStart] : [studentId, targetMonth]);
 
         const groupsData = myGroups.rows.map(group => ({
                 group_id: group.group_id,

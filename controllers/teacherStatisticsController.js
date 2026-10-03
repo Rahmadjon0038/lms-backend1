@@ -1124,6 +1124,86 @@ exports.getColumnCatalog = async (req, res) => {
   res.json({ success: true, data: COLUMN_CATALOG });
 };
 
+// Yangi (hali hisoboti yo'q) dars ochilganda teacherga taklif qilinadigan
+// ustunlar: avval shu guruhdagi teacherning oxirgi hisoboti, so'ng guruhdagi
+// istalgan oxirgi hisobot, so'ng teacherning shu fandagi oxirgi hisoboti,
+// bo'lmasa standart. Alohida jadval kerak emas — har bir saqlangan hisobot
+// o'z ustunlarini report_data ichida saqlaydi.
+exports.getGroupColumnPreset = async (req, res) => {
+  try {
+    const groupId = asInt(req.params.groupId);
+    if (!groupId) {
+      return res.status(400).json({ success: false, message: 'groupId noto\'g\'ri' });
+    }
+
+    const branchId = req.user.branch_id || 1;
+    const groupRes = await pool.query(
+      'SELECT id, subject_id, teacher_id FROM groups WHERE id = $1 AND branch_id = $2',
+      [groupId, branchId]
+    );
+    const group = groupRes.rows[0];
+    if (!group) {
+      return res.status(404).json({ success: false, message: 'Guruh topilmadi' });
+    }
+    if (req.user.role === 'teacher' && group.teacher_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Bu guruh sizga biriktirilmagan' });
+    }
+
+    const findLatest = async (whereSql, params) => {
+      const result = await pool.query(
+        `
+          SELECT r.report_data
+          FROM teacher_lesson_statistics_reports r
+          WHERE r.branch_id = $1
+            AND jsonb_typeof(r.report_data->'columns') = 'array'
+            AND jsonb_array_length(r.report_data->'columns') > 0
+            AND ${whereSql}
+          ORDER BY r.updated_at DESC NULLS LAST, r.id DESC
+          LIMIT 1
+        `,
+        [branchId, ...params]
+      );
+      return result.rows[0]?.report_data || null;
+    };
+
+    const candidates = [
+      { source: 'group', data: () => findLatest('r.group_id = $2 AND r.teacher_id = $3', [groupId, req.user.id]) },
+      { source: 'group', data: () => findLatest('r.group_id = $2', [groupId]) },
+    ];
+    if (req.user.role === 'teacher' && group.subject_id) {
+      candidates.push({
+        source: 'subject',
+        data: () => findLatest('r.teacher_id = $2 AND r.subject_id = $3', [req.user.id, group.subject_id]),
+      });
+    }
+
+    for (const candidate of candidates) {
+      const data = await candidate.data();
+      if (!data) continue;
+      return res.json({
+        success: true,
+        data: {
+          source: candidate.source,
+          columns: normalizeColumns(data.columns),
+          grading_enabled: data.grading_enabled !== false,
+        },
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: { source: 'default', columns: cloneDefaultColumns(), grading_enabled: true },
+    });
+  } catch (error) {
+    console.error('Ustun sozlamasini olishda xatolik:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Ustun sozlamasi yuklanmadi',
+      error: error.message,
+    });
+  }
+};
+
 // Mobil ilova statistikani saqlagandan so'ng jadval skrinshotini (PNG) shu
 // endpointga yuboradi — rasm serverda hech qachon diskka yozilmaydi (multer
 // memoryStorage), faqat xotiradagi buffer sifatida Telegram guruhga
